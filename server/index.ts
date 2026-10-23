@@ -28,6 +28,15 @@ app.use((req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
+app.use('/api', (_req, res, next) => {
+  res.set({
+    'Cache-Control': 'private, no-store, no-cache, max-age=0, must-revalidate',
+    'CDN-Cache-Control': 'no-store',
+    'Cloudflare-CDN-Cache-Control': 'no-store'
+  });
+  res.vary('Cookie');
+  next();
+});
 app.use(express.json({ limit: '256kb' }));
 
 function readCookie(req: Request, name: string) {
