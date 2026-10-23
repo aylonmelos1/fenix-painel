@@ -96,10 +96,26 @@ export class FenixClient {
     if (!result.response.ok) throw new FenixError(`Consulta ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
     return result.body;
   }
+
+  async post(path: string, body: Record<string, unknown>) {
+    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
+    const url = new URL(path, FENIX_ORIGIN);
+    const headers: Record<string, string> = {
+      Accept: 'application/json', 'Content-Type': 'application/json', Origin: FENIX_ORIGIN,
+      Referer: `${FENIX_ORIGIN}/`, Cookie: this.jar.getCookieStringSync(url.toString()),
+      'X-Requested-With': 'XMLHttpRequest'
+    };
+    const token = xsrf(this.jar, url.toString());
+    if (token) headers['X-XSRF-TOKEN'] = token;
+    const result = await fetchBounded(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    await storeCookies(result.response, url.toString(), this.jar);
+    if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
+    return result.body;
+  }
 }
 
 type TechnicalProjectEvent = { label: string; date?: string; done?: boolean; current?: boolean };
-type TechnicalProjectProfile = { address: string; use: string; totalArea: number | null; buildingArea: number | null; areaToBeBuilt: number | null; floors: number | null; height: string };
+type TechnicalProjectProfile = { address: string; use: string; totalArea: number | null; buildingArea: number | null; areaToBeBuilt: number | null; floors: number | null; height: string; technicalFacts: Array<{ label: string; value: string }> };
 const projectDetailsCache = new Map<string, { expiresAt: number; requestId: string; timeline: TechnicalProjectEvent[]; profile: TechnicalProjectProfile }>();
 type TechnicalCertificateInfo = { filename: string; size: number };
 const certificateInfoCache = new Map<string, { expiresAt: number; info: TechnicalCertificateInfo | null }>();
@@ -153,7 +169,16 @@ async function technicalProjectDetails(userId: string, projectId: string) {
     buildingArea: numeric(['edification.building_area', 'building_area', 'area_construida']),
     areaToBeBuilt: numeric(['edification.area_to_be_built', 'area_to_be_built', 'area_construir']),
     floors: numeric(['edification.number_floors', 'number_floors', 'numberFloors', 'pavimentos']),
-    height: cleanLabel(first(detail, ['edification.height', 'height'], ''))
+    height: cleanLabel(first(detail, ['edification.height', 'height'], '')),
+    technicalFacts: [
+      ['Tipo de projeto', ['tipo_projeto.sigla', 'tipo_projeto.nome', 'tipoProjeto.sigla', 'tipoProjeto.nome', 'project_type.name', 'tipo_projeto_id']],
+      ['Número do projeto', ['num_projeto', 'n_projeto', 'numero_projeto']],
+      ['Responsável técnico', ['technical.name', 'responsavel_tecnico.name', 'responsavelTecnico.name']],
+      ['Registro profissional', ['technical.crea_cau', 'responsavel_tecnico.crea_cau', 'responsavelTecnico.crea_cau']],
+      ['Risco', ['institution.risco', 'instituicao.risco', 'risco']],
+      ['Ocupação / divisão', ['occupation_division_technical_projects.0.occupation.occupation_use', 'occupation_division_technical_projects.0.division.division_use']]
+    ].map(([label, keys]) => ({ label: String(label), value: cleanLabel(first(detail, keys as string[], '')) }))
+      .filter((fact) => fact.value && fact.value !== '[object Object]')
   };
   const snapshot = { expiresAt: Date.now() + 10 * 60_000, requestId: String(detail?.solicitacao_atual?.id ?? ''), timeline, profile };
   projectDetailsCache.set(cacheKey, snapshot);
@@ -264,6 +289,32 @@ export async function getTechnicalProjectProtocolReceiptInfo(userId: string, pro
   }
 }
 
+export async function getFenixRequestNotification(userId: string, requestId: string) {
+  if (!/^\d+$/.test(requestId)) throw new FenixError('Identificador de solicitação inválido.', 404);
+  const response = await (await fenixClientForUser(userId)).post('/api/v1/request/download', {
+    solicitacao_id: Number(requestId), tipo_documento: null
+  }) as any;
+  const payload = response?.data ?? response;
+  const encoded = String(payload?.arquivo ?? '');
+  if (!encoded || encoded.length > 950_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    throw new FenixError('O Fênix não retornou uma notificação disponível para esta solicitação.', 404);
+  }
+  const content = Buffer.from(encoded, 'base64');
+  if (!content.length || content.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new FenixError('O arquivo de notificação retornado pelo Fênix não é um PDF válido.', 502);
+  }
+  const providedName = String(payload?.nome_arquivo || `notificacao-${requestId}.pdf`).split(/[\\/]/).pop() || `notificacao-${requestId}.pdf`;
+  const filename = providedName.replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 120).replace(/\.+$/, '') || `notificacao-${requestId}.pdf`;
+  const safeFilename = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
+  return { filename: safeFilename, size: content.length, content };
+}
+
+export async function getTechnicalProjectNotification(userId: string, projectId: string) {
+  const detail = await technicalProjectDetails(userId, projectId);
+  if (!detail.requestId) throw new FenixError('O projeto não possui uma solicitação atual para consultar a notificação.', 404);
+  return getFenixRequestNotification(userId, detail.requestId);
+}
+
 type TechnicalProjectDae = { id: string; type: string; status: string; dueDate?: string; paymentDate?: string; available: boolean };
 const daeDeliveryCache = new Map<string, { expiresAt: number; mode: 'manual' | 'direct' }>();
 
@@ -285,13 +336,27 @@ async function technicalProjectDaes(userId: string, projectId: string) {
       status: cleanLabel(String(row.status?.nome || row.status?.status || row.status || 'Situação não informada')),
       dueDate: String(row.data_vencimento || row.data_max_pagamento || ''),
       paymentDate: String(row.data_pagamento || ''),
-      available: typeof row.url_dae === 'string' && Boolean(row.url_dae) && delivery?.mode !== 'manual'
+      available: typeof row.url_dae === 'string' && Boolean(row.url_dae)
     };
   }).filter((item: TechnicalProjectDae) => item.id);
 }
 
 export async function getTechnicalProjectDaes(userId: string, projectId: string): Promise<TechnicalProjectDae[]> {
   return technicalProjectDaes(userId, projectId);
+}
+
+export async function getTechnicalProjectDaeUrl(userId: string, projectId: string, daeId: string) {
+  const detail = await technicalProjectDetails(userId, projectId);
+  if (!detail.requestId) throw new FenixError('O projeto não possui solicitação atual.', 404);
+  const response = await (await fenixClientForUser(userId)).get(`/api/v1/solicitacoes/${encodeURIComponent(detail.requestId)}/daes`) as any;
+  const root = response?.data ?? response;
+  const rows = Array.isArray(root) ? root : Array.isArray(root?.data) ? root.data : Array.isArray(root?.rows) ? root.rows : Array.isArray(root?.daes) ? root.daes : [];
+  const dae = rows.find((row: any) => String(row.id ?? '') === daeId);
+  if (!dae || typeof dae.url_dae !== 'string') throw new FenixError('O Fênix não retornou o endereço deste DAE.', 404);
+  let url: URL;
+  try { url = new URL(dae.url_dae); } catch { throw new FenixError('O endereço do DAE retornado pelo Fênix é inválido.', 502); }
+  if (url.protocol !== 'https:' || url.hostname !== 'servicos.sefaz.ba.gov.br' || url.username || url.password) throw new FenixError('O endereço do DAE não pertence ao portal oficial esperado.', 502);
+  return url.toString();
 }
 
 export async function getTechnicalProjectDaePdf(userId: string, projectId: string, daeId: string) {

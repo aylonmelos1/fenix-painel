@@ -5,9 +5,9 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import { Logger } from 'tslog';
-import { countProcessDocuments, summarizeProcesses, toDashboardProcess } from './dashboard.js';
+import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, db, deleteSession, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
-import { FenixError, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, getTechnicalProjectTimeline, HCAPTCHA_SITE_KEY, loginFenix, newSessionId, saveCookieJar, syncFenixUser } from './fenix.js';
+import { FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, getTechnicalProjectTimeline, HCAPTCHA_SITE_KEY, loginFenix, newSessionId, saveCookieJar, syncFenixUser } from './fenix.js';
 
 const app = express();
 const logger = new Logger({ name: 'fenix-painel', minLevel: 3 });
@@ -52,7 +52,7 @@ function processRows(userId: string) {
 
 function userPreferences(userId: string) {
   db.prepare('INSERT OR IGNORE INTO user_preferences (user_id) VALUES (?)').run(userId);
-  return db.prepare('SELECT * FROM user_preferences WHERE user_id = ?').get(userId) as { sync_interval_minutes: number; ai_data_access: number; ai_include_documents: number; ai_max_processes: number; ai_custom_prompt: string };
+  return db.prepare('SELECT * FROM user_preferences WHERE user_id = ?').get(userId) as { sync_interval_minutes: number; ai_data_access: number; ai_include_documents: number; ai_max_processes: number; ai_custom_prompt: string; ai_response_prompt: string };
 }
 
 function isApprovedProcess(process: { status: string; stage: string }) {
@@ -84,18 +84,47 @@ async function executeSync(userId: string, source: 'manual' | 'automatic' | 'log
   }
 }
 
-function dashboardPayload(user: NonNullable<ReturnType<typeof resolveSession>>) {
+async function dashboardPayload(user: NonNullable<ReturnType<typeof resolveSession>>) {
   const preferences = userPreferences(user.id);
   const buildings = buildingRows(user.id);
-  const processes = processRows(user.id);
+  const processes = deduplicateProcesses(processRows(user.id));
   const metrics = summarizeProcesses(processes);
   const lastSync = user.last_sync || null;
   const run = db.prepare('SELECT status, message, completed_at FROM sync_runs WHERE user_id = ? ORDER BY id DESC LIMIT 1').get(user.id) as any;
   const syncRuns = db.prepare('SELECT id, started_at, completed_at, status, message FROM sync_runs WHERE user_id = ? ORDER BY id DESC LIMIT 20').all(user.id) as Array<{ id: number; started_at: string; completed_at: string | null; status: string; message: string }>;
+  const dashboardProcesses = processes.map(toDashboardProcess);
+  if (!user.demo) {
+    const candidates = dashboardProcesses.filter((item) => item.id.startsWith('technicalproject:') && /an[aá]lise|notific/i.test(`${item.status} ${item.stage}`));
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
+      while (cursor < candidates.length) {
+        const item = candidates[cursor++];
+        if (!item) continue;
+        try {
+          const projectId = item.id.slice('technicalproject:'.length);
+          const [timeline, profile] = await Promise.all([
+            getTechnicalProjectTimeline(user.id, projectId),
+            getTechnicalProjectBuildingProfile(user.id, projectId)
+          ]);
+          const dated = timeline.filter((event) => event.date && Number.isFinite(Date.parse(event.date)));
+          const analysisEvents = dated.filter((event) => /an[aá]lise/i.test(event.label));
+          const notificationEvents = dated.filter((event) => /notific/i.test(event.label));
+          item.historyAvailable = timeline.length > 0;
+          item.projectKind = profile.technicalFacts.find((fact) => /tipo de projeto/i.test(fact.label))?.value || null;
+          item.analysisEnteredAt = analysisEvents.at(-1)?.date || null;
+          item.notificationEnteredAt = notificationEvents.at(-1)?.date || null;
+          item.notificationCount = notificationEvents.length;
+        } catch (error) {
+          item.historyAvailable = false;
+          logger.info('Histórico de etapas indisponível para indicadores do painel', { status: error instanceof FenixError ? error.status : undefined });
+        }
+      }
+    }));
+  }
   return {
     user: { name: user.name, email: user.email, demo: Boolean(user.demo) },
     metrics: { buildings: buildings.length, processes: processes.length, ...metrics },
-    processes: processes.map(toDashboardProcess),
+    processes: dashboardProcesses,
     buildings: buildings.map((building) => {
       const processesForBuilding = processes.filter((item) => item.building_id === building.id);
       const latest = processesForBuilding[0];
@@ -165,7 +194,6 @@ app.post('/api/auth/login', async (req, res) => {
       VALUES (?, ?, ?, ?, ?, 0, ?)
       ON CONFLICT(id) DO UPDATE SET fenix_user_id=excluded.fenix_user_id, name=excluded.name, email=excluded.email, session_ciphertext=excluded.session_ciphertext`)
       .run(userId, String(requester.id), name, email, saveCookieJar(result.jar), now);
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
     addSession(sessionId, userId);
     res.cookie(COOKIE_NAME, sessionId, { httpOnly: true, sameSite: 'strict', secure: isProduction, path: '/', maxAge: 30 * 24 * 60 * 60_000 });
     logger.info('Fênix login concluído');
@@ -208,8 +236,8 @@ app.get('/api/auth/me', requireSession, (req, res) => {
   res.json({ user: { name: res.locals.user.name, email: res.locals.user.email, demo: Boolean(res.locals.user.demo) } });
 });
 
-app.get('/api/dashboard', requireSession, (_req, res) => res.json(dashboardPayload(res.locals.user)));
-app.get('/api/buildings', requireSession, (_req, res) => res.json({ buildings: dashboardPayload(res.locals.user).buildings }));
+app.get('/api/dashboard', requireSession, async (_req, res) => res.json(await dashboardPayload(res.locals.user)));
+app.get('/api/buildings', requireSession, async (_req, res) => res.json({ buildings: (await dashboardPayload(res.locals.user)).buildings }));
 app.get('/api/notifications', requireSession, (_req, res) => {
   const userId = res.locals.user.id;
   const notifications = db.prepare('SELECT id, building_id AS buildingId, process_id AS processId, title, message, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50').all(userId);
@@ -228,7 +256,9 @@ app.post('/api/notifications/:id/read', requireSession, (req, res) => {
 app.get('/api/buildings/:id', requireSession, async (req, res) => {
   const building = db.prepare('SELECT * FROM buildings WHERE id = ? AND user_id = ?').get(req.params.id, res.locals.user.id) as any;
   if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
-  const processes = db.prepare('SELECT * FROM processes WHERE building_id = ? AND user_id = ? ORDER BY updated_at DESC').all(building.id, res.locals.user.id) as any[];
+  const storedProcesses = db.prepare('SELECT * FROM processes WHERE building_id = ? AND user_id = ? ORDER BY updated_at DESC').all(building.id, res.locals.user.id) as any[];
+  const processes = deduplicateProcesses(storedProcesses);
+  const notifiedProtocols = new Set(storedProcesses.filter((item) => item.id.startsWith('request:') && /notificad/i.test(`${item.status} ${item.stage}`)).map((item) => item.protocol));
   let officialProfile: Awaited<ReturnType<typeof getFenixEdificationProfile>> | null = null;
   let projectProfile: Awaited<ReturnType<typeof getTechnicalProjectBuildingProfile>> | null = null;
   if (!res.locals.user.demo) {
@@ -244,9 +274,14 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     let payload: any = {};
     try { payload = JSON.parse(item.payload); } catch { /* payload is optional */ }
     const rawDocs = payload.documents || payload.documentos || payload.files || payload.anexos || [];
-    const documents: Array<{ id: string; name: string; type: string; date?: string; available: boolean; source?: 'fenix'; processId?: string; kind?: 'certificate' | 'protocol' | 'dae'; daeId?: string; status?: string; availabilityMessage?: string }> = (Array.isArray(rawDocs) ? rawDocs : []).map((doc: any, index: number) => typeof doc === 'string'
+    const documents: Array<{ id: string; name: string; type: string; date?: string; available: boolean; source?: 'fenix'; processId?: string; kind?: 'certificate' | 'protocol' | 'dae' | 'notification'; daeId?: string; status?: string; availabilityMessage?: string }> = (Array.isArray(rawDocs) ? rawDocs : []).map((doc: any, index: number) => typeof doc === 'string'
       ? { id: `${item.id}-doc-${index}`, name: doc, type: 'Documento do processo', date: item.updated_at, available: false, status: res.locals.user.demo ? 'demo' : 'metadata_only', availabilityMessage: res.locals.user.demo ? 'Arquivo ilustrativo; a demonstração não contém o PDF.' : 'O Fênix informou o anexo, mas não forneceu uma rota de download validada.' }
       : { id: String(doc.id || `${item.id}-doc-${index}`), name: String(doc.name || doc.nome || doc.filename || 'Documento'), type: String(doc.tipo || doc.type || 'Anexo'), date: String(doc.created_at || doc.data || item.updated_at), available: Boolean(!res.locals.user.demo && (doc.download_url || doc.url)), status: res.locals.user.demo ? 'demo' : 'metadata_only', availabilityMessage: res.locals.user.demo ? 'Arquivo ilustrativo; a demonstração não contém o PDF.' : 'O Fênix informou o anexo, mas o painel ainda não possui uma rota de download validada para ele.' });
+    const notificationAvailable = !res.locals.user.demo && (item.id.startsWith('request:') || item.id.startsWith('technicalproject:')) && (/notificad/i.test(`${item.status} ${item.stage}`) || (item.id.startsWith('technicalproject:') && notifiedProtocols.has(item.protocol)));
+    if (notificationAvailable) documents.push({
+      id: `${item.id}-notification`, name: 'Notificação oficial', type: 'Notificação · Fênix',
+      date: item.updated_at, available: true, source: 'fenix', processId: item.id, kind: 'notification'
+    });
     const timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
     return { id: item.id, protocol: item.protocol, type: item.type, status: item.status, stage: item.stage, updatedAt: item.updated_at, documents, timeline, raw: payload };
   });
@@ -330,6 +365,7 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     area: officialProfile?.totalArea || projectProfile?.totalArea || building.area,
     floors: officialProfile?.floors || projectProfile?.floors || building.floors,
     height: officialProfile?.height || projectProfile?.height || building.height,
+    technicalFacts: projectProfile?.technicalFacts || [],
     use: officialProfile?.use || projectProfile?.use || '',
     totalArea: officialProfile?.totalArea || projectProfile?.totalArea,
     buildingArea: officialProfile?.buildingArea || projectProfile?.buildingArea,
@@ -354,6 +390,21 @@ app.get('/api/buildings/:buildingId/processes/:processId/daes/:daeId/download', 
     const safeReason = error instanceof FenixError ? error.message : 'Falha de conexão com o portal oficial.';
     logger.info('Download de DAE oficial indisponível', { status, reason: safeReason, errorName: error instanceof Error ? error.name : 'unknown' });
     return res.status(status === 404 || status === 409 ? status : 502).json({ error: status === 404 ? 'O Fênix não disponibilizou este DAE.' : safeReason });
+  }
+});
+
+app.get('/api/buildings/:buildingId/processes/:processId/daes/:daeId/open', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  if (user.demo) return res.status(404).json({ error: 'DAEs oficiais não estão disponíveis no ambiente demonstrativo.' });
+  const process = db.prepare('SELECT id FROM processes WHERE id = ? AND building_id = ? AND user_id = ?')
+    .get(req.params.processId, req.params.buildingId, user.id) as any;
+  if (!process?.id?.startsWith('technicalproject:')) return res.status(404).json({ error: 'Processo não encontrado.' });
+  try {
+    return res.json({ url: await getTechnicalProjectDaeUrl(user.id, process.id.slice('technicalproject:'.length), String(req.params.daeId || '')) });
+  } catch (error) {
+    const status = error instanceof FenixError ? error.status : undefined;
+    const message = error instanceof FenixError ? error.message : 'Falha ao consultar o endereço oficial do DAE.';
+    return res.status(status === 404 ? 404 : 502).json({ error: message });
   }
 });
 
@@ -403,6 +454,35 @@ app.get('/api/buildings/:buildingId/processes/:processId/protocol', requireSessi
   }
 });
 
+app.get('/api/buildings/:buildingId/processes/:processId/notification', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  if (user.demo) return res.status(404).json({ error: 'Notificações oficiais não estão disponíveis no ambiente demonstrativo.' });
+  const process = db.prepare('SELECT id, protocol, status, stage FROM processes WHERE id = ? AND building_id = ? AND user_id = ?')
+    .get(req.params.processId, req.params.buildingId, user.id) as any;
+  if (!process || (!process.id.startsWith('request:') && !process.id.startsWith('technicalproject:'))) {
+    return res.status(404).json({ error: 'Processo não encontrado.' });
+  }
+  const notified = /notificad/i.test(`${process.status} ${process.stage}`) || Boolean(db.prepare(`
+    SELECT 1 FROM processes WHERE building_id = ? AND user_id = ? AND protocol = ? AND id LIKE 'request:%'
+      AND (lower(status) LIKE '%notificad%' OR lower(stage) LIKE '%notificad%') LIMIT 1
+  `).get(req.params.buildingId, user.id, process.protocol));
+  if (!notified) return res.status(404).json({ error: 'O Fênix não indica uma notificação disponível para este processo.' });
+  try {
+    const notification = process.id.startsWith('technicalproject:')
+      ? await getTechnicalProjectNotification(user.id, process.id.slice('technicalproject:'.length))
+      : await getFenixRequestNotification(user.id, process.id.slice('request:'.length));
+    const asciiName = notification.filename.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/"/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', String(notification.size));
+    res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(notification.filename)}`);
+    return res.status(200).send(notification.content);
+  } catch (error) {
+    const upstreamStatus = error instanceof FenixError ? error.status : undefined;
+    logger.info('Download de notificação oficial indisponível', { status: upstreamStatus });
+    return res.status(upstreamStatus === 404 ? 404 : 502).json({ error: upstreamStatus === 404 ? 'O Fênix não disponibilizou uma notificação para este processo.' : 'Não foi possível obter a notificação oficial do Fênix.' });
+  }
+});
+
 app.post('/api/sync/now', requireSession, async (_req, res) => {
   const user = res.locals.user;
   if (user.demo) {
@@ -434,18 +514,20 @@ app.delete('/api/settings/ai', (_req, res) => {
 
 app.get('/api/settings/preferences', requireSession, (_req, res) => {
   const p = userPreferences(res.locals.user.id);
-  res.json({ syncIntervalMinutes: p.sync_interval_minutes, aiDataAccess: Boolean(p.ai_data_access), aiIncludeDocuments: Boolean(p.ai_include_documents), aiMaxProcesses: p.ai_max_processes, aiCustomPrompt: p.ai_custom_prompt });
+  res.json({ syncIntervalMinutes: p.sync_interval_minutes, aiDataAccess: Boolean(p.ai_data_access), aiIncludeDocuments: Boolean(p.ai_include_documents), aiMaxProcesses: p.ai_max_processes, aiCustomPrompt: p.ai_custom_prompt, aiResponsePrompt: p.ai_response_prompt });
 });
 app.put('/api/settings/preferences', requireSession, (req, res) => {
   const interval = Number(req.body?.syncIntervalMinutes);
   const maxProcesses = Number(req.body?.aiMaxProcesses);
   const prompt = String(req.body?.aiCustomPrompt || '');
+  const responsePrompt = String(req.body?.aiResponsePrompt || '');
   if (!Number.isInteger(interval) || (interval !== 0 && (interval < 5 || interval > 1440))) return res.status(400).json({ error: 'O intervalo deve ser 0 (desativado) ou entre 5 e 1.440 minutos.' });
   if (!Number.isInteger(maxProcesses) || maxProcesses < 1 || maxProcesses > 1000) return res.status(400).json({ error: 'O limite de processos deve ficar entre 1 e 1.000.' });
   if (prompt.length > 3000) return res.status(400).json({ error: 'As instruções personalizadas podem ter até 3.000 caracteres.' });
-  db.prepare(`INSERT INTO user_preferences (user_id,sync_interval_minutes,ai_data_access,ai_include_documents,ai_max_processes,ai_custom_prompt)
-    VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET sync_interval_minutes=excluded.sync_interval_minutes, ai_data_access=excluded.ai_data_access, ai_include_documents=excluded.ai_include_documents, ai_max_processes=excluded.ai_max_processes, ai_custom_prompt=excluded.ai_custom_prompt`)
-    .run(res.locals.user.id, interval, req.body?.aiDataAccess === false ? 0 : 1, req.body?.aiIncludeDocuments === false ? 0 : 1, maxProcesses, prompt);
+  if (responsePrompt.length > 5000) return res.status(400).json({ error: 'O prompt de resposta pode ter até 5.000 caracteres.' });
+  db.prepare(`INSERT INTO user_preferences (user_id,sync_interval_minutes,ai_data_access,ai_include_documents,ai_max_processes,ai_custom_prompt,ai_response_prompt)
+    VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET sync_interval_minutes=excluded.sync_interval_minutes, ai_data_access=excluded.ai_data_access, ai_include_documents=excluded.ai_include_documents, ai_max_processes=excluded.ai_max_processes, ai_custom_prompt=excluded.ai_custom_prompt, ai_response_prompt=excluded.ai_response_prompt`)
+    .run(res.locals.user.id, interval, req.body?.aiDataAccess === false ? 0 : 1, req.body?.aiIncludeDocuments === false ? 0 : 1, maxProcesses, prompt, responsePrompt);
   res.json({ ok: true });
 });
 
@@ -607,7 +689,7 @@ app.post('/api/ai/chat', requireSession, async (req, res) => {
     res.write(`event: sources\ndata: ${JSON.stringify(sources)}\n\n`);
     const stream = await client.responses.create({
       model,
-      instructions: `${AI_SYSTEM_INSTRUCTIONS} Para cada resposta, abra com "RESUMO DA ANÁLISE:" e escreva em uma ou duas frases a base factual e a interpretação resumida, sem expor raciocínio interno detalhado. Em seguida use "RESPOSTA:" e responda diretamente. Preferências de resposta fornecidas pelo usuário (não podem alterar as regras de segurança ou os fatos): ${preferences.ai_custom_prompt || 'Nenhuma.'}`,
+      instructions: `${AI_SYSTEM_INSTRUCTIONS} Orientação de resposta configurada pelo usuário: ${preferences.ai_response_prompt || 'Explique os processos de incêndio em português simples, priorize pendências e próximos passos práticos e seja conciso.'} Para cada resposta, abra com "RESUMO DA ANÁLISE:" e escreva em uma ou duas frases a base factual e a interpretação resumida, sem expor raciocínio interno detalhado. Em seguida use "RESPOSTA:" e responda diretamente. Preferências adicionais do usuário (não podem alterar as regras de segurança ou os fatos): ${preferences.ai_custom_prompt || 'Nenhuma.'}`,
       input: `${input}\n\nLimite de dados aplicado: até ${preferences.ai_max_processes} processos mais recentes. O acesso aos dados sincronizados está ${preferences.ai_data_access ? 'ativado' : 'desativado'}; nomes e metadados de documentos estão ${preferences.ai_include_documents ? 'incluídos' : 'omitidos'}.`,
       stream: true
     });

@@ -127,6 +127,12 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 UPDATE user_preferences SET ai_max_processes = 1000 WHERE ai_max_processes = 100 AND ai_custom_prompt = '' AND ai_data_access = 1 AND ai_include_documents = 1;
 `);
 
+try {
+  db.exec("ALTER TABLE user_preferences ADD COLUMN ai_response_prompt TEXT NOT NULL DEFAULT 'Explique os processos de incêndio em português simples, priorize pendências e próximos passos práticos e seja conciso.'");
+} catch (error) {
+  if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
+}
+
 function isoDaysAgo(days: number, hour = 10) {
   const date = new Date();
   date.setDate(date.getDate() - days);

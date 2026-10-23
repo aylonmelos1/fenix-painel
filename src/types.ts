@@ -11,6 +11,8 @@ export type Building = {
 export type DashboardProcess = {
   id: string; buildingId: string; buildingReference: string; municipality: string;
   protocol: string; type: string; status: string; stage: string; updatedAt: string; documentCount: number;
+  analysisEnteredAt?: string | null; notificationEnteredAt?: string | null; notificationCount?: number | null; historyAvailable?: boolean;
+  projectKind?: string | null;
 };
 
 export type Dashboard = {
@@ -21,13 +23,13 @@ export type Dashboard = {
   sync: { lastSync: string | null; status: string; message: string; nextSync: string | null; intervalMinutes?: number; runs: Array<{ id: number; startedAt: string; completedAt: string | null; status: string; message: string }> };
 };
 
-export type DocumentItem = { id: string; name: string; type: string; date?: string; available: boolean; source?: 'fenix'; processId?: string; kind?: 'certificate' | 'protocol' | 'dae'; daeId?: string; status?: string; availabilityMessage?: string };
+export type DocumentItem = { id: string; name: string; type: string; date?: string; available: boolean; source?: 'fenix'; processId?: string; kind?: 'certificate' | 'protocol' | 'dae' | 'notification'; daeId?: string; status?: string; availabilityMessage?: string };
 export type TimelineItem = { label: string; date?: string; done?: boolean; current?: boolean; pending?: boolean };
 export type ProcessDetail = {
   id: string; protocol: string; type: string; status: string; stage: string; updatedAt: string;
   documents: DocumentItem[]; timeline: TimelineItem[]; raw: unknown;
 };
-export type BuildingDetail = { building: Building & { use?: string; totalArea?: number | null; buildingArea?: number | null; areaToBeBuilt?: number | null }; processes: ProcessDetail[] };
+export type BuildingDetail = { building: Building & { use?: string; totalArea?: number | null; buildingArea?: number | null; areaToBeBuilt?: number | null; technicalFacts?: Array<{ label: string; value: string }> }; processes: ProcessDetail[] };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {

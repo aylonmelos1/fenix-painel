@@ -22,6 +22,11 @@ export type DashboardProcess = {
   stage: string;
   updatedAt: string;
   documentCount: number;
+  analysisEnteredAt?: string | null;
+  notificationEnteredAt?: string | null;
+  notificationCount?: number | null;
+  historyAvailable?: boolean;
+  projectKind?: string | null;
 };
 
 export function normalizeStatus(value: string) {
@@ -38,6 +43,24 @@ export function isAnalysisProcess(process: Pick<ProcessRecord, 'status' | 'stage
 
 export function isInspectionProcess(process: Pick<ProcessRecord, 'status' | 'stage' | 'type'>) {
   return /vistoria/.test(normalizeStatus(`${process.type} ${process.status} ${process.stage}`));
+}
+
+export function deduplicateProcesses(processes: ProcessRecord[]) {
+  const grouped = new Map<string, ProcessRecord>();
+  for (const process of processes) {
+    const protocol = process.protocol.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, '');
+    const key = protocol && protocol !== '—' && protocol !== '-'
+      ? `${process.building_id}:${protocol}` : `${process.building_id}:${process.id}`;
+    const prior = grouped.get(key);
+    if (!prior) { grouped.set(key, process); continue; }
+    const project = (item: ProcessRecord) => item.id.startsWith('technicalproject:') ? 1 : 0;
+    const winner = project(process) > project(prior) ||
+      (project(process) === project(prior) && Date.parse(process.updated_at) > Date.parse(prior.updated_at)) ? process : prior;
+    const newest = Date.parse(process.updated_at) > Date.parse(prior.updated_at) ? process : prior;
+    grouped.set(key, { ...winner, status: newest.status, stage: newest.stage, updated_at: newest.updated_at,
+      payload: countProcessDocuments(process.payload) > countProcessDocuments(prior.payload) ? process.payload : prior.payload });
+  }
+  return [...grouped.values()].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
 }
 
 export function countProcessDocuments(payload: string) {
