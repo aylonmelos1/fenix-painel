@@ -155,7 +155,7 @@ export class FenixClient {
 }
 
 type TechnicalProjectEvent = { label: string; date?: string; done?: boolean; current?: boolean };
-type TechnicalProjectProfile = { address: string; use: string; totalArea: number | null; buildingArea: number | null; areaToBeBuilt: number | null; floors: number | null; height: string; technicalFacts: Array<{ label: string; value: string }> };
+type TechnicalProjectProfile = { address: string; use: string; totalArea: number | null; buildingArea: number | null; areaToBeBuilt: number | null; floors: number | null; height: string; validUntil: string; technicalFacts: Array<{ label: string; value: string }> };
 const projectDetailsCache = new Map<string, { expiresAt: number; requestId: string; timeline: TechnicalProjectEvent[]; profile: TechnicalProjectProfile }>();
 type TechnicalCertificateInfo = { filename: string; size: number };
 const certificateInfoCache = new Map<string, { expiresAt: number; info: TechnicalCertificateInfo | null }>();
@@ -210,6 +210,7 @@ async function technicalProjectDetails(userId: string, projectId: string, forceR
     areaToBeBuilt: numeric(['edification.area_to_be_built', 'area_to_be_built', 'area_construir']),
     floors: numeric(['edification.number_floors', 'number_floors', 'numberFloors', 'pavimentos']),
     height: cleanLabel(first(detail, ['edification.height', 'height'], '')),
+    validUntil: cleanLabel(first(detail, ['valid_until', 'valid_until_date', 'validade_acp', 'data_validade_acp', 'certificate.valid_until', 'certificado.data_validade', 'acp.valid_until'], '')),
     technicalFacts: [
       ['Tipo de projeto', ['tipo_projeto.sigla', 'tipo_projeto.nome', 'tipoProjeto.sigla', 'tipoProjeto.nome', 'project_type.name', 'tipo_projeto_id']],
       ['Número do projeto', ['num_projeto', 'n_projeto', 'numero_projeto']],

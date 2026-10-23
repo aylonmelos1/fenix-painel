@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import HCaptcha from '@hcaptcha/react-hcaptcha';
 import {
-  Activity, ArrowDownToLine, ArrowRight, Bell, Bot, Building2, CalendarClock, Check, CheckCircle2, CheckCheck,
+  Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Bot, Building2, CalendarClock, Check, CheckCircle2, CheckCheck,
   CircleAlert, ClipboardList, Cloud, FileCheck2, FileText, Filter, Flame,
   Gauge, HelpCircle, Home, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
-  Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause
+  Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail } from './types';
@@ -131,11 +131,12 @@ function Login() {
 
 type NavItem = { label: string; icon: typeof Home; path?: string };
 type UserNotification = { id: number; buildingId: string | null; processId: string | null; title: string; message: string; createdAt: string; readAt: string | null };
+type RenewalRecord = { id: string; buildingId: string; buildingReference: string; municipality: string; protocol: string; type: string; status: string; stage: string; homologatedAt: string; renewalAt: string; monthsUntilRenewal: number; daysUntilRenewal: number; severity: 'normal' | 'attention' | 'urgent' | 'overdue'; urgency: 'current' | 'next' | 'upcoming' | 'later'; disposition: 'archived' | 'lost' | null };
 const navItems: NavItem[] = [
   { label: 'Visão geral', icon: Home, path: '/painel' }, { label: 'Edificações', icon: Building2, path: '/painel?view=buildings' },
   { label: 'Em Análise', icon: ClipboardList, path: '/painel?view=analysis' }, { label: 'Notificados', icon: FileCheck2, path: '/painel?view=notified' },
   { label: 'Parados', icon: CirclePause, path: '/painel?view=stopped' },
-  { label: 'AVCBs e CLCBs', icon: ShieldCheck, path: '/painel?view=certificates' }, { label: 'Projetos (ACP)', icon: FileText, path: '/painel?view=projects' },
+  { label: 'AVCBs e CLCBs', icon: ShieldCheck, path: '/painel?view=certificates' }, { label: 'Renovações', icon: CalendarClock, path: '/painel?view=renewals' }, { label: 'Projetos (ACP)', icon: FileText, path: '/painel?view=projects' },
   { label: 'Consultas', icon: Search, path: '/painel?view=sync' }
 ];
 
@@ -322,6 +323,33 @@ function ProcessWorkspace({ view, processes, buildings, historyRefreshStatus, se
   </section>;
 }
 
+function RenewalsWorkspace({ records, list, onListChange, windowMonths, onWindowChange, onSaveWindow, savingWindow, error, updatingId, onDisposition, onOpen }: {
+  records: RenewalRecord[]; list: 'active' | 'archived'; onListChange: (list: 'active' | 'archived') => void;
+  windowMonths: number; onWindowChange: (months: number) => void; onSaveWindow: () => void; savingWindow: boolean;
+  error: string; updatingId: string; onDisposition: (item: RenewalRecord, disposition: 'archived' | 'lost' | 'active') => void;
+  onOpen: (buildingId: string, processId: string) => void;
+}) {
+  const dateLabel = (value: string) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Bahia' }).format(new Date(value));
+  const dispositionLabel = (item: RenewalRecord) => item.disposition === 'lost' ? 'Perdido' : item.disposition === 'archived' ? 'Arquivado' : item.severity === 'overdue' ? `Vencido há ${Math.abs(item.daysUntilRenewal)} dia${Math.abs(item.daysUntilRenewal) === 1 ? '' : 's'}` : item.severity === 'urgent' ? 'No limite' : item.severity === 'attention' ? 'Prazo próximo' : 'Dentro do prazo';
+  const badgeClass = (item: RenewalRecord) => item.disposition === 'lost' ? 'lost-state' : item.disposition === 'archived' ? 'archived-state' : item.severity;
+  return <section className="renewal-section">
+    <div className="section-title-row">
+      <div><h2>{list === 'active' ? 'Renovações a acompanhar' : 'Arquivados e perdidos'} <span>{records.length}</span></h2><p>{list === 'active' ? 'Certificados dentro da janela configurada, com base na homologação do Fênix.' : 'Itens guardados ou marcados como perdidos; eles não aparecem na lista ativa.'}</p></div>
+      <div className="renewal-window-control"><label>Exibir próximos <input type="number" min="1" max="24" value={windowMonths} disabled={list === 'archived'} onChange={(event) => onWindowChange(Number(event.target.value))} /> meses</label><button className="button button-outline" disabled={savingWindow || list === 'archived' || windowMonths < 1 || windowMonths > 24} onClick={onSaveWindow}>{savingWindow ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} Salvar</button><button className="button button-outline renewal-toggle" onClick={() => onListChange(list === 'active' ? 'archived' : 'active')}>{list === 'active' ? <><Archive size={14} /> Arquivados</> : <><CalendarClock size={14} /> Renovar</>}</button></div>
+    </div>
+    {error && <div className="settings-message error">{error}</div>}
+    {list === 'active' && <ul className="renewal-legend"><li><i className="normal" /> <b>Verde:</b> Dentro do prazo (Normal/Seguro)</li><li><i className="attention" /> <b>Amarelo/Laranja:</b> Prazo próximo (Atenção)</li><li><i className="urgent" /> <b>Vermelho:</b> No limite do prazo (Alerta/Urgência)</li><li><i className="overdue" /> <b>Preto ou Roxo:</b> Prazo perdido (Vencido)</li></ul>}
+    <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>PROCESSO</th><th>HOMOLOGADO EM</th><th>RENOVAÇÃO EM</th><th>SITUAÇÃO</th><th>AÇÕES</th></tr></thead><tbody>
+      {records.map((item) => <tr key={item.id} className="clickable-row" onClick={() => onOpen(item.buildingId, item.id)}>
+        <td><b>{item.buildingReference}</b></td><td>{item.municipality || '—'}</td><td><b className="protocol-text">{item.protocol || 'Sem protocolo'}</b><small className="table-subtext">{item.type}</small></td><td>{dateLabel(item.homologatedAt)}</td><td>{dateLabel(item.renewalAt)}</td>
+        <td><span className={`renewal-badge ${badgeClass(item)}`}>{dispositionLabel(item)}</span></td>
+        <td><div className="renewal-row-actions" onClick={(event) => event.stopPropagation()}>{list === 'active' ? <><button disabled={Boolean(updatingId)} title="Arquivar renovação" aria-label="Arquivar renovação" onClick={() => onDisposition(item, 'archived')}><Archive size={15} /></button><button disabled={Boolean(updatingId)} title="Marcar como perdido" aria-label="Marcar como perdido" onClick={() => onDisposition(item, 'lost')}><UserX size={15} /></button></> : <><button disabled={Boolean(updatingId)} title="Reativar renovação" aria-label="Reativar renovação" onClick={() => onDisposition(item, 'active')}><RotateCcw size={15} /></button><button disabled={Boolean(updatingId)} title={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} aria-label={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} onClick={() => onDisposition(item, item.disposition === 'lost' ? 'archived' : 'lost')}>{item.disposition === 'lost' ? <Archive size={15} /> : <UserX size={15} />}</button></>}</div></td>
+      </tr>)}
+      {!records.length && <tr><td colSpan={7} className="empty-row"><CalendarClock size={20} /><b>{list === 'active' ? 'Nenhuma renovação na janela' : 'Nenhum item arquivado'}</b><span>{list === 'active' ? 'A lista considera AVCBs e CLCBs homologados com histórico sincronizado.' : 'Ao arquivar ou marcar como perdido, o processo aparecerá aqui.'}</span></td></tr>}
+    </tbody></table></div>
+  </section>;
+}
+
 function DashboardPage() {
   const { data, error, loading, refresh } = useDashboard();
   const location = useLocation();
@@ -336,6 +364,13 @@ function DashboardPage() {
   const buildingDateToRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
   const [syncing, setSyncing] = useState(false);
+  const [renewals, setRenewals] = useState<RenewalRecord[]>([]);
+  const [renewalList, setRenewalList] = useState<'active' | 'archived'>('active');
+  const [renewalWindow, setRenewalWindow] = useState(2);
+  const [renewalOverdueDays, setRenewalOverdueDays] = useState(60);
+  const [renewalError, setRenewalError] = useState('');
+  const [savingRenewalWindow, setSavingRenewalWindow] = useState(false);
+  const [updatingRenewalId, setUpdatingRenewalId] = useState('');
   const [toast, setToast] = useState('');
   const [selected, setSelected] = useState<Building | null>(null);
   const [selectedTab, setSelectedTab] = useState('Edificação');
@@ -348,6 +383,12 @@ function DashboardPage() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setPage(1); }, [view, query, filter, appliedBuildingDateFrom, appliedBuildingDateTo]);
   useEffect(() => {
+    if (view !== 'renewals') return;
+    let active = true;
+    api<{ windowMonths: number; overdueLimitDays: number; renewals: RenewalRecord[] }>(`/api/renewals?view=${renewalList}`).then((result) => { if (active) { setRenewalWindow(result.windowMonths); setRenewalOverdueDays(result.overdueLimitDays); setRenewals(result.renewals); setRenewalError(''); } }).catch((e) => { if (active) setRenewalError(e.message); });
+    return () => { active = false; };
+  }, [view, renewalList]);
+  useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault(); searchInputRef.current?.focus();
@@ -359,8 +400,8 @@ function DashboardPage() {
   const navigate = useNavigate();
   if (loading) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>Preparando seu painel...</span></div>;
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
-  const activeNav = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'sync' ? 'Consultas' : 'Visão geral';
-  const viewTitle = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const activeNav = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const viewTitle = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
   const viewBuildings = data.buildings;
   const visible = viewBuildings.filter((item) => {
     const q = query.toLocaleLowerCase('pt-BR');
@@ -413,7 +454,35 @@ function DashboardPage() {
   const avcbProcesses = certificateProcesses.filter((item) => /avcb/i.test(item.type));
   const clcbProcesses = certificateProcesses.filter((item) => /clcb/i.test(item.type));
   const inProgressCertificates = certificateProcesses.filter((item) => !/homolog|aprov|certific/i.test(`${item.status} ${item.stage}`));
-  const contextualMetrics = view === 'projects' ? [
+  async function saveRenewalWindow() {
+    setSavingRenewalWindow(true); setRenewalError('');
+    try {
+      await api('/api/settings/renewals', { method: 'PUT', body: JSON.stringify({ windowMonths: renewalWindow }) });
+      const result = await api<{ windowMonths: number; overdueLimitDays: number; renewals: RenewalRecord[] }>(`/api/renewals?view=${renewalList}`);
+      setRenewalWindow(result.windowMonths); setRenewalOverdueDays(result.overdueLimitDays); setRenewals(result.renewals);
+    } catch (e) { setRenewalError(e instanceof Error ? e.message : 'Não foi possível salvar a janela.'); }
+    finally { setSavingRenewalWindow(false); }
+  }
+  async function updateRenewalDisposition(item: RenewalRecord, disposition: 'archived' | 'lost' | 'active') {
+    setUpdatingRenewalId(item.id); setRenewalError('');
+    try {
+      await api(`/api/renewals/${encodeURIComponent(item.id)}/disposition`, { method: 'PUT', body: JSON.stringify({ disposition }) });
+      const result = await api<{ windowMonths: number; overdueLimitDays: number; renewals: RenewalRecord[] }>(`/api/renewals?view=${renewalList}`);
+      setRenewals(result.renewals);
+    } catch (e) { setRenewalError(e instanceof Error ? e.message : 'Não foi possível atualizar a renovação.'); }
+    finally { setUpdatingRenewalId(''); }
+  }
+  const contextualMetrics = view === 'renewals' ? renewalList === 'archived' ? [
+    { label: 'Arquivados e perdidos', value: renewals.length, trend: 'itens nesta lista', icon: Archive, tone: 'teal' },
+    { label: 'Marcados como perdidos', value: renewals.filter((item) => item.disposition === 'lost').length, trend: 'fora da carteira ativa', icon: UserX, tone: 'amber' },
+    { label: 'Arquivados', value: renewals.filter((item) => item.disposition === 'archived').length, trend: 'fora da carteira ativa', icon: Archive, tone: 'violet' },
+    { label: 'Prazo perdido', value: renewals.filter((item) => item.severity === 'overdue').length, trend: 'vencidos nesta lista', icon: CircleAlert, tone: 'blue' }
+  ] : [
+    { label: 'Dentro do prazo', value: renewals.filter((item) => item.severity === 'normal').length, trend: 'situação normal/segura', icon: ShieldCheck, tone: 'teal' },
+    { label: 'Prazo próximo', value: renewals.filter((item) => item.severity === 'attention').length, trend: 'atenção', icon: Clock3, tone: 'amber' },
+    { label: 'No limite', value: renewals.filter((item) => item.severity === 'urgent').length, trend: 'alerta máximo/urgência', icon: CircleAlert, tone: 'violet' },
+    { label: 'Prazo perdido', value: renewals.filter((item) => item.severity === 'overdue').length, trend: `exibindo até ${renewalOverdueDays} dias vencidos`, icon: CalendarClock, tone: 'blue' }
+  ] : view === 'projects' ? [
     { label: 'Projetos PT e PTS', value: projectProcesses.length, trend: 'projetos vinculados', icon: ClipboardList, tone: 'teal', filter: 'all' },
     { label: 'Em análise', value: projectProcesses.filter((item) => /an[aá]lise/i.test(`${item.status} ${item.stage}`)).length, trend: 'projetos no Corpo de Bombeiros', icon: Activity, tone: 'blue', filter: 'analysis' },
     { label: 'Notificados', value: projectProcesses.filter((item) => /notific/i.test(`${item.status} ${item.stage}`)).length, trend: 'projetos com notificação', icon: CircleAlert, tone: 'amber', filter: 'notified' },
@@ -464,7 +533,7 @@ function DashboardPage() {
       <section className="metrics-grid">{contextualMetrics.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} trend={metric.trend} trendPlain={'trendPlain' in metric ? metric.trendPlain : false} icon={metric.icon} tone={metric.tone} onClick={'filter' in metric && metric.filter ? () => navigate(`/painel?view=${view}&filter=${encodeURIComponent(metric.filter!)}`) : undefined} />)}</section>
       {view === 'analysis' && <section className="average-breakdown"><h2>Tempo médio em análise por tipo</h2><p>Tempo decorrido desde a movimentação mais recente de entrada em análise, conforme o histórico do Fênix.</p><div className="average-breakdown-grid">{analysisGroups.map((group) => <div key={group.label}><b>{group.label}</b><strong>{group.value}</strong><small>{group.coverage}</small></div>)}</div></section>}
       <section className="ai-alert-card"><span className="ai-alert-icon"><Sparkles size={19} /></span><div className="ai-alert-copy"><b>Sinalização automática <span className="ai-label">DADOS</span></b><p>{data.metrics.attention ? `Encontramos ${data.metrics.attention} processo${data.metrics.attention > 1 ? 's' : ''} com status que merece${data.metrics.attention > 1 ? 'm' : ''} atenção. Abra uma edificação para entender os dados e próximos passos.` : 'Não há processos com pendências sinalizadas nos dados sincronizados.'}</p><small>Resumo baseado no status recebido do Fênix · {data.sync.lastSync ? `atualizado ${formatDate(data.sync.lastSync)}` : 'aguardando primeira consulta'}</small></div><button className="button button-ghost" onClick={() => launchAi(null, 'Analise a situação geral das edificações e processos acompanhados, destacando as pendências e prioridades de atenção.')}>Perguntar à IA <ArrowRight size={15} /></button></section>
-      {view === 'sync' ? <><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO COM O FÊNIX</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando' : 'Atualizar agora'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} historyRefreshStatus={data.historyRefresh.status} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
+      {view === 'renewals' ? <RenewalsWorkspace records={renewals} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO COM O FÊNIX</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando' : 'Atualizar agora'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} historyRefreshStatus={data.historyRefresh.status} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
         <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações do seu cadastro.</p></div><button className="text-link" onClick={() => { setQuery(''); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div>
         <div className="table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="table-controls"><div className="process-date-filters building-date-filters"><label>De<input ref={buildingDateFromRef} type="date" aria-label="Data inicial da última atualização" value={buildingDateFrom} onChange={(event) => setBuildingDateFrom(event.target.value)} /></label><label>Até<input ref={buildingDateToRef} type="date" aria-label="Data final da última atualização" value={buildingDateTo} onChange={(event) => setBuildingDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedBuildingDateFrom(buildingDateFromRef.current?.value || ''); setAppliedBuildingDateTo(buildingDateToRef.current?.value || ''); }}>Aplicar</button></div><label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label><button className="button button-outline filter-button" onClick={() => setFilter(filter === 'Todas' ? 'Aguardando ação' : 'Todas')}><Filter size={14} /> Filtros</button></div></div>
         <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span><b>{item.reference}</b><small>{item.floors ? `${item.floors} pavimentos` : 'Edificação cadastrada'}</small></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small></td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
@@ -521,6 +590,32 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   const displayedTimeline = timelineProcess?.timeline || process?.timeline || [];
   const contextProcess = process || allProcesses.find((item) => item.id === selectedProcessId) || allProcesses[0];
   const documents = allProcesses.flatMap((item) => item.documents);
+  const officialDate = (value: string) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: 'America/Bahia' }).format(new Date(value));
+  const validityHighlights = allProcesses.flatMap((item) => {
+    const normalizedType = item.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const events = item.timeline.filter((event) => event.date && Number.isFinite(Date.parse(event.date)));
+    if (/avcb|clcb/.test(normalizedType)) {
+      const approvedEvent = events.filter((event) => /homologad|aprovad|certificad/i.test(event.label)).sort((a, b) => Date.parse(b.date!) - Date.parse(a.date!))[0];
+      if (!approvedEvent) return [];
+      const approvedParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bahia', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(approvedEvent.date!)).map((part) => [part.type, part.value]));
+      const approvedDay = Number(approvedParts.day);
+      const renewalDate = new Date(Date.UTC(Number(approvedParts.year) + 1, Number(approvedParts.month) - 1, approvedDay, 15));
+      if (renewalDate.getUTCDate() !== approvedDay) renewalDate.setUTCDate(0);
+      return [
+        { key: `${item.id}-homologation`, label: 'Homologado em', value: officialDate(approvedEvent.date!), detail: item.type },
+        { key: `${item.id}-renewal`, label: 'Renovação em', value: officialDate(renewalDate.toISOString()), detail: item.type }
+      ];
+    }
+    if (/\bacp\b/i.test(item.type)) {
+      const expiry = events.filter((event) => /valid[oa] ate|vencimento|data de validade/i.test(event.label.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))).sort((a, b) => Date.parse(b.date!) - Date.parse(a.date!))[0];
+      if (expiry) return [{ key: item.id, label: 'Válido até', value: officialDate(expiry.date!), detail: 'Data informada pelo Fênix' }];
+    }
+    return [];
+  });
+  if (detail?.building.validUntil && allProcesses.some((item) => /\bacp\b/i.test(item.type)) && !validityHighlights.some((item) => item.label === 'Válido até')) {
+    const parsedValidity = Date.parse(detail.building.validUntil);
+    validityHighlights.push({ key: 'building-acp-validity', label: 'Válido até', value: Number.isFinite(parsedValidity) ? officialDate(new Date(parsedValidity).toISOString()) : detail.building.validUntil, detail: 'Data informada pelo Fênix' });
+  }
   const needsAttention = /pend|exig|notific|retific|devolv/i.test(`${contextProcess?.status || ''} ${contextProcess?.stage || ''}`);
   const approved = /aprov|homolog|conclu|certific/i.test(`${contextProcess?.status || ''} ${contextProcess?.stage || ''}`);
   const nextCheckText = needsAttention ? 'Abra a notificação no Fênix e confira o que foi solicitado; o painel não recebeu o conteúdo integral da exigência.' : approved ? 'Confira no Fênix a emissão e os dados do certificado oficial vinculado ao processo.' : documents.length ? 'Acompanhe a próxima atualização no Fênix e confira os documentos vinculados.' : 'Consulte o Fênix para localizar movimentações ou documentos associados.';
@@ -579,7 +674,7 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   const relatedProcesses = (items: ProcessDetail[]) => items.length > 1 && <div className="related-process-list"><div className="timeline-title"><h4>Processos nesta edificação <span className="doc-count">{items.length}</span></h4></div>{items.map((item) => <button className={`related-process ${process?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => setSelectedProcessId(item.id)}><span><b>{item.protocol || 'Protocolo não informado'}</b><small>{item.type} · {formatDate(item.updatedAt)}</small></span><StatusPill status={item.status} /></button>)}</div>;
   return <div className="drawer-backdrop"><section className="building-drawer" aria-label={`Detalhes de ${building.reference}`}>
     <header className="drawer-header"><div><span className="section-kicker">FICHA DA EDIFICAÇÃO</span><h2>Detalhes da edificação</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={19} /></button></header>
-    <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span></div><StatusPill status={building.status} /></div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail && <div className="building-facts" aria-label="Características da edificação">{[
+    <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span></div><StatusPill status={building.status} />{validityHighlights.length > 0 && <div className="profile-validity">{validityHighlights.map((item) => <div key={item.key}><b>{item.label}</b><strong>{item.value}</strong><small>{item.detail}</small></div>)}</div>}</div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail && <div className="building-facts" aria-label="Características da edificação">{[
       detail.building.use ? { label: 'Uso / ocupação', value: detail.building.use } : null,
       (detail.building.totalArea ?? detail.building.area) ? { label: 'Área total', value: formatArea(detail.building.totalArea ?? detail.building.area) } : null,
       detail.building.buildingArea ? { label: 'Área construída', value: formatArea(detail.building.buildingArea) } : null,
@@ -715,6 +810,21 @@ function UserPreferences() {
   return <section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Settings size={19} /></span><div><h2>IA e atualização automática</h2><p>Defina o contexto enviado à IA e a frequência das consultas ao Fênix.</p></div></div><form className="settings-form preferences-form" onSubmit={save}><label>Intervalo de sincronização (minutos)<input type="number" min="0" max="1440" step="1" value={value.syncIntervalMinutes} onChange={(e) => setValue({ ...value, syncIntervalMinutes: Number(e.target.value) })} /></label><small className="field-hint">Use 0 para desativar consultas automáticas. O mínimo ativo é 5 minutos; consultas manuais continuam disponíveis.</small><div className="preference-toggle-grid">{toggle('aiDataAccess')}{toggle('aiIncludeDocuments')}</div><label>Limite de processos enviados por consulta<input type="number" min="1" max="1000" value={value.aiMaxProcesses} onChange={(e) => setValue({ ...value, aiMaxProcesses: Number(e.target.value) })} /></label><small className="field-hint">A IA usa os processos mais recentes até esse limite. Menos registros reduzem o contexto enviado.</small><label>Prompt de resposta da IA<textarea rows={6} maxLength={5000} value={value.aiResponsePrompt} onChange={(e) => setValue({ ...value, aiResponsePrompt: e.target.value })} /></label><small className="field-hint">Define o foco, o tom e o nível de detalhe da resposta. As regras de segurança e a exigência de usar apenas dados disponíveis continuam protegidas.</small><label>Orientações adicionais<textarea rows={3} maxLength={3000} value={value.aiCustomPrompt} onChange={(e) => setValue({ ...value, aiCustomPrompt: e.target.value })} placeholder="Ex.: destaque primeiro documentos pendentes e próximos passos." /></label><small className="field-hint">Use para acrescentar preferências específicas à orientação principal.</small>{saved && <div className="settings-message">Preferências salvas.</div>}{error && <div className="settings-message error">{error}</div>}<div className="settings-actions"><button className="button button-teal" disabled={busy}>{busy ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar preferências</button></div></form></section>;
 }
 
+function RenewalSettings() {
+  const [days, setDays] = useState(60);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => { api<{ overdueLimitDays: number }>('/api/settings/renewals').then((result) => setDays(result.overdueLimitDays)).catch((e) => setError(e.message)); }, []);
+  async function save(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setMessage(''); setError('');
+    try { const result = await api<{ overdueLimitDays: number }>('/api/settings/renewals', { method: 'PUT', body: JSON.stringify({ overdueLimitDays: days }) }); setDays(result.overdueLimitDays); setMessage('Limite de exibição salvo.'); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível salvar o limite.'); }
+    finally { setBusy(false); }
+  }
+  return <section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><CalendarClock size={19} /></span><div><h2>Renovações</h2><p>Defina por quantos dias os certificados vencidos permanecem na lista ativa.</p></div></div><form className="settings-form renewal-settings-form" onSubmit={(event) => void save(event)}><label>Limite de exibição de renovações vencidas (dias)<input type="number" min="0" max="365" step="1" value={days} onChange={(event) => setDays(Number(event.target.value))} /></label><small className="field-hint">Após esse prazo, os vencidos saem da lista ativa. Use 0 para ocultar assim que vencer. O padrão é 60 dias.</small>{message && <div className="settings-message">{message}</div>}{error && <div className="settings-message error">{error}</div>}<div className="settings-actions"><button className="button button-teal" disabled={busy || days < 0 || days > 365}>{busy ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar limite</button></div></form></section>;
+}
+
 function WebhookIntegration() {
   const [configured, setConfigured] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -726,9 +836,17 @@ function WebhookIntegration() {
   async function save(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError(''); setMessage('');
     try {
-      await api('/api/settings/webhook', { method: 'PUT', body: JSON.stringify({ url }) });
-      setConfigured(true); setEditing(false); setUrl(''); setMessage('Webhook salvo com segurança.');
+      const result = await api<{ configured: boolean; delivered: boolean; message: string; deliveryError?: string }>('/api/settings/webhook', { method: 'PUT', body: JSON.stringify({ url }) });
+      setConfigured(result.configured); setEditing(false); setUrl('');
+      if (result.delivered) setMessage(result.message);
+      else setError(`${result.message} ${result.deliveryError || ''}`);
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível salvar o webhook.'); }
+    finally { setBusy(false); }
+  }
+  async function test() {
+    setBusy(true); setError(''); setMessage('Enviando payload de teste...');
+    try { const result = await api<{ message: string }>('/api/settings/webhook/test', { method: 'POST' }); setMessage(result.message); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível testar o webhook.'); setMessage(''); }
     finally { setBusy(false); }
   }
   async function remove() {
@@ -741,9 +859,9 @@ function WebhookIntegration() {
     <div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Integrações</h2><p>Envie mudanças de processos para um webhook da empresa.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Opcional'}</span></div>
     <div className="webhook-integration-body">
       <p>Quando uma sincronização registrar uma nova notificação, enviaremos à URL configurada um POST JSON com os dados sincronizados da edificação e do processo antes e depois da mudança, além dos campos alterados. A URL fica criptografada no banco compartilhado da empresa; dados de autenticação do Fênix nunca são enviados.</p>
-      {configured && !editing && <div className="webhook-configured"><span>Um webhook está configurado. O endereço é ocultado após salvar.</span><div className="settings-actions"><button className="button button-outline" disabled={busy} onClick={() => { setEditing(true); setMessage(''); }}>Editar webhook</button><button className="button button-danger" disabled={busy} onClick={() => void remove()}>Remover</button></div></div>}
+      {configured && !editing && <div className="webhook-configured"><span>Um webhook está configurado. O endereço é ocultado após salvar.</span><div className="settings-actions"><button className="button button-outline" disabled={busy} onClick={() => void test()}>{busy ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} Testar</button><button className="button button-outline" disabled={busy} onClick={() => { setEditing(true); setMessage(''); }}>Editar webhook</button><button className="button button-danger" disabled={busy} onClick={() => void remove()}>Remover</button></div></div>}
       {!configured && !editing && <button className="button button-outline" onClick={() => { setEditing(true); setMessage(''); }}><Check size={15} /> Adicionar Webhook</button>}
-      {editing && <form className="settings-form webhook-form" onSubmit={(event) => void save(event)}><label>URL do webhook<input type="url" inputMode="url" autoComplete="url" maxLength={2048} required placeholder="https://exemplo.com/webhooks/fenix" value={url} onChange={(event) => setUrl(event.target.value)} /></label><small className="field-hint">HTTPS é obrigatório em produção. Endereços locais, privados e de metadados são bloqueados.</small><div className="settings-actions"><button type="submit" className="button button-teal" disabled={busy || !url.trim()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar webhook</button><button type="button" className="button button-outline" disabled={busy} onClick={() => { setEditing(false); setUrl(''); }}>Cancelar</button></div></form>}
+      {editing && <form className="settings-form webhook-form" onSubmit={(event) => void save(event)}><label>URL do webhook<input type="url" inputMode="url" autoComplete="url" maxLength={2048} required placeholder="https://exemplo.com/webhooks/fenix" value={url} onChange={(event) => setUrl(event.target.value)} /></label><small className="field-hint">HTTPS é obrigatório em produção. Endereços locais, privados e de metadados são bloqueados. Ao salvar, o painel envia um payload de teste imediatamente.</small><div className="settings-actions"><button type="submit" className="button button-teal" disabled={busy || !url.trim()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar webhook</button><button type="button" className="button button-outline" disabled={busy} onClick={() => { setEditing(false); setUrl(''); }}>Cancelar</button></div></form>}
       {message && <div className="settings-message">{message}</div>}{error && <div className="settings-message error">{error}</div>}
     </div>
   </section>;
@@ -770,7 +888,7 @@ function SettingsPage() {
     finally { setSaving(false); }
   }
   if (!user) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /></div>;
-  return <Shell user={user} active="Configurações"><div className="page-content settings-page"><div className="page-heading"><div><span className="section-kicker">PREFERÊNCIAS DO PAINEL</span><h1>Configurações</h1><p>Configure a IA contextual e ajuste a conexão, a frequência de sincronização e as preferências da IA.</p></div></div><section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label>Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label>Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section><UserPreferences /><WebhookIntegration /><section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section></div></Shell>;
+  return <Shell user={user} active="Configurações"><div className="page-content settings-page"><div className="page-heading"><div><span className="section-kicker">PREFERÊNCIAS DO PAINEL</span><h1>Configurações</h1><p>Configure a IA contextual e ajuste a conexão, a frequência de sincronização e as preferências da IA.</p></div></div><section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label>Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label>Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section><UserPreferences /><RenewalSettings /><WebhookIntegration /><section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section></div></Shell>;
 }
 
 function ProtectedDashboard() {

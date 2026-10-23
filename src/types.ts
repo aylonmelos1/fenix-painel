@@ -30,7 +30,7 @@ export type ProcessDetail = {
   id: string; protocol: string; type: string; status: string; stage: string; updatedAt: string;
   documents: DocumentItem[]; timeline: TimelineItem[]; raw: unknown;
 };
-export type BuildingDetail = { building: Building & { use?: string; totalArea?: number | null; buildingArea?: number | null; areaToBeBuilt?: number | null; technicalFacts?: Array<{ label: string; value: string }> }; processes: ProcessDetail[] };
+export type BuildingDetail = { building: Building & { use?: string; totalArea?: number | null; buildingArea?: number | null; areaToBeBuilt?: number | null; validUntil?: string; technicalFacts?: Array<{ label: string; value: string }> }; processes: ProcessDetail[] };
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {

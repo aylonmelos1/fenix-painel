@@ -106,6 +106,11 @@ CREATE TABLE IF NOT EXISTS history_refresh_state (
   failed_count INTEGER NOT NULL DEFAULT 0,
   message TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS renewal_dispositions (
+  process_id TEXT PRIMARY KEY,
+  disposition TEXT NOT NULL CHECK(disposition IN ('archived', 'lost')),
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fenix_request_slots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   requested_at INTEGER NOT NULL

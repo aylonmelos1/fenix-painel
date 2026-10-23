@@ -8,7 +8,7 @@ import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, db, deleteSession, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
 import { FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, loginFenix, newSessionId, saveCookieJar, syncFenixUser } from './fenix.js';
-import { validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
+import { buildWebhookTestPayload, deliverWebhook, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 
 const app = express();
 const logger = new Logger({ name: 'fenix-painel', minLevel: 3 });
@@ -353,7 +353,7 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
   if (!res.locals.user.demo) {
     try { officialProfile = await getFenixEdificationProfile(res.locals.user.id, building.id); }
     catch (error) { logger.info('Cadastro detalhado da edificação indisponível', { status: error instanceof FenixError ? error.status : undefined }); }
-    const relatedProject = processes.find((item) => item.id.startsWith('technicalproject:'));
+    const relatedProject = processes.find((item) => item.id.startsWith('technicalproject:') && /\bacp\b/i.test(item.type)) || processes.find((item) => item.id.startsWith('technicalproject:'));
     if (relatedProject) {
       try { projectProfile = await getTechnicalProjectBuildingProfile(res.locals.user.id, relatedProject.id.slice('technicalproject:'.length)); }
       catch (error) { logger.info('Dados técnicos complementares indisponíveis', { status: error instanceof FenixError ? error.status : undefined }); }
@@ -454,8 +454,77 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     use: officialProfile?.use || projectProfile?.use || '',
     totalArea: officialProfile?.totalArea || projectProfile?.totalArea,
     buildingArea: officialProfile?.buildingArea || projectProfile?.buildingArea,
-    areaToBeBuilt: officialProfile?.areaToBeBuilt || projectProfile?.areaToBeBuilt
+    areaToBeBuilt: officialProfile?.areaToBeBuilt || projectProfile?.areaToBeBuilt,
+    validUntil: projectProfile?.validUntil || ''
   }, processes: withCertificates });
+});
+
+app.get('/api/renewals', requireSession, (req, res) => {
+  const userId = res.locals.user.id;
+  const archivedView = req.query.view === 'archived';
+  const configuredMonths = Number(getSetting('renewal_window_months') || 2);
+  const windowMonths = Number.isInteger(configuredMonths) && configuredMonths >= 1 && configuredMonths <= 24 ? configuredMonths : 2;
+  const configuredOverdueDays = Number(getSetting('renewal_overdue_limit_days') ?? 60);
+  const overdueLimitDays = Number.isInteger(configuredOverdueDays) && configuredOverdueDays >= 0 && configuredOverdueDays <= 365 ? configuredOverdueDays : 60;
+  const rows = db.prepare(`SELECT p.id,p.building_id,p.protocol,p.type,p.status,p.stage,p.payload,
+      b.reference AS building_reference,b.municipality,h.timeline_json,d.disposition
+    FROM processes p JOIN buildings b ON b.id=p.building_id AND b.user_id=p.user_id
+    LEFT JOIN process_histories h ON h.user_id=p.user_id AND h.process_id=p.id
+    LEFT JOIN renewal_dispositions d ON d.process_id=p.id
+    WHERE p.user_id=? AND p.id LIKE 'technicalproject:%' AND (lower(p.type) LIKE '%avcb%' OR lower(p.type) LIKE '%clcb%')`)
+    .all(userId) as Array<{ id:string; building_id:string; protocol:string; type:string; status:string; stage:string; payload:string; building_reference:string; municipality:string; timeline_json:string|null; disposition:string|null }>;
+  const bahiaDateParts = (date: Date) => Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bahia', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date).map((part) => [part.type, part.value]));
+  const todayParts = bahiaDateParts(new Date());
+  const thisMonth = Number(todayParts.year) * 12 + Number(todayParts.month) - 1;
+  const todayOrdinal = Date.UTC(Number(todayParts.year), Number(todayParts.month) - 1, Number(todayParts.day)) / 86_400_000;
+  const byProtocol = new Map<string, any>();
+  for (const row of rows) {
+    let timeline: Array<{ label?: string; date?: string }> = [];
+    try { const parsed = JSON.parse(row.timeline_json || '[]'); if (Array.isArray(parsed)) timeline = parsed; } catch { /* history is optional */ }
+    const homologation = timeline.filter((event) => /homologad|aprovad|certificad/i.test(event.label || '') && event.date && Number.isFinite(Date.parse(event.date)))
+      .sort((a,b) => Date.parse(b.date!) - Date.parse(a.date!))[0];
+    if (!homologation) continue;
+    const approvedAt = new Date(homologation.date!);
+    const approvedParts = bahiaDateParts(approvedAt);
+    const approvedDay = Number(approvedParts.day);
+    const renewal = new Date(Date.UTC(Number(approvedParts.year) + 1, Number(approvedParts.month) - 1, approvedDay, 15));
+    if (renewal.getUTCDate() !== approvedDay) renewal.setUTCDate(0);
+    const renewalParts = bahiaDateParts(renewal);
+    const monthDelta = Number(renewalParts.year) * 12 + Number(renewalParts.month) - 1 - thisMonth;
+    const renewalOrdinal = Date.UTC(Number(renewalParts.year), Number(renewalParts.month) - 1, Number(renewalParts.day)) / 86_400_000;
+    const daysUntilRenewal = renewalOrdinal - todayOrdinal;
+    if (archivedView ? !row.disposition : Boolean(row.disposition) || monthDelta > windowMonths || (daysUntilRenewal < 0 && -daysUntilRenewal > overdueLimitDays)) continue;
+    const key = `${row.building_id}:${row.protocol || row.id}`;
+    const existing = byProtocol.get(key);
+    if (existing && Date.parse(existing.homologatedAt) >= approvedAt.getTime()) continue;
+    byProtocol.set(key, {
+      id: row.id, buildingId: row.building_id, buildingReference: row.building_reference,
+      municipality: row.municipality, protocol: row.protocol, type: row.type,
+      status: row.status, stage: row.stage, homologatedAt: approvedAt.toISOString(), renewalAt: renewal.toISOString(),
+      monthsUntilRenewal: monthDelta, daysUntilRenewal,
+      severity: daysUntilRenewal < 0 ? 'overdue' : monthDelta <= 0 ? 'urgent' : monthDelta === 1 ? 'attention' : 'normal',
+      urgency: monthDelta <= 0 ? 'current' : monthDelta === 1 ? 'next' : monthDelta === 2 ? 'upcoming' : 'later', disposition: row.disposition
+    });
+  }
+  return res.json({ windowMonths, overdueLimitDays, renewals: [...byProtocol.values()].sort((a,b) => Date.parse(a.renewalAt)-Date.parse(b.renewalAt)) });
+});
+
+app.put('/api/renewals/:id/disposition', requireSession, (req, res) => {
+  const user = res.locals.user;
+  if (user.demo) return res.status(403).json({ error: 'O status de renovação só pode ser alterado na conta da empresa.' });
+  const processId = String(req.params.id || '');
+  const process = db.prepare(`SELECT id FROM processes WHERE id=? AND user_id=? AND id LIKE 'technicalproject:%' AND (lower(type) LIKE '%avcb%' OR lower(type) LIKE '%clcb%')`).get(processId, user.id);
+  if (!process) return res.status(404).json({ error: 'Processo de renovação não encontrado.' });
+  const disposition = req.body?.disposition;
+  if (disposition === null || disposition === 'active') {
+    db.prepare('DELETE FROM renewal_dispositions WHERE process_id=?').run(processId);
+    return res.json({ disposition: null });
+  }
+  if (disposition !== 'archived' && disposition !== 'lost') return res.status(400).json({ error: 'Use archived, lost ou active.' });
+  db.prepare(`INSERT INTO renewal_dispositions(process_id,disposition,updated_at) VALUES(?,?,?)
+    ON CONFLICT(process_id) DO UPDATE SET disposition=excluded.disposition,updated_at=excluded.updated_at`)
+    .run(processId, disposition, new Date().toISOString());
+  return res.json({ disposition });
 });
 
 app.get('/api/buildings/:buildingId/processes/:processId/daes/:daeId/download', requireSession, async (req, res) => {
@@ -600,6 +669,24 @@ app.delete('/api/settings/ai', (_req, res) => {
 app.get('/api/settings/webhook', requireSession, (_req, res) => {
   res.json({ configured: Boolean(getSetting(WEBHOOK_SETTING)) });
 });
+app.get('/api/settings/renewals', requireSession, (_req, res) => {
+  const months = Number(getSetting('renewal_window_months') || 2);
+  const overdueDays = Number(getSetting('renewal_overdue_limit_days') ?? 60);
+  res.json({ windowMonths: Number.isInteger(months) && months >= 1 && months <= 24 ? months : 2, overdueLimitDays: Number.isInteger(overdueDays) && overdueDays >= 0 && overdueDays <= 365 ? overdueDays : 60 });
+});
+app.put('/api/settings/renewals', requireSession, (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A janela de renovação só pode ser configurada na conta da empresa.' });
+  const hasMonths = req.body?.windowMonths !== undefined;
+  const hasOverdueDays = req.body?.overdueLimitDays !== undefined;
+  if (!hasMonths && !hasOverdueDays) return res.status(400).json({ error: 'Informe uma configuração de renovação.' });
+  const months = hasMonths ? Number(req.body.windowMonths) : Number(getSetting('renewal_window_months') || 2);
+  const overdueDays = hasOverdueDays ? Number(req.body.overdueLimitDays) : Number(getSetting('renewal_overdue_limit_days') ?? 60);
+  if (hasMonths && (!Number.isInteger(months) || months < 1 || months > 24)) return res.status(400).json({ error: 'A janela deve ficar entre 1 e 24 meses.' });
+  if (hasOverdueDays && (!Number.isInteger(overdueDays) || overdueDays < 0 || overdueDays > 365)) return res.status(400).json({ error: 'O limite de vencidos deve ficar entre 0 e 365 dias.' });
+  if (hasMonths) setSetting('renewal_window_months', String(months));
+  if (hasOverdueDays) setSetting('renewal_overdue_limit_days', String(overdueDays));
+  return res.json({ windowMonths: months, overdueLimitDays: overdueDays });
+});
 app.put('/api/settings/webhook', requireSession, async (req, res) => {
   if (res.locals.user.demo) return res.status(403).json({ error: 'A integração só pode ser configurada na conta Fênix da empresa.' });
   const value = String(req.body?.url || '').trim();
@@ -607,9 +694,27 @@ app.put('/api/settings/webhook', requireSession, async (req, res) => {
   try {
     await validateWebhookUrl(value, isProduction);
     setSetting(WEBHOOK_SETTING, value);
-    return res.json({ configured: true });
+    try {
+      await deliverWebhook(value, buildWebhookTestPayload(res.locals.user.id), isProduction);
+      return res.json({ configured: true, delivered: true, message: 'Webhook salvo e payload de teste enviado.' });
+    } catch (error) {
+      logger.warn('Webhook salvo, mas o envio inicial falhou', { error: error instanceof Error ? error.message : 'erro desconhecido' });
+      return res.json({ configured: true, delivered: false, message: 'Webhook salvo, mas o envio imediato falhou.', deliveryError: error instanceof Error ? error.message : 'Falha ao enviar o payload de teste.' });
+    }
   } catch (error) {
     return res.status(400).json({ error: error instanceof Error ? error.message : 'URL de webhook inválida.' });
+  }
+});
+app.post('/api/settings/webhook/test', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A integração só pode ser testada na conta Fênix da empresa.' });
+  const url = getSetting(WEBHOOK_SETTING);
+  if (!url) return res.status(409).json({ error: 'Configure um webhook antes de testar.' });
+  try {
+    await deliverWebhook(url, buildWebhookTestPayload(res.locals.user.id), isProduction);
+    return res.json({ delivered: true, message: 'Payload de teste enviado com sucesso.' });
+  } catch (error) {
+    logger.warn('Teste de webhook falhou', { error: error instanceof Error ? error.message : 'erro desconhecido' });
+    return res.status(502).json({ error: error instanceof Error ? error.message : 'Não foi possível enviar o payload de teste.' });
   }
 });
 app.delete('/api/settings/webhook', requireSession, (req, res) => {
