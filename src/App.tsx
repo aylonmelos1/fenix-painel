@@ -134,7 +134,7 @@ type UserNotification = { id: number; buildingId: string | null; processId: stri
 const navItems: NavItem[] = [
   { label: 'Visão geral', icon: Home, path: '/painel' }, { label: 'Edificações', icon: Building2, path: '/painel?view=buildings' },
   { label: 'Em Análise', icon: ClipboardList, path: '/painel?view=analysis' }, { label: 'Notificados', icon: FileCheck2, path: '/painel?view=notified' },
-  { label: 'AVCBs e CLCBs', icon: ShieldCheck, path: '/painel?view=certificates' }, { label: 'Projetos (PT e PTS)', icon: FileText, path: '/painel?view=projects' },
+  { label: 'AVCBs e CLCBs', icon: ShieldCheck, path: '/painel?view=certificates' }, { label: 'Projetos (ACP)', icon: FileText, path: '/painel?view=projects' },
   { label: 'Consultas', icon: Search, path: '/painel?view=sync' }
 ];
 
@@ -238,7 +238,7 @@ function ProcessWorkspace({ view, processes, buildings, searchInputRef, onOpen, 
   const dateFromRef = useRef<HTMLInputElement>(null);
   const dateToRef = useRef<HTMLInputElement>(null);
   useEffect(() => { setScope(new URLSearchParams(location.search).get('filter') || 'all'); setQuery(''); setDateFrom(''); setDateTo(''); setAppliedDateFrom(''); setAppliedDateTo(''); }, [view, location.search]);
-  const title = view === 'projects' ? 'Projetos (PT e PTS)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'certificates' ? 'AVCBs e CLCBs' : 'Processos';
+  const title = view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'certificates' ? 'AVCBs e CLCBs' : 'Processos';
   const matchingView = processes.filter((item) => {
     const category = `${item.type} ${item.status} ${item.stage}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const status = `${item.status} ${item.stage}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -328,8 +328,8 @@ function DashboardPage() {
   const navigate = useNavigate();
   if (loading) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>Preparando seu painel...</span></div>;
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
-  const activeNav = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (PT e PTS)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'sync' ? 'Consultas' : 'Visão geral';
-  const viewTitle = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (PT e PTS)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const activeNav = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const viewTitle = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'sync' ? 'Consultas' : 'Visão geral';
   const viewBuildings = data.buildings;
   const visible = viewBuildings.filter((item) => {
     const q = query.toLocaleLowerCase('pt-BR');
