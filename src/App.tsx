@@ -52,6 +52,24 @@ function Landing() {
   </main>;
 }
 
+function LoginProgress({ stage, completed, failed, syncWarning }: { stage: number; completed: number[]; failed: boolean; syncWarning: boolean }) {
+  const steps = ['Abrindo conexão HTTPS com o Fênix', 'Preparando a sessão de autenticação', 'Enviando credenciais protegidas por HTTPS e token hCaptcha', 'Fênix validando credenciais e hCaptcha', 'Acesso aprovado pelo Fênix', 'Carregando edificações e processos', 'Painel pronto'];
+  const activeStage = Math.max(0, Math.min(stage, steps.length - 1));
+  const doneCount = completed.length;
+  return <section className={`login-progress ${failed ? 'login-progress-failed' : ''}`} aria-live="polite" aria-label="Etapas de autenticação">
+    <div className="login-progress-heading"><b>{failed ? 'Não foi possível concluir o acesso' : stage === 6 ? 'Acesso aprovado' : 'Acompanhando seu acesso'}</b><span>{failed ? 'Revise os dados ou tente novamente' : `${Math.min(doneCount, steps.length)} de ${steps.length} etapas`}</span></div>
+    <div className="login-progress-track"><i style={{ width: `${Math.min(100, doneCount / steps.length * 100)}%` }} /></div>
+    <ol>{steps.map((label, index) => {
+      const isDone = completed.includes(index) && !(failed && index === activeStage);
+      const isCurrent = index === activeStage && !isDone && !failed;
+      return <li key={label} className={isDone ? 'done' : isCurrent ? 'current' : failed && index === activeStage ? 'failed' : ''}>
+        <span className="login-step-icon">{isDone ? <Check size={13} /> : isCurrent ? <LoaderCircle size={13} className="spin" /> : failed && index === activeStage ? <CircleAlert size={13} /> : index + 1}</span><span>{label}</span>
+      </li>;
+    })}</ol>
+    {syncWarning && <small className="login-sync-warning">Acesso aprovado. A primeira sincronização não terminou; você pode atualizar os dados dentro do painel.</small>}
+  </section>;
+}
+
 function Login() {
   const navigate = useNavigate();
   const [siteKey, setSiteKey] = useState('');
@@ -60,6 +78,7 @@ function Login() {
   const [token, setToken] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loginInProgress, setLoginInProgress] = useState(false);
   const [error, setError] = useState('');
   const [loginStage, setLoginStage] = useState(-1);
   const [loginCompleted, setLoginCompleted] = useState<number[]>([]);
@@ -69,7 +88,7 @@ function Login() {
   async function submit(event: FormEvent) {
     event.preventDefault(); setError('');
     if (!token) { setError('Conclua a verificação do hCaptcha para continuar.'); return; }
-    setLoading(true); setLoginStage(-1); setLoginCompleted([]); setLoginSyncWarning(false);
+    setLoading(true); setLoginInProgress(true); setLoginStage(-1); setLoginCompleted([]); setLoginSyncWarning(false);
     const progressId = crypto.randomUUID();
     const poller = window.setInterval(() => {
       void api<{ stage: number; completedStages: number[]; syncWarning?: boolean }>(`/api/auth/login/progress/${progressId}`).then((progress) => {
@@ -79,7 +98,8 @@ function Login() {
       }).catch(() => undefined);
     }, 300);
     try {
-      await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password, hcaptchaToken: token, progressId }) });
+      const result = await api<{ syncWarning?: boolean }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password, hcaptchaToken: token, progressId }) });
+      if (result.syncWarning) setLoginSyncWarning(true);
       window.clearInterval(poller); setLoginStage(6); setLoginCompleted([0, 1, 2, 3, 4, 5, 6]);
       await new Promise((resolve) => window.setTimeout(resolve, 700));
       navigate('/painel');
@@ -91,7 +111,7 @@ function Login() {
       const progress = await api<{ stage: number; completedStages: number[]; syncWarning?: boolean }>(`/api/auth/login/progress/${progressId}`).catch(() => null);
       if (progress) { setLoginStage(progress.stage); setLoginCompleted(progress.completedStages); }
     }
-    finally { setLoading(false); }
+    finally { setLoading(false); setLoginInProgress(false); }
   }
   async function demo() { setLoading(true); try { await api('/api/auth/demo', { method: 'POST' }); navigate('/painel'); } finally { setLoading(false); } }
   return <main className="login-page">
@@ -100,7 +120,7 @@ function Login() {
       <form onSubmit={submit} className="login-form"><label>E-mail<div className="input-icon"><span>@</span><input type="text" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="seu.email@exemplo.gov.br" required /></div></label><label>Senha<div className="input-icon"><LockKeyhole size={16} /><input type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Sua senha do Fênix" required /><button type="button" className="input-trailing" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
       <div className="captcha-wrap">{siteKey && <HCaptcha ref={captchaRef} sitekey={siteKey} onVerify={(value) => setToken(value)} onExpire={() => setToken('')} onError={() => setError('Não foi possível validar o hCaptcha. Tente novamente.')} />}</div>
       {error && <div className="form-error"><CircleAlert size={16} /> {error}</div>}
-      {(loading || loginStage >= 0) && <LoginProgress stage={loginStage} completed={loginCompleted} failed={Boolean(error)} syncWarning={loginSyncWarning} />}
+      {(loginInProgress || (loginStage >= 0 && Boolean(error))) && <LoginProgress stage={loginStage} completed={loginCompleted} failed={Boolean(error)} syncWarning={loginSyncWarning} />}
       <button className="button button-teal button-wide" type="submit" disabled={loading || !siteKey}>{loading ? <><LoaderCircle size={16} className="spin" /> Validando acesso...</> : <>Entrar com Fênix <ArrowRight size={16} /></>}</button>
       <div className="secure-note"><LockKeyhole size={14} /><span>Suas credenciais são enviadas ao Fênix para autenticação. O Fênix Painel não armazena sua senha.</span></div>
       <div className="login-divider"><span>ou</span></div><button type="button" className="button button-outline button-wide" onClick={demo} disabled={loading}><Eye size={16} /> Explorar ambiente de demonstração</button>

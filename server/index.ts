@@ -145,9 +145,10 @@ app.post('/api/auth/login', async (req, res) => {
     const completedStages = [...(prior?.completedStages || [])];
     if (prior && prior.stage >= 0 && stage > prior.stage) completedStages.push(prior.stage);
     if (extra.status === 'done' && stage >= 0) completedStages.push(stage);
-    loginProgress.set(progressId, { stage, completedStages: [...new Set(completedStages)], status: 'working', ...extra });
+    loginProgress.set(progressId, { stage, completedStages: [...new Set(completedStages)], status: 'working', syncWarning: extra.syncWarning ?? prior?.syncWarning, ...extra });
   };
   const cleanupProgress = () => setTimeout(() => loginProgress.delete(progressId), 5 * 60_000).unref();
+  let syncWarning = false;
   try {
     const result = await loginFenix(email, password, hcaptchaToken, (stage) => updateProgress(stage));
     if (!result) {
@@ -175,6 +176,7 @@ app.post('/api/auth/login', async (req, res) => {
       const sync = await syncFenixUser(userId);
       db.prepare('UPDATE sync_runs SET completed_at=?, status=?, message=? WHERE id=?').run(sync.completedAt, 'success', `${sync.buildings} edificações; ${sync.processes} processos`, run.lastInsertRowid);
     } catch (error) {
+      syncWarning = true;
       const safeMessage = error instanceof FenixError ? error.message : 'Falha na primeira sincronização.';
       db.prepare('INSERT INTO sync_runs (user_id, started_at, completed_at, status, message) VALUES (?, ?, ?, ?, ?)')
         .run(userId, now, new Date().toISOString(), 'error', safeMessage);
@@ -182,7 +184,7 @@ app.post('/api/auth/login', async (req, res) => {
       updateProgress(5, { syncWarning: true });
     }
     updateProgress(6, { status: 'done' }); cleanupProgress();
-    return res.json({ ok: true, name, synced: Boolean(resolveSession(sessionId)?.last_sync) });
+    return res.json({ ok: true, name, synced: Boolean(resolveSession(sessionId)?.last_sync), syncWarning });
   } catch (error) {
     const message = error instanceof FenixError ? error.message : 'Não foi possível conectar ao Fênix agora.';
     updateProgress(loginProgress.get(progressId)?.stage ?? 0, { status: 'error', error: message }); cleanupProgress();
