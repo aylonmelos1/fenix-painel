@@ -81,6 +81,36 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   status TEXT NOT NULL,
   message TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS process_histories (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  process_id TEXT NOT NULL,
+  timeline_json TEXT NOT NULL DEFAULT '[]',
+  latest_activity_at TEXT,
+  analysis_entered_at TEXT,
+  notification_entered_at TEXT,
+  notification_count INTEGER NOT NULL DEFAULT 0,
+  project_kind TEXT,
+  history_available INTEGER NOT NULL DEFAULT 0,
+  refresh_status TEXT NOT NULL DEFAULT 'pending',
+  refreshed_at TEXT,
+  error TEXT,
+  PRIMARY KEY (user_id, process_id)
+);
+CREATE TABLE IF NOT EXISTS history_refresh_state (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'idle',
+  started_at TEXT,
+  completed_at TEXT,
+  total_count INTEGER NOT NULL DEFAULT 0,
+  processed_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS fenix_request_slots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requested_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fenix_request_slots_requested_at ON fenix_request_slots(requested_at);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value_ciphertext TEXT NOT NULL,
@@ -93,6 +123,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   process_id TEXT,
   title TEXT NOT NULL,
   message TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   read_at TEXT
 );
@@ -125,6 +156,31 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   ai_custom_prompt TEXT NOT NULL DEFAULT ''
 );
 UPDATE user_preferences SET ai_max_processes = 1000 WHERE ai_max_processes = 100 AND ai_custom_prompt = '' AND ai_data_access = 1 AND ai_include_documents = 1;
+`);
+
+db.exec(`
+DROP INDEX IF EXISTS notifications_unique_event;
+`);
+try {
+  db.exec("ALTER TABLE notifications ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''");
+} catch (error) {
+  if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
+}
+
+db.exec(`
+UPDATE notifications SET dedupe_key=COALESCE((
+  SELECT p.building_id || ':' || lower(replace(trim(p.protocol),' ',''))
+  FROM processes p WHERE p.user_id=notifications.user_id AND p.id=notifications.process_id LIMIT 1
+), process_id);
+DELETE FROM notifications AS duplicate
+WHERE EXISTS (
+  SELECT 1 FROM notifications AS preferred
+  WHERE preferred.user_id=duplicate.user_id AND preferred.dedupe_key=duplicate.dedupe_key AND preferred.title=duplicate.title
+    AND preferred.message=duplicate.message AND preferred.created_at=duplicate.created_at
+    AND (CASE WHEN preferred.read_at IS NULL THEN 0 ELSE 1 END < CASE WHEN duplicate.read_at IS NULL THEN 0 ELSE 1 END
+      OR ((preferred.read_at IS NULL) = (duplicate.read_at IS NULL) AND preferred.id < duplicate.id))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_unique_event ON notifications(user_id,dedupe_key,title,message,created_at);
 `);
 
 try {

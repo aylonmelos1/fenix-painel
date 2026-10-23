@@ -3,7 +3,7 @@ export type User = { name: string; email: string | null; demo: boolean };
 export type Building = {
   id: string; reference: string; municipality: string; address: string; area: number | null;
   floors: number | null; height: string; processCount: number; protocol: string;
-  processType: string; status: string; stage: string; lastUpdated: string;
+  processType: string; status: string; stage: string; lastUpdated: string | null;
   hasRequest?: boolean; hasProject?: boolean; hasDocuments?: boolean;
   requestCount?: number; projectCount?: number; documentsCount?: number;
 };
@@ -11,12 +11,13 @@ export type Building = {
 export type DashboardProcess = {
   id: string; buildingId: string; buildingReference: string; municipality: string;
   protocol: string; type: string; status: string; stage: string; updatedAt: string; documentCount: number;
-  analysisEnteredAt?: string | null; notificationEnteredAt?: string | null; notificationCount?: number | null; historyAvailable?: boolean;
+  analysisEnteredAt?: string | null; notificationEnteredAt?: string | null; latestActivityAt?: string | null; notificationCount?: number | null; historyAvailable?: boolean;
   projectKind?: string | null;
 };
 
 export type Dashboard = {
   user: User;
+  historyRefresh: { status: string; startedAt: string | null; completedAt: string | null; total: number; processed: number; failed: number; message: string };
   metrics: { buildings: number; processes: number; analysis: number; attention: number; inspections: number };
   buildings: Building[];
   processes: DashboardProcess[];

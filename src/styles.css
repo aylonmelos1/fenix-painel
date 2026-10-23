@@ -327,6 +327,7 @@
 .app-shell .settings-message{font-size:12px;line-height:1.5}
 .app-shell .settings-actions .button{font-size:13px;min-height:42px}
 .app-shell .settings-footnote{font-size:12px;line-height:1.6}
+.webhook-integration-body{padding:16px 19px 19px}.webhook-integration-body>p{font-size:13px;line-height:1.6;color:#718094;margin:0 0 15px}.webhook-configured{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px;border:1px solid #e5ebef;border-radius:8px;background:#fbfcfd}.webhook-configured>span{font-size:13px;color:#5f7285}.webhook-form{padding:0}.webhook-form .settings-actions{margin-top:12px}@media(max-width:640px){.webhook-integration-body{padding:12px}.webhook-integration-body>p{font-size:11px}.webhook-configured{align-items:flex-start;flex-direction:column;gap:8px}}
 
 /* Working navigation, help and notification controls. */
 .side-nav .side-link{font-family:inherit}
@@ -346,3 +347,4 @@
 .help-dialog{width:min(540px,100%);max-height:min(720px,calc(100dvh - 40px));overflow:auto;border:1px solid #dfe7ed;border-radius:14px;background:#fff;box-shadow:0 22px 68px rgba(11,28,44,.24)}
 .help-dialog>header{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;border-bottom:1px solid #e9eef2;background:#fff}.help-dialog>header>div{display:flex;align-items:center;gap:11px}.help-dialog h2{margin:0;color:#20384d;font-size:18px}.help-dialog header p{margin:4px 0 0;color:#758598;font-size:12px}.help-content{display:grid;gap:0;padding:4px 20px}.help-content section{padding:14px 0;border-bottom:1px solid #edf1f3}.help-content section:last-child{border-bottom:0}.help-content b{font-size:13px;color:#2e455a}.help-content p{margin:5px 0 0;color:#65778a;font-size:12px;line-height:1.6}.help-dialog>footer{padding:12px 20px 18px;display:flex;justify-content:flex-end}
 @media(max-width:640px){.notification-popover{position:fixed;top:62px;right:12px;width:calc(100vw - 24px);max-height:calc(100dvh - 74px)}.help-backdrop{padding:12px}.help-dialog{max-height:calc(100dvh - 24px)}.help-dialog>header,.help-content{padding-inline:15px}.help-dialog h2{font-size:15px}}
+.connection-chip.syncing-chip{background:#eaf5fb;color:#256b94}.syncing-chip .connection-dot{background:#2787b6;animation:connection-pulse 1.4s ease-in-out infinite}.connection-chip small{margin-left:3px;font-size:10px;opacity:.75}@keyframes connection-pulse{50%{opacity:.35;box-shadow:0 0 0 4px rgba(39,135,182,.12)}}

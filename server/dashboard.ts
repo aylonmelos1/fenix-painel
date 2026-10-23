@@ -24,6 +24,7 @@ export type DashboardProcess = {
   documentCount: number;
   analysisEnteredAt?: string | null;
   notificationEnteredAt?: string | null;
+  latestActivityAt?: string | null;
   notificationCount?: number | null;
   historyAvailable?: boolean;
   projectKind?: string | null;

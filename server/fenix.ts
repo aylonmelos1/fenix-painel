@@ -1,7 +1,8 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { CookieJar } from 'tough-cookie';
-import { db, seal, unseal } from './store.js';
+import { db, getSetting, seal, unseal } from './store.js';
 import { detectProcessChanges, type ProcessSyncState } from './sync-changes.js';
+import { deliverWebhook, WEBHOOK_SETTING, type ProcessWebhookPayload } from './webhook.js';
 
 const OFFICIAL_FENIX_ORIGIN = 'https://fenix.cbm.ba.gov.br';
 const FENIX_ORIGIN = (() => {
@@ -20,12 +21,51 @@ if (process.env.FENIX_BASE_URL && FENIX_ORIGIN !== OFFICIAL_FENIX_ORIGIN && !FEN
 export const HCAPTCHA_SITE_KEY = 'e94868de-18ba-4314-b0ce-c7c84a1440b6';
 const FRONTEND_VERSION = '2.19.1';
 const REQUEST_TIMEOUT_MS = 25_000;
+const FENIX_REQUESTS_PER_MINUTE = 45;
+let fenixRequestQueueDepth = 0;
 
 export class FenixError extends Error {
-  constructor(message: string, public status?: number) { super(message); }
+  constructor(message: string, public status?: number, public retryAfterMs?: number) { super(message); }
+}
+
+function retryAfterMs(response: Response) {
+  const value = response.headers.get('retry-after');
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, 5 * 60_000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.min(Math.max(0, date - Date.now()), 5 * 60_000) : undefined;
+}
+
+async function acquireFenixRequestSlot() {
+  let queued = false;
+  while (true) {
+    const now = Date.now();
+    const slot = db.transaction(() => {
+      db.prepare('DELETE FROM fenix_request_slots WHERE requested_at <= ?').run(now - 60_000);
+      const count = (db.prepare('SELECT COUNT(*) AS count FROM fenix_request_slots').get() as { count: number }).count;
+      if (count < FENIX_REQUESTS_PER_MINUTE) {
+        db.prepare('INSERT INTO fenix_request_slots (requested_at) VALUES (?)').run(now);
+        return { acquired: true, oldest: now };
+      }
+      return { acquired: false, oldest: (db.prepare('SELECT MIN(requested_at) AS oldest FROM fenix_request_slots').get() as { oldest: number | null }).oldest || now };
+    })();
+    if (slot.acquired) {
+      if (queued) fenixRequestQueueDepth = Math.max(0, fenixRequestQueueDepth - 1);
+      return;
+    }
+    if (!queued) { queued = true; fenixRequestQueueDepth += 1; }
+    await new Promise((resolve) => setTimeout(resolve, Math.max(25, 60_000 - (now - slot.oldest))));
+  }
+}
+
+export function getFenixRequestQueueState() {
+  const recentCount = (db.prepare('SELECT COUNT(*) AS count FROM fenix_request_slots WHERE requested_at > ?').get(Date.now() - 60_000) as { count: number }).count;
+  return { queued: fenixRequestQueueDepth, recentCount, limitPerMinute: FENIX_REQUESTS_PER_MINUTE };
 }
 
 async function fetchBounded(url: URL, init: RequestInit, limit = 1_000_000) {
+  if (url.origin === FENIX_ORIGIN) await acquireFenixRequestSlot();
   const headers = new Headers(init.headers);
   if (FENIX_PROXY_TOKEN && url.origin === FENIX_ORIGIN) headers.set('X-Fenix-MCP-Proxy-Key', FENIX_PROXY_TOKEN);
   const response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: 'manual' });
@@ -93,7 +133,7 @@ export class FenixClient {
       }
     });
     await storeCookies(result.response, url.toString(), this.jar);
-    if (!result.response.ok) throw new FenixError(`Consulta ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
+    if (!result.response.ok) throw new FenixError(`Consulta ao Fênix retornou HTTP ${result.response.status}.`, result.response.status, retryAfterMs(result.response));
     return result.body;
   }
 
@@ -126,10 +166,10 @@ async function fenixClientForUser(userId: string) {
   return new FenixClient(CookieJar.deserializeSync(JSON.parse(unseal(user.session_ciphertext))));
 }
 
-async function technicalProjectDetails(userId: string, projectId: string) {
+async function technicalProjectDetails(userId: string, projectId: string, forceRefresh = false) {
   const cacheKey = `${userId}:${projectId}`;
   const cached = projectDetailsCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached;
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) return cached;
   const client = await fenixClientForUser(userId);
   const response = await client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(projectId)}`) as any;
   const detail = response?.data ?? response;
@@ -191,6 +231,11 @@ async function technicalProjectDetails(userId: string, projectId: string) {
 
 export async function getTechnicalProjectTimeline(userId: string, projectId: string): Promise<TechnicalProjectEvent[]> {
   return (await technicalProjectDetails(userId, projectId)).timeline;
+}
+
+export async function refreshTechnicalProjectDetails(userId: string, projectId: string) {
+  const { timeline, profile } = await technicalProjectDetails(userId, projectId, true);
+  return { timeline, profile };
 }
 
 export async function getTechnicalProjectBuildingProfile(userId: string, projectId: string): Promise<TechnicalProjectProfile> {
@@ -471,6 +516,23 @@ function safeProcessPayload(process: any) {
   return { documents, timeline };
 }
 
+function safeBuildingPayload(building: any): Record<string, unknown> {
+  const forbiddenKey = /cookie|authorization|auth|password|senha|token|secret|captcha|session|credential|header/i;
+  const sanitize = (value: unknown): unknown => {
+    if (typeof value === 'string') return cleanLabel(value);
+    if (Array.isArray(value)) return value.map(sanitize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !forbiddenKey.test(key))
+        .map(([key, nested]) => [key, sanitize(nested)]));
+    }
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+    return undefined;
+  };
+  const result = sanitize(building);
+  return result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : {};
+}
+
 function processBuildingId(process: any) {
   return String(first(process, ['edificacao_id', 'edification_id', 'edificationId', 'edificacao.id', 'edification.id', 'imovel.id'], ''));
 }
@@ -515,7 +577,8 @@ export async function syncFenixUser(userId: string) {
     return buildingId && buildingIds.has(buildingId);
   });
   const hadPriorSync = Boolean(user.last_sync);
-  const previousProcesses = db.prepare('SELECT id, building_id, protocol, type, status, stage, payload FROM processes WHERE user_id = ?').all(userId) as Array<{ id: string; building_id: string; protocol: string; type: string; status: string; stage: string; payload: string }>;
+  const previousProcesses = db.prepare('SELECT id, building_id, protocol, type, status, stage, updated_at, payload FROM processes WHERE user_id = ?').all(userId) as Array<{ id: string; building_id: string; protocol: string; type: string; status: string; stage: string; updated_at: string; payload: string }>;
+  const previousBuildings = new Map((db.prepare('SELECT * FROM buildings WHERE user_id=?').all(userId) as Array<any>).map((row) => [row.id, row]));
   const buildingNames = new Map(buildingRows.map((building) => [String(first(building, ['id', 'edificacao_id'], '')), cleanLabel(first(building, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia'], 'Edificação'))]));
   const currentStates: ProcessSyncState[] = [];
   for (const process of processRows) {
@@ -539,6 +602,61 @@ export async function syncFenixUser(userId: string) {
   }));
   const changes = hadPriorSync ? detectProcessChanges(previousStates, currentStates) : [];
   const now = new Date().toISOString();
+  const webhookUrl = getSetting(WEBHOOK_SETTING);
+  const webhookEvents: ProcessWebhookPayload[] = [];
+  const currentBuildingSnapshots = new Map<string, Record<string, unknown>>();
+  for (const row of buildingRows) {
+    const id = String(first(row, ['id', 'edificacao_id'], ''));
+    if (!id) continue;
+    currentBuildingSnapshots.set(id, {
+      id, reference: cleanLabel(first(row, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia'], `Edificação ${id}`)),
+      municipality: cleanLabel(first(row, ['address.county', 'county', 'municipio.nome', 'municipality', 'cidade'], '')),
+      address: cleanLabel(first(row, ['address.public_place', 'address.logradouro', 'logradouro'], '')),
+      area: Number(first(row, ['total_area', 'building_area', 'area'], '0')) || 0,
+      floors: Number(first(row, ['number_floors', 'pavimentos'], '0')) || 0,
+      height: cleanLabel(first(row, ['height'], '')), payload: safeBuildingPayload(row), snapshotComplete: true
+    });
+  }
+  const currentProcessSnapshots = new Map<string, Record<string, unknown>>();
+  for (const process of currentStates) {
+    const raw = processRows.find((row) => `${row.__source || 'process'}:${first(row, ['id', 'solicitacao_id', 'projeto_tecnico_id'], '')}` === process.id);
+    currentProcessSnapshots.set(process.id, {
+      id: process.id, buildingId: process.buildingId, protocol: process.protocol, type: process.type,
+      status: process.status, stage: process.stage,
+      updatedAt: String(first(raw, ['updated_at', 'data_atualizacao', 'created_at'], now)),
+      payload: JSON.parse(process.payload)
+    });
+  }
+  const parseStoredObject = (value: string | null | undefined) => {
+    try { const parsed = JSON.parse(value || '{}'); return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}; }
+    catch { return {}; }
+  };
+  const oldBuildingSnapshot = (row: any): Record<string, unknown> | undefined => {
+    if (!row) return undefined;
+    const storedPayload = parseStoredObject(row.payload);
+    const snapshotComplete = Object.keys(storedPayload).length > 0;
+    return {
+      id: row.id, reference: cleanLabel(row.reference), municipality: cleanLabel(row.municipality), address: cleanLabel(row.address),
+      area: row.area, floors: row.floors, height: cleanLabel(row.height), payload: storedPayload, snapshotComplete,
+      ...(!snapshotComplete ? { snapshotNote: 'O snapshot bruto da edificação não era persistido nesta versão; somente os campos estruturados disponíveis foram recuperados.' } : {})
+    };
+  };
+  const newSnapshot = (building: Record<string, unknown> | undefined, process: Record<string, unknown> | null) => ({
+    building: building || { snapshotComplete: false, snapshotNote: 'A edificação ainda não existia no snapshot anterior conhecido pelo painel.' }, process
+  });
+  const changedFields = (before: ProcessWebhookPayload['before'], after: ProcessWebhookPayload['after']) => {
+    const flatten = (prefix: string, value: unknown, output: Record<string, unknown>) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        for (const [key, nested] of Object.entries(value as Record<string, unknown>)) flatten(prefix ? `${prefix}.${key}` : key, nested, output);
+      } else output[prefix] = value;
+    };
+    const oldFields: Record<string, unknown> = {}; const newFields: Record<string, unknown> = {};
+    flatten('', before, oldFields);
+    flatten('', after, newFields);
+    return [...new Set([...Object.keys(oldFields), ...Object.keys(newFields)])]
+      .filter((field) => JSON.stringify(oldFields[field]) !== JSON.stringify(newFields[field]))
+      .map((field) => ({ field, before: oldFields[field] ?? null, after: newFields[field] ?? null }));
+  };
   const upsertBuilding = db.prepare(`INSERT INTO buildings
     (id, user_id, reference, municipality, address, area, floors, height, payload, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -563,7 +681,7 @@ export async function syncFenixUser(userId: string) {
         String(first(building, ['address.public_place', 'address.logradouro', 'logradouro'], '')),
         String(Number(first(building, ['total_area', 'building_area', 'area'], '0')) || 0),
         String(Number(first(building, ['number_floors', 'pavimentos'], '0')) || 0),
-        String(first(building, ['height'], '')), '{}', now] as any[]));
+        String(first(building, ['height'], '')), JSON.stringify(safeBuildingPayload(building)), now] as any[]));
     }
     for (const process of processRows) {
       const buildingId = processBuildingId(process);
@@ -575,12 +693,50 @@ export async function syncFenixUser(userId: string) {
         processStatus(process), String(first(process, ['etapa_atual', 'fase', 'stage'], processStatus(process))),
         String(first(process, ['updated_at', 'data_atualizacao', 'created_at'], now)), JSON.stringify(safeProcessPayload(process)));
     }
-    const insertNotification = db.prepare('INSERT INTO notifications (user_id, building_id, process_id, title, message, created_at) VALUES (?, ?, ?, ?, ?, ?)');
-    for (const change of changes) insertNotification.run(userId, change.buildingId, change.processId, change.title, change.message, now);
+    const insertNotification = db.prepare('INSERT OR IGNORE INTO notifications (user_id, building_id, process_id, dedupe_key, title, message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const change of changes) {
+      const source = currentStates.find((item) => item.id === change.processId);
+      const protocolKey = source?.protocol.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, '');
+      const dedupeKey = protocolKey && protocolKey !== '—' && protocolKey !== '-'
+        ? `${change.buildingId}:${protocolKey}` : `${change.buildingId}:${change.processId}`;
+      const inserted = insertNotification.run(userId, change.buildingId, change.processId, dedupeKey, change.title, change.message, now);
+      // The SQLite insert is the idempotency gate: only the sync that creates a
+      // notification event is allowed to trigger its webhook delivery.
+      if (inserted.changes && webhookUrl && source) {
+        const currentProcess = currentProcessSnapshots.get(change.processId);
+        if (!currentProcess) continue;
+        const oldRow = previousProcesses.find((item) => item.id === change.processId);
+        const oldProcess = oldRow ? {
+          id: oldRow.id, buildingId: oldRow.building_id, protocol: oldRow.protocol, type: oldRow.type,
+          status: oldRow.status, stage: oldRow.stage, updatedAt: oldRow.updated_at,
+          payload: parseStoredObject(oldRow.payload)
+        } : null;
+        const oldBuildingRow = previousBuildings.get(oldRow?.building_id || change.buildingId);
+        const before = newSnapshot(oldBuildingSnapshot(oldBuildingRow), oldProcess);
+        const after = newSnapshot(currentBuildingSnapshots.get(change.buildingId), currentProcess) as ProcessWebhookPayload['after'];
+        webhookEvents.push({
+          before, after,
+          changes: {
+            eventId: randomUUID(), event: oldProcess ? 'process.updated' : 'process.created',
+            title: change.title, message: change.message, occurredAt: now,
+            fields: changedFields(before, after)
+          }
+        });
+      }
+    }
     db.prepare('UPDATE users SET fenix_user_id = ?, last_sync = ? WHERE id = ?').run(fenixUserId, now, userId);
   });
   sync();
   db.prepare(`UPDATE users SET session_ciphertext = ? WHERE id = ?`).run(seal(JSON.stringify(jar.serializeSync())), userId);
+  if (webhookUrl) {
+    for (const event of webhookEvents) {
+      void deliverWebhook(webhookUrl, event, process.env.NODE_ENV === 'production').catch((error) => {
+        const status = error instanceof Error && /^Webhook retornou HTTP \d+\.$/.test(error.message)
+          ? error.message.replace(/\D/g, '') : 'falha de rede ou validação';
+        console.warn(`Entrega do webhook de notificações falhou (${status}).`);
+      });
+    }
+  }
   return { buildings: buildingRows.length, processes: processRows.length, changes: changes.length, completedAt: now };
 }
 

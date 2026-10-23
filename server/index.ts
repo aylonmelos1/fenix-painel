@@ -7,7 +7,8 @@ import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, db, deleteSession, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
-import { FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, getTechnicalProjectTimeline, HCAPTCHA_SITE_KEY, loginFenix, newSessionId, saveCookieJar, syncFenixUser } from './fenix.js';
+import { FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, loginFenix, newSessionId, saveCookieJar, syncFenixUser } from './fenix.js';
+import { validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 
 const app = express();
 const logger = new Logger({ name: 'fenix-painel', minLevel: 3 });
@@ -15,6 +16,9 @@ const port = Number(process.env.PORT || 3001);
 const isProduction = process.env.NODE_ENV === 'production';
 const COOKIE_NAME = 'fenix_painel_session';
 const syncInProgress = new Set<string>();
+const historyRefreshInProgress = new Set<string>();
+const historyRefreshQueued = new Set<string>();
+const historyRefreshFullQueued = new Set<string>();
 const loginProgress = new Map<string, { stage: number; completedStages: number[]; status: 'working' | 'done' | 'error'; error?: string; syncWarning?: boolean }>();
 function reveal(value: string) { try { return unseal(value); } catch { return value; } }
 const insightCache = new Map<string, { expiresAt: number; answer: string; sources: Array<{ protocol: string; type: string; status: string; updatedAt: string; movements: number; documents: string[] }> }>();
@@ -38,6 +42,8 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '256kb' }));
+db.prepare("UPDATE history_refresh_state SET status='interrupted',completed_at=?,message='O serviço reiniciou durante a atualização.' WHERE status='running'").run(new Date().toISOString());
+db.prepare("UPDATE sync_runs SET status='error',completed_at=?,message='Sincronização interrompida por reinício do serviço.' WHERE status='running'").run(new Date().toISOString());
 
 function readCookie(req: Request, name: string) {
   const raw = req.headers.cookie || '';
@@ -73,6 +79,12 @@ function buildingRows(userId: string) {
   return db.prepare('SELECT * FROM buildings WHERE user_id = ? ORDER BY rowid ASC').all(userId) as any[];
 }
 
+function storedTechnicalTimeline(userId: string, processId: string) {
+  const row = db.prepare('SELECT timeline_json FROM process_histories WHERE user_id=? AND process_id=?').get(userId, processId) as { timeline_json: string } | undefined;
+  try { const parsed = JSON.parse(row?.timeline_json || '[]'); return Array.isArray(parsed) ? parsed : []; }
+  catch { return []; }
+}
+
 async function executeSync(userId: string, source: 'manual' | 'automatic' | 'login') {
   if (syncInProgress.has(userId)) return { busy: true as const };
   syncInProgress.add(userId);
@@ -82,6 +94,7 @@ async function executeSync(userId: string, source: 'manual' | 'automatic' | 'log
     const result = await syncFenixUser(userId);
     const message = `${result.buildings} edificações; ${result.processes} processos${result.changes ? `; ${result.changes} alterações` : ''}`;
     db.prepare('UPDATE sync_runs SET completed_at=?, status=?, message=? WHERE id=?').run(result.completedAt, 'success', message, run.lastInsertRowid);
+    scheduleHistoryRefresh(userId, true);
     return { ...result, message };
   } catch (error) {
     const message = error instanceof FenixError ? error.message : `Falha na sincronização ${source === 'automatic' ? 'automática' : 'com o Fênix'}.`;
@@ -93,6 +106,73 @@ async function executeSync(userId: string, source: 'manual' | 'automatic' | 'log
   }
 }
 
+function scheduleHistoryRefresh(userId: string, fullRefresh = false) {
+  if (historyRefreshInProgress.has(userId)) { historyRefreshQueued.add(userId); if (fullRefresh) historyRefreshFullQueued.add(userId); return; }
+  historyRefreshInProgress.add(userId);
+  void refreshUserHistories(userId, fullRefresh).catch((error) => {
+    logger.warn('Atualização dos históricos do Fênix falhou', { status: error instanceof FenixError ? error.status : undefined });
+  }).finally(() => {
+    historyRefreshInProgress.delete(userId);
+    if (historyRefreshQueued.delete(userId)) scheduleHistoryRefresh(userId, historyRefreshFullQueued.delete(userId));
+  });
+}
+
+async function refreshUserHistories(userId: string, fullRefresh: boolean) {
+  const allCandidates = db.prepare("SELECT id FROM processes WHERE user_id = ? AND id LIKE 'technicalproject:%'").all(userId) as Array<{ id: string }>;
+  const previousRun = db.prepare('SELECT status,started_at FROM history_refresh_state WHERE user_id=?').get(userId) as { status: string; started_at: string | null } | undefined;
+  const recovering = !fullRefresh && ['partial', 'interrupted'].includes(previousRun?.status || '') && Boolean(previousRun?.started_at);
+  const previousHistories = recovering ? new Map((db.prepare('SELECT process_id,refresh_status,refreshed_at FROM process_histories WHERE user_id=?').all(userId) as Array<{ process_id: string; refresh_status: string; refreshed_at: string | null }>).map((row) => [row.process_id, row])) : null;
+  const previousStartedAt = Date.parse(previousRun?.started_at || '');
+  const candidates = recovering ? allCandidates.filter(({ id }) => {
+    const history = previousHistories?.get(id);
+    return !history?.refreshed_at || Date.parse(history.refreshed_at) < previousStartedAt || history.refresh_status !== 'success';
+  }) : allCandidates;
+  const startedAt = new Date().toISOString();
+  db.prepare(`INSERT INTO history_refresh_state (user_id,status,started_at,completed_at,total_count,processed_count,failed_count,message)
+    VALUES (?, 'running', ?, NULL, ?, 0, 0, '') ON CONFLICT(user_id) DO UPDATE SET status='running',started_at=excluded.started_at,completed_at=NULL,total_count=excluded.total_count,processed_count=0,failed_count=0,message=''`)
+    .run(userId, startedAt, candidates.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(1, candidates.length) }, async () => {
+    while (cursor < candidates.length) {
+      const candidate = candidates[cursor++];
+      if (!candidate) continue;
+      let failed = false;
+      try {
+        const projectId = candidate.id.slice('technicalproject:'.length);
+        let snapshot: Awaited<ReturnType<typeof refreshTechnicalProjectDetails>> | undefined;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try { snapshot = await refreshTechnicalProjectDetails(userId, projectId); break; }
+          catch (error) {
+            if (!(error instanceof FenixError) || error.status !== 429 || attempt === 3) throw error;
+            db.prepare("UPDATE history_refresh_state SET message='O Fênix limitou as consultas; aguardando a janela segura para continuar.' WHERE user_id=?").run(userId);
+            await new Promise((resolve) => setTimeout(resolve, error.retryAfterMs ?? 60_000));
+          }
+        }
+        if (!snapshot) throw new FenixError('O Fênix não retornou o histórico deste processo.');
+        const { timeline, profile } = snapshot;
+        const dated: Array<{ label: string; date?: string; done?: boolean; current?: boolean }> = timeline.filter((event: { label: string; date?: string }) => event.date && Number.isFinite(Date.parse(event.date)));
+        const analysisEvents = dated.filter((event) => /an[aá]lise/i.test(event.label));
+        const notificationEvents = dated.filter((event) => /notific/i.test(event.label));
+        const latestActivity = dated.reduce((latest, event) => !latest || Date.parse(event.date!) > Date.parse(latest.date!) ? event : latest, undefined as typeof dated[number] | undefined);
+        db.prepare(`INSERT INTO process_histories (user_id,process_id,timeline_json,latest_activity_at,analysis_entered_at,notification_entered_at,notification_count,project_kind,history_available,refresh_status,refreshed_at,error)
+          VALUES (?,?,?,?,?,?,?,?,?,'success',?,NULL) ON CONFLICT(user_id,process_id) DO UPDATE SET timeline_json=excluded.timeline_json,latest_activity_at=excluded.latest_activity_at,analysis_entered_at=excluded.analysis_entered_at,notification_entered_at=excluded.notification_entered_at,notification_count=excluded.notification_count,project_kind=excluded.project_kind,history_available=excluded.history_available,refresh_status='success',refreshed_at=excluded.refreshed_at,error=NULL`)
+          .run(userId, candidate.id, JSON.stringify(timeline), latestActivity?.date || null, analysisEvents.at(-1)?.date || null, notificationEvents.at(-1)?.date || null, notificationEvents.length, profile.technicalFacts.find((fact) => /tipo de projeto/i.test(fact.label))?.value || null, timeline.length > 0 ? 1 : 0, new Date().toISOString());
+      } catch (error) {
+        failed = true;
+        db.prepare(`INSERT INTO process_histories (user_id,process_id,timeline_json,refresh_status,refreshed_at,error)
+          VALUES (?,?,'[]','error',?,?) ON CONFLICT(user_id,process_id) DO UPDATE SET refresh_status='error',refreshed_at=excluded.refreshed_at,error=excluded.error`)
+          .run(userId, candidate.id, new Date().toISOString(), error instanceof FenixError ? error.message : 'Falha ao consultar o histórico do Fênix.');
+        logger.info('Histórico de etapas indisponível para indicadores do painel', { status: error instanceof FenixError ? error.status : undefined });
+      } finally {
+        db.prepare("UPDATE history_refresh_state SET processed_count=processed_count+1, failed_count=failed_count+?,message='Históricos atualizados: '||(processed_count+1)||'/'||total_count WHERE user_id=?").run(failed ? 1 : 0, userId);
+      }
+    }
+  }));
+  const failed = (db.prepare('SELECT failed_count FROM history_refresh_state WHERE user_id=?').get(userId) as { failed_count: number }).failed_count;
+  db.prepare('UPDATE history_refresh_state SET status=?,completed_at=?,message=? WHERE user_id=?')
+    .run(failed ? 'partial' : 'success', new Date().toISOString(), failed ? `${failed} histórico(s) não puderam ser consultados.` : 'Históricos atualizados.', userId);
+}
+
 async function dashboardPayload(user: NonNullable<ReturnType<typeof resolveSession>>) {
   const preferences = userPreferences(user.id);
   const buildings = buildingRows(user.id);
@@ -102,41 +182,31 @@ async function dashboardPayload(user: NonNullable<ReturnType<typeof resolveSessi
   const run = db.prepare('SELECT status, message, completed_at FROM sync_runs WHERE user_id = ? ORDER BY id DESC LIMIT 1').get(user.id) as any;
   const syncRuns = db.prepare('SELECT id, started_at, completed_at, status, message FROM sync_runs WHERE user_id = ? ORDER BY id DESC LIMIT 20').all(user.id) as Array<{ id: number; started_at: string; completed_at: string | null; status: string; message: string }>;
   const dashboardProcesses = processes.map(toDashboardProcess);
+  const processActivityDates = new Map<string, string>();
   if (!user.demo) {
-    const candidates = dashboardProcesses.filter((item) => item.id.startsWith('technicalproject:') && /an[aá]lise|notific/i.test(`${item.status} ${item.stage}`));
-    let cursor = 0;
-    await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
-      while (cursor < candidates.length) {
-        const item = candidates[cursor++];
-        if (!item) continue;
-        try {
-          const projectId = item.id.slice('technicalproject:'.length);
-          const [timeline, profile] = await Promise.all([
-            getTechnicalProjectTimeline(user.id, projectId),
-            getTechnicalProjectBuildingProfile(user.id, projectId)
-          ]);
-          const dated = timeline.filter((event) => event.date && Number.isFinite(Date.parse(event.date)));
-          const analysisEvents = dated.filter((event) => /an[aá]lise/i.test(event.label));
-          const notificationEvents = dated.filter((event) => /notific/i.test(event.label));
-          item.historyAvailable = timeline.length > 0;
-          item.projectKind = profile.technicalFacts.find((fact) => /tipo de projeto/i.test(fact.label))?.value || null;
-          item.analysisEnteredAt = analysisEvents.at(-1)?.date || null;
-          item.notificationEnteredAt = notificationEvents.at(-1)?.date || null;
-          item.notificationCount = notificationEvents.length;
-        } catch (error) {
-          item.historyAvailable = false;
-          logger.info('Histórico de etapas indisponível para indicadores do painel', { status: error instanceof FenixError ? error.status : undefined });
-        }
-      }
-    }));
+    const histories = db.prepare('SELECT process_id,timeline_json,latest_activity_at,analysis_entered_at,notification_entered_at,notification_count,project_kind,history_available,refresh_status FROM process_histories WHERE user_id=?').all(user.id) as Array<{ process_id: string; timeline_json: string; latest_activity_at: string | null; analysis_entered_at: string | null; notification_entered_at: string | null; notification_count: number; project_kind: string | null; history_available: number; refresh_status: string }>;
+    const historyByProcess = new Map(histories.map((history) => [history.process_id, history]));
+    for (const item of dashboardProcesses) {
+      const history = historyByProcess.get(item.id);
+      if (!history) continue;
+      item.latestActivityAt = history.latest_activity_at;
+      item.analysisEnteredAt = history.analysis_entered_at;
+      item.notificationEnteredAt = history.notification_entered_at;
+      item.notificationCount = history.notification_count;
+      item.projectKind = history.project_kind;
+      item.historyAvailable = Boolean(history.history_available);
+      if (history.latest_activity_at) processActivityDates.set(item.id, history.latest_activity_at);
+    }
   }
+  const historyRefresh = db.prepare('SELECT status,started_at,completed_at,total_count,processed_count,failed_count,message FROM history_refresh_state WHERE user_id=?').get(user.id) as any;
   return {
     user: { name: user.name, email: user.email, demo: Boolean(user.demo) },
+    historyRefresh: historyRefresh ? { status: historyRefresh.status, startedAt: historyRefresh.started_at, completedAt: historyRefresh.completed_at, total: historyRefresh.total_count, processed: historyRefresh.processed_count, failed: historyRefresh.failed_count, message: historyRefresh.message } : { status: 'idle', startedAt: null, completedAt: null, total: 0, processed: 0, failed: 0, message: '' },
     metrics: { buildings: buildings.length, processes: processes.length, ...metrics },
     processes: dashboardProcesses,
     buildings: buildings.map((building) => {
       const processesForBuilding = processes.filter((item) => item.building_id === building.id);
-      const latest = processesForBuilding[0];
+      const latest = [...processesForBuilding].sort((a, b) => Date.parse(processActivityDates.get(b.id) || b.updated_at) - Date.parse(processActivityDates.get(a.id) || a.updated_at))[0];
       const requestCount = processesForBuilding.filter((item) => item.type.startsWith('Solicitação')).length;
       const projectCount = processesForBuilding.filter((item) => item.type.startsWith('Projeto técnico') || /\bPTS?\b/i.test(item.type)).length;
       const documentsCount = processesForBuilding.reduce((count, item) => count + countProcessDocuments(item.payload), 0);
@@ -147,7 +217,7 @@ async function dashboardPayload(user: NonNullable<ReturnType<typeof resolveSessi
         processType: latest?.type || 'Sem processo vinculado', status: latest?.status || 'Sem processo',
         requestCount, projectCount, documentsCount,
         hasRequest: requestCount > 0, hasProject: projectCount > 0, hasDocuments: documentsCount > 0,
-        stage: latest?.stage || '—', lastUpdated: latest?.updated_at || building.updated_at
+        stage: latest?.stage || '—', lastUpdated: latest ? processActivityDates.get(latest.id) || null : null
       };
     }),
     sync: {
@@ -212,6 +282,7 @@ app.post('/api/auth/login', async (req, res) => {
       const run = db.prepare('INSERT INTO sync_runs (user_id, started_at, status) VALUES (?, ?, ?)').run(userId, now, 'running');
       const sync = await syncFenixUser(userId);
       db.prepare('UPDATE sync_runs SET completed_at=?, status=?, message=? WHERE id=?').run(sync.completedAt, 'success', `${sync.buildings} edificações; ${sync.processes} processos`, run.lastInsertRowid);
+      scheduleHistoryRefresh(userId, true);
     } catch (error) {
       syncWarning = true;
       const safeMessage = error instanceof FenixError ? error.message : 'Falha na primeira sincronização.';
@@ -247,6 +318,15 @@ app.get('/api/auth/me', requireSession, (req, res) => {
 
 app.get('/api/dashboard', requireSession, async (_req, res) => res.json(await dashboardPayload(res.locals.user)));
 app.get('/api/buildings', requireSession, async (_req, res) => res.json({ buildings: (await dashboardPayload(res.locals.user)).buildings }));
+app.get('/api/sync/status', requireSession, (_req, res) => {
+  const userId = res.locals.user.id;
+  const requestQueue = getFenixRequestQueueState();
+  const latestSync = db.prepare('SELECT status,started_at,completed_at,message FROM sync_runs WHERE user_id=? ORDER BY id DESC LIMIT 1').get(userId) as { status: string; started_at: string; completed_at: string | null; message: string } | undefined;
+  const history = db.prepare('SELECT status,started_at,completed_at,total_count,processed_count,failed_count,message FROM history_refresh_state WHERE user_id=?').get(userId) as any;
+  if (latestSync?.status === 'running') return res.json({ status: 'running', startedAt: latestSync.started_at, phase: 'sync', total: history?.total_count || 0, processed: history?.processed_count || 0, failed: history?.failed_count || 0, message: 'Sincronizando os dados do Fênix.', requestQueue });
+  if (latestSync?.status === 'error' && (!history?.completed_at || Date.parse(latestSync.completed_at || '') > Date.parse(history.completed_at))) return res.json({ status: 'error', startedAt: latestSync.started_at, completedAt: latestSync.completed_at, phase: 'sync', total: 0, processed: 0, failed: 0, message: latestSync.message, requestQueue });
+  return res.json(history ? { status: history.status, startedAt: history.started_at, completedAt: history.completed_at, phase: 'history', total: history.total_count, processed: history.processed_count, failed: history.failed_count, message: history.message, requestQueue } : { status: 'idle', startedAt: null, completedAt: null, phase: null, total: 0, processed: 0, failed: 0, message: '', requestQueue });
+});
 app.get('/api/notifications', requireSession, (_req, res) => {
   const userId = res.locals.user.id;
   const notifications = db.prepare('SELECT id, building_id AS buildingId, process_id AS processId, title, message, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50').all(userId);
@@ -298,12 +378,8 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     if (res.locals.user.demo || !item.id.startsWith('technicalproject:')) return item;
     let result = item;
     if (!item.timeline.length) {
-      try {
-        const timeline = await getTechnicalProjectTimeline(res.locals.user.id, item.id.slice('technicalproject:'.length));
-        if (timeline.length) result = { ...result, timeline };
-      } catch (error) {
-        logger.info('Detalhe de projeto técnico indisponível', { status: error instanceof FenixError ? error.status : undefined });
-      }
+      const timeline = storedTechnicalTimeline(res.locals.user.id, item.id);
+      if (timeline.length) result = { ...result, timeline };
     }
     try {
       const daes = await getTechnicalProjectDaes(res.locals.user.id, item.id.slice('technicalproject:'.length));
@@ -521,6 +597,27 @@ app.delete('/api/settings/ai', (_req, res) => {
   res.json({ configured: false });
 });
 
+app.get('/api/settings/webhook', requireSession, (_req, res) => {
+  res.json({ configured: Boolean(getSetting(WEBHOOK_SETTING)) });
+});
+app.put('/api/settings/webhook', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A integração só pode ser configurada na conta Fênix da empresa.' });
+  const value = String(req.body?.url || '').trim();
+  if (value.length > 2048) return res.status(400).json({ error: 'A URL do webhook excede o limite de 2.048 caracteres.' });
+  try {
+    await validateWebhookUrl(value, isProduction);
+    setSetting(WEBHOOK_SETTING, value);
+    return res.json({ configured: true });
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'URL de webhook inválida.' });
+  }
+});
+app.delete('/api/settings/webhook', requireSession, (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A integração só pode ser alterada na conta Fênix da empresa.' });
+  db.prepare('DELETE FROM settings WHERE key=?').run(WEBHOOK_SETTING);
+  return res.json({ configured: false });
+});
+
 app.get('/api/settings/preferences', requireSession, (_req, res) => {
   const p = userPreferences(res.locals.user.id);
   res.json({ syncIntervalMinutes: p.sync_interval_minutes, aiDataAccess: Boolean(p.ai_data_access), aiIncludeDocuments: Boolean(p.ai_include_documents), aiMaxProcesses: p.ai_max_processes, aiCustomPrompt: p.ai_custom_prompt, aiResponsePrompt: p.ai_response_prompt });
@@ -568,7 +665,7 @@ async function enrichedAiContext(userId: string, building: any, processes: any[]
     try {
       const projectId = process.id.slice('technicalproject:'.length);
       const [timeline, daes, protocolReceipt] = await Promise.all([
-        getTechnicalProjectTimeline(userId, projectId).catch(() => []),
+        Promise.resolve(storedTechnicalTimeline(userId, process.id)),
         getTechnicalProjectDaes(userId, projectId).catch(() => []),
         getTechnicalProjectProtocolReceiptInfo(userId, projectId).catch(() => null)
       ]);
@@ -737,9 +834,13 @@ async function runDueSyncs() {
     WHERE u.demo = 0 AND u.session_ciphertext IS NOT NULL`).all() as { id: string; last_sync: string | null }[];
   for (const { id, last_sync } of users) {
     const intervalMinutes = userPreferences(id).sync_interval_minutes;
-    if (intervalMinutes === 0) continue;
+    const processCount = (db.prepare("SELECT COUNT(*) AS count FROM processes WHERE user_id=? AND id LIKE 'technicalproject:%'").get(id) as { count: number }).count;
+    const historyCount = (db.prepare("SELECT COUNT(*) AS count FROM process_histories WHERE user_id=?").get(id) as { count: number }).count;
+    const historyState = db.prepare('SELECT status FROM history_refresh_state WHERE user_id=?').get(id) as { status: string } | undefined;
     const lastSyncTime = Date.parse(last_sync || '');
-    if (!Number.isFinite(lastSyncTime) || Date.now() - lastSyncTime >= intervalMinutes * 60_000) await executeSync(id, 'automatic');
+    const syncDue = intervalMinutes > 0 && (!Number.isFinite(lastSyncTime) || Date.now() - lastSyncTime >= intervalMinutes * 60_000);
+    if (syncDue) await executeSync(id, 'automatic');
+    else if (processCount > 0 && (historyCount === 0 || ['partial', 'interrupted', 'error'].includes(historyState?.status || '')) && !historyRefreshInProgress.has(id)) scheduleHistoryRefresh(id);
   }
 }
 const startupSyncTimer = setTimeout(() => void runDueSyncs(), 10_000);

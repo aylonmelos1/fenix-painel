@@ -11,10 +11,22 @@ export type ProcessSyncState = {
 
 export type ProcessSyncChange = { buildingId: string; processId: string; title: string; message: string };
 
+function uniqueProcessesByProtocol(processes: ProcessSyncState[]) {
+  const unique = new Map<string, ProcessSyncState>();
+  for (const process of processes) {
+    const protocol = process.protocol.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, '');
+    const key = protocol && protocol !== '—' && protocol !== '-'
+      ? `${process.buildingId}:${protocol}` : `${process.buildingId}:${process.id}`;
+    const prior = unique.get(key);
+    if (!prior || (process.id.startsWith('technicalproject:') && !prior.id.startsWith('technicalproject:'))) unique.set(key, process);
+  }
+  return [...unique.values()];
+}
+
 export function detectProcessChanges(previous: ProcessSyncState[], current: ProcessSyncState[]): ProcessSyncChange[] {
-  const byId = new Map(previous.map((process) => [process.id, process]));
+  const byId = new Map(uniqueProcessesByProtocol(previous).map((process) => [process.id, process]));
   const changes: ProcessSyncChange[] = [];
-  for (const process of current) {
+  for (const process of uniqueProcessesByProtocol(current)) {
     const old = byId.get(process.id);
     const reference = process.buildingReference || 'Edificação acompanhada';
     if (!old) {

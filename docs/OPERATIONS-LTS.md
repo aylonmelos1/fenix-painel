@@ -53,10 +53,12 @@ O restore automatizado não deve ser usado com o servidor ativo. O conjunto de t
 - Logs registram eventos operacionais e status/código de erro, sem registrar chave OpenAI, senha Fênix, cookie de sessão ou conteúdo de perguntas.
 - `GET /api/health` confirma somente que o processo HTTP está respondendo. Para diagnosticar Fênix, consulte o estado e o histórico dentro do painel.
 - A sincronização automática verifica contas autenticadas em intervalos de até 30 minutos enquanto o servidor local está ativo. A campainha guarda mudanças para consulta posterior; avisos do sistema operacional exigem permissão do navegador e que o painel esteja aberto.
+- Históricos são consultados pelo backend e persistidos no SQLite; o navegador só lê o estado e o progresso locais. As chamadas ao Fênix compartilham uma janela deslizante persistida no SQLite, limitada a 45 requisições por minuto para manter margem abaixo do limite upstream conhecido de 60/min. Se o Fênix ainda responder `429`, a rotina respeita `Retry-After` como proteção adicional.
 
 ## Integrações e limitações conhecidas
 
 - As consultas e downloads upstream do Fênix permanecem em rotas de leitura. O formulário da SEFAZ-BA para DAE não é submetido pelo painel.
 - O Fênix pode negar anexos de retificação ou não retornar metadados/arquivos. A interface expõe a limitação por documento e não afirma que arquivo ausente foi validado.
 - A IA é sob demanda e pode gerar custos na conta OpenAI configurada. Cada pergunta envia contexto de processo sanitizado e até seis trocas recentes; o texto livre digitado pelo usuário é enviado como pergunta.
+- Integração de webhook é opcional e compartilhada pela conta da empresa. A URL fica cifrada no SQLite; cada nova notificação dispara um POST JSON com `before`, `after` e `changes`. Em produção, só HTTPS com destino público é aceito, redirecionamentos não são seguidos e a requisição expira em cinco segundos. Falhas não interrompem a sincronização, mas não há fila persistente nem retentativa automática; monitore os logs de entrega.
 - Não há serviço de atualização remota, execução fora do computador local, integração de suporte remoto ou envio externo de backup nesta versão.
