@@ -321,11 +321,12 @@ app.get('/api/buildings', requireSession, async (_req, res) => res.json({ buildi
 app.get('/api/sync/status', requireSession, (_req, res) => {
   const userId = res.locals.user.id;
   const requestQueue = getFenixRequestQueueState();
+  const lastSync = (db.prepare('SELECT last_sync FROM users WHERE id=?').get(userId) as { last_sync: string | null } | undefined)?.last_sync ?? null;
   const latestSync = db.prepare('SELECT status,started_at,completed_at,message FROM sync_runs WHERE user_id=? ORDER BY id DESC LIMIT 1').get(userId) as { status: string; started_at: string; completed_at: string | null; message: string } | undefined;
   const history = db.prepare('SELECT status,started_at,completed_at,total_count,processed_count,failed_count,message FROM history_refresh_state WHERE user_id=?').get(userId) as any;
-  if (latestSync?.status === 'running') return res.json({ status: 'running', startedAt: latestSync.started_at, phase: 'sync', total: history?.total_count || 0, processed: history?.processed_count || 0, failed: history?.failed_count || 0, message: 'Sincronizando os dados do Fênix.', requestQueue });
-  if (latestSync?.status === 'error' && (!history?.completed_at || Date.parse(latestSync.completed_at || '') > Date.parse(history.completed_at))) return res.json({ status: 'error', startedAt: latestSync.started_at, completedAt: latestSync.completed_at, phase: 'sync', total: 0, processed: 0, failed: 0, message: latestSync.message, requestQueue });
-  return res.json(history ? { status: history.status, startedAt: history.started_at, completedAt: history.completed_at, phase: 'history', total: history.total_count, processed: history.processed_count, failed: history.failed_count, message: history.message, requestQueue } : { status: 'idle', startedAt: null, completedAt: null, phase: null, total: 0, processed: 0, failed: 0, message: '', requestQueue });
+  if (latestSync?.status === 'running') return res.json({ status: 'running', startedAt: latestSync.started_at, lastSync, phase: 'sync', total: history?.total_count || 0, processed: history?.processed_count || 0, failed: history?.failed_count || 0, message: 'Sincronizando os dados do Fênix.', requestQueue });
+  if (latestSync?.status === 'error' && (!history?.completed_at || Date.parse(latestSync.completed_at || '') > Date.parse(history.completed_at))) return res.json({ status: 'error', startedAt: latestSync.started_at, completedAt: latestSync.completed_at, lastSync, phase: 'sync', total: 0, processed: 0, failed: 0, message: latestSync.message, requestQueue });
+  return res.json(history ? { status: history.status, startedAt: history.started_at, completedAt: history.completed_at, lastSync, phase: 'history', total: history.total_count, processed: history.processed_count, failed: history.failed_count, message: history.message, requestQueue } : { status: 'idle', startedAt: null, completedAt: null, lastSync, phase: null, total: 0, processed: 0, failed: 0, message: '', requestQueue });
 });
 app.get('/api/notifications', requireSession, (_req, res) => {
   const userId = res.locals.user.id;
