@@ -1,0 +1,44 @@
+{
+  "name": "fenix-painel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "tsc -p tsconfig.server.json && vite build",
+    "start": "node dist-server/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node --import tsx --test server/*.test.ts",
+    "data:backup": "tsx scripts/backup-local.ts",
+    "data:restore": "tsx scripts/restore-local.ts"
+  },
+  "dependencies": {
+    "@hcaptcha/react-hcaptcha": "^1.12.0",
+    "better-sqlite3": "^12.2.0",
+    "express": "^4.22.2",
+    "lucide-react": "^0.577.0",
+    "openai": "^6.38.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.18.4",
+    "tough-cookie": "^5.1.2",
+    "tslog": "^4.10.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.16.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.5"
+  }
+}

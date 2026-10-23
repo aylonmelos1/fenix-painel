@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-server/
+data/
+config.local.json
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
