@@ -15,12 +15,17 @@ export type DashboardProcess = {
   projectKind?: string | null;
 };
 
+export type ProcessMenuKey = 'analysis' | 'notified' | 'stopped' | 'certificates' | 'projects';
+export type ProcessMenuFilter = { typeTerms: string[]; stageTerms: string[]; join: 'all' | 'any' };
+export type ProcessMenuFilters = Record<ProcessMenuKey, ProcessMenuFilter>;
+
 export type Dashboard = {
   user: User;
   historyRefresh: { status: string; startedAt: string | null; completedAt: string | null; total: number; processed: number; failed: number; message: string };
   metrics: { buildings: number; processes: number; analysis: number; attention: number; inspections: number };
   buildings: Building[];
   processes: DashboardProcess[];
+  processMenuFilters?: ProcessMenuFilters;
   sync: { lastSync: string | null; status: string; message: string; nextSync: string | null; intervalMinutes?: number; runs: Array<{ id: number; startedAt: string; completedAt: string | null; status: string; message: string }> };
 };
 

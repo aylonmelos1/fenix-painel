@@ -4,7 +4,7 @@
 
 Permitir que a equipe adapte os menus de acompanhamento sem alterar código: criar, renomear, reordenar, desativar e remover filtros como **Em Análise**, **Notificados** e **Parados**, definindo quais processos entram em cada lista.
 
-Esta proposta é para a V2. A V1 mantém os menus e critérios atuais, com valores coerentes entre os cartões, as tabelas e os indicadores.
+A V1 permite editar os termos de tipo e de situação/etapa dos cinco menus existentes, combinando os grupos por todos ou qualquer. Esta proposta de V2 amplia isso para o ciclo de vida completo dos menus: criar, renomear, reordenar, desativar, reativar e remover. As regras continuam sendo a mesma fonte para cartões, tabelas e indicadores.
 
 ## Modelo de uso
 
