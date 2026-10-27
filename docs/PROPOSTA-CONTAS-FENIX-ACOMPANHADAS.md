@@ -1,8 +1,9 @@
 # Proposta — Contas Fênix acompanhadas
 
-**Status:** aprovado para implementação
+**Status:** implementado e implantado no Dedicated
 
-**Implementação:** concluída localmente; integração com upstream sintético validada; validação com conta Fênix autorizada ainda pendente
+**Implementação:** release `5b4f434` publicado; validação com conta Fênix autorizada ainda pendente
+
 **Data:** 27/10/2026
 
 ## Resumo
@@ -174,13 +175,12 @@ As conexões adicionais entram nas visões combinadas, nos filtros por conta, na
 
 ## Validação e próximos passos
 
-- `npm run typecheck` passou para servidor e interface.
-- `npm run build` gerou os artefatos de produção localmente.
-- `npm test` passou com 8 testes, incluindo um fluxo integrado em processo e banco temporários para duas identidades Fênix.
+- `npm run typecheck`, `npm test` (8/8) e `npm run build` passaram localmente e no Dedicated com Node.js 22.23.2.
 - O teste integrado cobre isolamento de sessões/dados, conta principal, catálogo recuperável, duplicidades, seleção, sincronização, renomeação, reconexão, pausa durante consulta de histórico e remoção. O upstream e o hCaptcha são sintéticos nessa validação.
-- `git diff --check` passou.
+- A migração foi aplicada primeiro em uma cópia do banco de produção; depois do deploy, o banco ativo passou no `quick_check` e contém as tabelas e colunas novas.
+- O serviço `fenix-painel` está ativo; a API pública respondeu e o navegador recebeu o bundle `index-D2Oq445P.js` com a interface de contas Fênix.
 - Ainda falta entrar com uma conta Fênix de teste/autorizada, completar o hCaptcha e conferir login, catálogo, seleção, sincronização e reconexão contra o serviço real.
-- A implementação não foi publicada nem implantada.
+- `git diff --check` passou.
 
 ## Referências internas
 
