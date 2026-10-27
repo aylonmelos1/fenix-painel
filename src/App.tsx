@@ -207,25 +207,31 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
     <div className="sidebar-user"><span className="avatar avatar-small">{user.name.slice(0, 1).toUpperCase()}</span><span className="sidebar-user-label"><b>{user.demo ? 'Demonstração' : user.name.split(' ')[0]}</b><small>{user.demo ? 'Dados fictícios' : 'Conta Fênix'}</small></span></div>
   </aside>
   {menuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
-  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions"><span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>{onOpenAi && <button className="button button-ai-min global-ai-button" onClick={onOpenAi} aria-label="Abrir assistente de IA"><Sparkles size={15} /><span>Assistente IA</span></button>}<NotificationCenter onActivate={onNotification} /></div></header>
+  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions"><span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>{onOpenAi && <button className="button button-ai-min global-ai-button" onClick={onOpenAi} aria-label="Abrir assistente de IA"><Sparkles size={15} /><span>Assistente IA</span></button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
     {user.demo && <div className="demo-banner"><Eye size={14} /><span>Você está vendo dados fictícios de demonstração. Nenhuma informação real do Fênix está sendo exibida.</span><Link to="/entrar">Entrar com Fênix <ArrowRight size={13} /></Link></div>}
     {children}</main>
     {helpOpen && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setHelpOpen(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header><div><span className="help-icon"><HelpCircle size={20} /></span><div><h2 id="help-title">Como acompanhar processos</h2><p>Um guia rápido para usar o Fênix Painel.</p></div></div><button className="icon-button" onClick={() => setHelpOpen(false)} aria-label="Fechar ajuda"><X size={18} /></button></header><div className="help-content"><section><b>1. Comece pela edificação</b><p>Abra uma edificação para ver seus protocolos, etapa atual, histórico e documentos consultados no Fênix.</p></section><section><b>2. Entenda os indicadores</b><p>Os cartões mostram processos. Clique em um para abrir a lista correspondente; cada linha leva à ficha da edificação.</p></section><section><b>3. Atualize e confira mudanças</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas. Mudanças encontradas aparecem na campainha.</p></section><section><b>4. Use a IA como apoio</b><p>Na ficha, pergunte sobre o status, as movimentações ou os documentos. Confirme decisões e exigências no Fênix.</p></section></div><footer><button className="button button-outline" onClick={() => { setHelpOpen(false); navigateFromSidebar('/painel?view=sync'); }}>Ver consultas e sincronizações <ArrowRight size={15} /></button></footer></section></div>}
   </div>;
 }
 
-function NotificationCenter({ onActivate }: { onActivate?: (notification: UserNotification) => void }) {
+function NotificationCenter({ onActivate, demo }: { onActivate?: (notification: UserNotification) => void; demo: boolean }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<UserNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() => 'Notification' in window ? Notification.permission : 'unsupported');
+  const [pushState, setPushState] = useState<'checking' | 'unconfigured' | 'ready' | 'subscribed' | 'unsupported' | 'error'>(demo ? 'unconfigured' : 'checking');
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState('');
   const notificationRef = useRef<HTMLDivElement>(null);
   const knownIds = useRef<Set<number> | null>(null);
+  const desktopNoticeIds = useRef<Set<number>>(new Set());
   async function loadNotifications() {
     try {
       const response = await api<{ notifications: UserNotification[]; unreadCount: number }>('/api/notifications');
       const newItems = knownIds.current ? response.notifications.filter((item) => !knownIds.current!.has(item.id)) : [];
-      if (knownIds.current && permission === 'granted') for (const item of newItems) {
+      if (knownIds.current && permission === 'granted' && document.visibilityState === 'visible') for (const item of newItems) {
+        if (desktopNoticeIds.current.has(item.id)) continue;
+        desktopNoticeIds.current.add(item.id);
         try {
           const notice = new Notification(item.title, { body: item.message, tag: `fenix-${item.id}` });
           notice.onclick = () => window.focus();
@@ -233,9 +239,46 @@ function NotificationCenter({ onActivate }: { onActivate?: (notification: UserNo
       }
       knownIds.current = new Set(response.notifications.map((item) => item.id));
       setItems(response.notifications); setUnreadCount(response.unreadCount);
-    } catch { /* notification polling must not interrupt dashboard use */ }
+      return response.notifications;
+    } catch { /* notification polling must not interrupt dashboard use */ return []; }
   }
   useEffect(() => { void loadNotifications(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void loadNotifications(); }, 45_000); return () => window.clearInterval(timer); }, [permission]);
+  useEffect(() => {
+    let cancelled = false;
+    async function inspectPushSupport() {
+      if (demo) { setPushState('unconfigured'); return; }
+      if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) { setPushState('unsupported'); return; }
+      try {
+        const config = await api<{ enabled: boolean; publicKey: string | null }>('/api/push/config');
+        if (!config.enabled || !config.publicKey) { if (!cancelled) setPushState('unconfigured'); return; }
+        if (permission === 'granted') {
+          const registration = await navigator.serviceWorker.register('/service-worker.js');
+          const subscription = await registration.pushManager.getSubscription();
+          if (subscription) {
+            await api('/api/push/subscriptions', { method: 'POST', body: JSON.stringify(subscription.toJSON()) });
+            if (!cancelled) setPushState('subscribed');
+            return;
+          }
+        }
+        if (!cancelled) setPushState('ready');
+      } catch {
+        if (!cancelled) { setPushError('Não foi possível consultar a configuração das notificações.'); setPushState('error'); }
+      }
+    }
+    void inspectPushSupport();
+    return () => { cancelled = true; };
+  }, [demo, permission]);
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'fenix:push-received') { void loadNotifications(); return; }
+      if (event.data?.type === 'fenix:push-click' && Number(event.data.notificationId)) {
+        void activateNotification(Number(event.data.notificationId));
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onServiceWorkerMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onServiceWorkerMessage);
+  }, [onActivate]);
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -250,11 +293,69 @@ function NotificationCenter({ onActivate }: { onActivate?: (notification: UserNo
     };
   }, [open]);
   async function markAllRead() { await api('/api/notifications/read-all', { method: 'POST' }); await loadNotifications(); }
+  async function activateNotification(id: number) {
+    const current = await loadNotifications();
+    const item = current.find((notification) => notification.id === id);
+    if (item) await select(item);
+  }
   async function select(item: UserNotification) {
     if (!item.readAt) await api(`/api/notifications/${item.id}/read`, { method: 'POST' });
     setOpen(false); await loadNotifications(); onActivate?.(item);
   }
-  return <div className="notification-wrap" ref={notificationRef}><button className="icon-button notification-button" title="Notificações" aria-label={`Notificações${unreadCount ? `, ${unreadCount} não lidas` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); void loadNotifications(); }}><Bell size={18} />{unreadCount > 0 && <i />}</button>{open && <section className="notification-popover" aria-label="Notificações"><header><div><b>Notificações</b><small>{unreadCount ? `${unreadCount} não lidas` : 'Tudo em dia'}</small></div>{unreadCount > 0 && <button onClick={() => void markAllRead()}><CheckCheck size={14} /> Marcar como lidas</button>}</header>{permission !== 'granted' && permission !== 'unsupported' && <div className="notification-permission"><span>Receba um aviso do computador quando novos dados chegarem. O painel precisa estar aberto.</span><button onClick={async () => { const next = await Notification.requestPermission(); setPermission(next); }}>Ativar avisos</button></div>}{permission === 'denied' && <div className="notification-permission">Avisos do navegador bloqueados. Você ainda pode acompanhar as mudanças nesta campainha.</div>}{permission === 'unsupported' && <div className="notification-permission">Avisos do computador não estão disponíveis neste navegador; as mudanças ficam salvas nesta campainha.</div>}<div className="notification-list">{items.length ? items.map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => void select(item)}><span className="notification-item-icon"><Bell size={15} /></span><span><b>{item.title}</b>{item.sourceAccountName && <AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} />}<small>{item.message}</small><time>{formatDate(item.createdAt)}</time></span></button>) : <p className="notification-empty">Nenhuma alteração encontrada nas últimas sincronizações.</p>}</div></section>}</div>;
+  async function enablePush() {
+    setPushBusy(true); setPushError('');
+    try {
+      const nextPermission = await Notification.requestPermission();
+      setPermission(nextPermission);
+      if (nextPermission !== 'granted') return;
+      const config = await api<{ enabled: boolean; publicKey: string | null }>('/api/push/config');
+      if (!config.enabled || !config.publicKey) { setPushState('unconfigured'); return; }
+      const registration = await navigator.serviceWorker.register('/service-worker.js');
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        const padding = '='.repeat((4 - config.publicKey.length % 4) % 4);
+        const decodedKey = window.atob((config.publicKey + padding).replace(/-/g, '+').replace(/_/g, '/'));
+        const applicationServerKey = Uint8Array.from(decodedKey, (character) => character.charCodeAt(0));
+        subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+      }
+      await api('/api/push/subscriptions', { method: 'POST', body: JSON.stringify(subscription.toJSON()) });
+      setPushState('subscribed');
+    } catch (error) {
+      setPushError(error instanceof Error ? error.message : 'Não foi possível ativar os avisos neste navegador.');
+      setPushState('error');
+    } finally { setPushBusy(false); }
+  }
+  async function disablePush() {
+    setPushBusy(true); setPushError('');
+    try {
+      const registration = await navigator.serviceWorker.getRegistration('/');
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        await api('/api/push/subscriptions', { method: 'DELETE', body: JSON.stringify({ endpoint: subscription.endpoint }) });
+        await subscription.unsubscribe();
+      }
+      setPushState('ready');
+    } catch (error) {
+      setPushError(error instanceof Error ? error.message : 'Não foi possível desativar os avisos neste navegador.');
+    } finally { setPushBusy(false); }
+  }
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const notificationId = Number(url.searchParams.get('pushNotification'));
+    if (!notificationId) return;
+    url.searchParams.delete('pushNotification');
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    void activateNotification(notificationId);
+  }, []);
+  return <div className="notification-wrap" ref={notificationRef}><button className="icon-button notification-button" title="Notificações" aria-label={`Notificações${unreadCount ? `, ${unreadCount} não lidas` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); void loadNotifications(); }}><Bell size={18} />{unreadCount > 0 && <i />}</button>{open && <section className="notification-popover" aria-label="Notificações"><header><div><b>Notificações</b><small>{unreadCount ? `${unreadCount} não lidas` : 'Tudo em dia'}</small></div>{unreadCount > 0 && <button onClick={() => void markAllRead()}><CheckCheck size={14} /> Marcar como lidas</button>}</header>
+    {pushState === 'checking' && <div className="notification-permission">Verificando os avisos em segundo plano…</div>}
+    {pushState === 'unconfigured' && <div className="notification-permission">{demo ? 'Avisos em segundo plano não estão disponíveis na demonstração.' : 'Avisos em segundo plano ainda não estão configurados neste servidor.'}</div>}
+    {pushState === 'unsupported' && <div className="notification-permission">Este navegador não oferece notificações em segundo plano. As mudanças continuam disponíveis nesta campainha.</div>}
+    {pushState === 'ready' && permission === 'denied' && <div className="notification-permission">As notificações foram bloqueadas no navegador. Altere a permissão do site nas configurações do navegador para ativá-las.</div>}
+    {pushState === 'ready' && permission !== 'denied' && <div className="notification-permission"><span>Receba avisos de novas mudanças mesmo sem o painel aberto neste navegador.</span><button disabled={pushBusy} onClick={() => void enablePush()}>{pushBusy ? 'Ativando…' : 'Ativar avisos'}</button></div>}
+    {pushState === 'subscribed' && <div className="notification-permission"><span>Avisos em segundo plano ativos neste navegador.</span><button disabled={pushBusy} onClick={() => void disablePush()}>{pushBusy ? 'Salvando…' : 'Desativar'}</button></div>}
+    {pushState === 'error' && <div className="notification-permission notification-permission-error"><span>{pushError || 'Não foi possível consultar as notificações em segundo plano.'}</span><button disabled={pushBusy} onClick={() => void enablePush()}>{pushBusy ? 'Aguarde…' : 'Tentar novamente'}</button></div>}
+    <div className="notification-list">{items.length ? items.map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => void select(item)}><span className="notification-item-icon"><Bell size={15} /></span><span><b>{item.title}</b>{item.sourceAccountName && <AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} />}<small>{item.message}</small><time>{formatDate(item.createdAt)}</time></span></button>) : <p className="notification-empty">Nenhuma alteração encontrada nas últimas sincronizações.</p>}</div></section>}</div>;
 }
 
 function useDashboard() {

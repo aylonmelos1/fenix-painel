@@ -10,6 +10,7 @@ import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDash
 import { addSession, db, deleteSession, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, newSessionId, saveCookieJar, syncFenixUser, type FenixBuildingOption } from './fenix.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
+import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 
 const app = express();
 const logger = new Logger({ name: 'fenix-painel', minLevel: 3 });
@@ -741,6 +742,25 @@ app.get('/api/notifications', requireSession, (_req, res) => {
   const unreadCount = (db.prepare(`SELECT count(*) AS count FROM notifications n LEFT JOIN buildings b ON b.id=n.building_id AND b.user_id=n.user_id
     WHERE ${visibleNotification} AND n.read_at IS NULL`).get(...userIds) as { count: number }).count;
   res.json({ notifications, unreadCount });
+});
+app.get('/api/push/config', requireSession, (_req, res) => {
+  if (res.locals.user.demo) return res.json({ enabled: false, publicKey: null, reason: 'demo' });
+  const config = getWebPushConfig();
+  return res.json({ ...config, reason: config.enabled ? null : 'not_configured' });
+});
+app.post('/api/push/subscriptions', requireSession, (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'Notificações em segundo plano não estão disponíveis na demonstração.' });
+  if (!getWebPushConfig().enabled) return res.status(503).json({ error: 'Notificações em segundo plano ainda não foram configuradas neste servidor.' });
+  const subscription = normalizePushSubscription(req.body);
+  if (!subscription) return res.status(400).json({ error: 'Assinatura de notificações inválida ou incompatível.' });
+  savePushSubscription(res.locals.user.id, subscription);
+  return res.json({ ok: true });
+});
+app.delete('/api/push/subscriptions', requireSession, (req, res) => {
+  const endpoint = req.body?.endpoint;
+  if (typeof endpoint !== 'string' || endpoint.length > 2048) return res.status(400).json({ error: 'Assinatura de notificações inválida.' });
+  removePushSubscription(res.locals.user.id, endpoint);
+  return res.json({ ok: true });
 });
 app.post('/api/notifications/read-all', requireSession, (_req, res) => {
   const userIds = dataUserIds(res.locals.user.id);
@@ -1502,9 +1522,13 @@ async function runDueSyncs() {
 }
 const startupSyncTimer = setTimeout(() => void runDueSyncs(), 10_000);
 const syncTimer = setInterval(() => void runDueSyncs(), 60_000);
+const pushDeliveryTimer = setInterval(() => {
+  void dispatchPendingPushDeliveries().catch(() => logger.warn('Falha ao processar a fila de notificações em segundo plano.'));
+}, 10_000);
 
 function shutdown() {
   clearInterval(syncTimer);
+  clearInterval(pushDeliveryTimer);
   clearTimeout(startupSyncTimer);
   server.close(() => { db.close(); process.exit(0); });
 }

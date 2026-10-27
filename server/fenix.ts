@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { CookieJar } from 'tough-cookie';
 import { db, getSetting, seal, unseal } from './store.js';
+import { enqueuePushDelivery } from './push.js';
 import { detectProcessChanges, type ProcessSyncState } from './sync-changes.js';
 import { deliverWebhookLogged, WEBHOOK_SETTING, type ProcessWebhookDocument, type ProcessWebhookPayload } from './webhook.js';
 
@@ -889,6 +890,7 @@ export async function syncFenixUser(userId: string) {
       const inserted = insertNotification.run(userId, change.buildingId, change.processId, dedupeKey, change.title, change.message, now);
       // The SQLite insert is the idempotency gate: only the sync that creates a
       // notification event is allowed to trigger its webhook delivery.
+      if (inserted.changes) enqueuePushDelivery(connection?.owner_user_id || userId, Number(inserted.lastInsertRowid), now);
       if (inserted.changes && webhookUrl && source) {
         const currentProcess = currentProcessSnapshots.get(change.processId);
         if (!currentProcess) continue;

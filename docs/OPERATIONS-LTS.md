@@ -52,7 +52,7 @@ O restore automatizado não deve ser usado com o servidor ativo. O conjunto de t
 - Erros de metadados de documentos aparecem junto ao arquivo e oferecem nova consulta quando a falha é transitória. `404` é mostrado como documento não retornado. DAE manual e anexo sem rota de download validada não recebem um botão de download ativo.
 - Logs registram eventos operacionais e status/código de erro, sem registrar chave OpenAI, senha Fênix, cookie de sessão ou conteúdo de perguntas.
 - `GET /api/health` confirma somente que o processo HTTP está respondendo. Para diagnosticar Fênix, consulte o estado e o histórico dentro do painel.
-- A sincronização automática verifica contas autenticadas em intervalos de até 30 minutos enquanto o servidor local está ativo. A campainha guarda mudanças para consulta posterior; avisos do sistema operacional exigem permissão do navegador e que o painel esteja aberto.
+- A sincronização automática verifica contas autenticadas em intervalos de até 30 minutos enquanto o servidor está ativo. A campainha guarda mudanças para consulta posterior; notificações do sistema operacional usam Web Push e podem chegar sem uma aba aberta, desde que o navegador tenha permissão e o servidor esteja configurado com chaves VAPID. Consulte [WEB-PUSH.md](WEB-PUSH.md) para a configuração.
 - Históricos são consultados pelo backend e persistidos no SQLite; o navegador só lê o estado e o progresso locais. As chamadas ao Fênix compartilham uma janela deslizante persistida no SQLite, limitada a 45 requisições por minuto para manter margem abaixo do limite upstream conhecido de 60/min. Se o Fênix ainda responder `429`, a rotina respeita `Retry-After` como proteção adicional.
 
 ## Integrações e limitações conhecidas
