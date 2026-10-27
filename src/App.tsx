@@ -215,6 +215,7 @@ function NotificationCenter({ onActivate }: { onActivate?: (notification: UserNo
   const [items, setItems] = useState<UserNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>(() => 'Notification' in window ? Notification.permission : 'unsupported');
+  const notificationRef = useRef<HTMLDivElement>(null);
   const knownIds = useRef<Set<number> | null>(null);
   async function loadNotifications() {
     try {
@@ -231,12 +232,25 @@ function NotificationCenter({ onActivate }: { onActivate?: (notification: UserNo
     } catch { /* notification polling must not interrupt dashboard use */ }
   }
   useEffect(() => { void loadNotifications(); const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void loadNotifications(); }, 45_000); return () => window.clearInterval(timer); }, [permission]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !notificationRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
   async function markAllRead() { await api('/api/notifications/read-all', { method: 'POST' }); await loadNotifications(); }
   async function select(item: UserNotification) {
     if (!item.readAt) await api(`/api/notifications/${item.id}/read`, { method: 'POST' });
     setOpen(false); await loadNotifications(); onActivate?.(item);
   }
-  return <div className="notification-wrap"><button className="icon-button notification-button" title="Notificações" aria-label={`Notificações${unreadCount ? `, ${unreadCount} não lidas` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); void loadNotifications(); }}><Bell size={18} />{unreadCount > 0 && <i />}</button>{open && <section className="notification-popover" aria-label="Notificações"><header><div><b>Notificações</b><small>{unreadCount ? `${unreadCount} não lidas` : 'Tudo em dia'}</small></div>{unreadCount > 0 && <button onClick={() => void markAllRead()}><CheckCheck size={14} /> Marcar como lidas</button>}</header>{permission !== 'granted' && permission !== 'unsupported' && <div className="notification-permission"><span>Receba um aviso do computador quando novos dados chegarem. O painel precisa estar aberto.</span><button onClick={async () => { const next = await Notification.requestPermission(); setPermission(next); }}>Ativar avisos</button></div>}{permission === 'denied' && <div className="notification-permission">Avisos do navegador bloqueados. Você ainda pode acompanhar as mudanças nesta campainha.</div>}{permission === 'unsupported' && <div className="notification-permission">Avisos do computador não estão disponíveis neste navegador; as mudanças ficam salvas nesta campainha.</div>}<div className="notification-list">{items.length ? items.map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => void select(item)}><span className="notification-item-icon"><Bell size={15} /></span><span><b>{item.title}</b><small>{item.message}</small><time>{formatDate(item.createdAt)}</time></span></button>) : <p className="notification-empty">Nenhuma alteração encontrada nas últimas sincronizações.</p>}</div></section>}</div>;
+  return <div className="notification-wrap" ref={notificationRef}><button className="icon-button notification-button" title="Notificações" aria-label={`Notificações${unreadCount ? `, ${unreadCount} não lidas` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); void loadNotifications(); }}><Bell size={18} />{unreadCount > 0 && <i />}</button>{open && <section className="notification-popover" aria-label="Notificações"><header><div><b>Notificações</b><small>{unreadCount ? `${unreadCount} não lidas` : 'Tudo em dia'}</small></div>{unreadCount > 0 && <button onClick={() => void markAllRead()}><CheckCheck size={14} /> Marcar como lidas</button>}</header>{permission !== 'granted' && permission !== 'unsupported' && <div className="notification-permission"><span>Receba um aviso do computador quando novos dados chegarem. O painel precisa estar aberto.</span><button onClick={async () => { const next = await Notification.requestPermission(); setPermission(next); }}>Ativar avisos</button></div>}{permission === 'denied' && <div className="notification-permission">Avisos do navegador bloqueados. Você ainda pode acompanhar as mudanças nesta campainha.</div>}{permission === 'unsupported' && <div className="notification-permission">Avisos do computador não estão disponíveis neste navegador; as mudanças ficam salvas nesta campainha.</div>}<div className="notification-list">{items.length ? items.map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => void select(item)}><span className="notification-item-icon"><Bell size={15} /></span><span><b>{item.title}</b><small>{item.message}</small><time>{formatDate(item.createdAt)}</time></span></button>) : <p className="notification-empty">Nenhuma alteração encontrada nas últimas sincronizações.</p>}</div></section>}</div>;
 }
 
 function useDashboard() {
