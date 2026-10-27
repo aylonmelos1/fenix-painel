@@ -4,6 +4,10 @@ Painel local para acompanhar edificações e os processos de aprovação de segu
 
 O board de `docs/design/board-padrao.png` é a referência visual oficial.
 
+## Roadmap
+
+Veja [o roadmap da V1 até a V2](docs/ROADMAP-V1-A-V2.md) e a [proposta de menus personalizados da V1.2](docs/V1.2-MENUS-PERSONALIZAVEIS.md).
+
 ## Requisitos e comandos
 
 - Node.js 20.12 ou superior. A release foi preparada e validada com Node.js 22.23.2.

@@ -3,10 +3,10 @@ import { isIP } from 'node:net';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { db } from './store.js';
+import { db, getSetting, seal, unseal } from './store.js';
 
 const WEBHOOK_SETTING = 'notifications_webhook_url';
-const TIMEOUT_MS = 5_000;
+const TIMEOUT_MS = 15_000;
 
 function ipv4IsPublic(address: string) {
   const parts = address.split('.').map(Number);
@@ -61,9 +61,33 @@ export async function validateWebhookUrl(value: string, production: boolean) {
 }
 
 export type ProcessWebhookPayload = {
+  sourceAccount?: { id: string; label: string };
   before: { building: Record<string, unknown>; process: Record<string, unknown> | null } | null;
   after: { building: Record<string, unknown>; process: Record<string, unknown> };
   changes: { eventId: string; event: string; title: string; message: string; occurredAt: string; fields: Array<{ field: string; before: unknown; after: unknown }> };
+};
+
+export type ProcessWebhookDocument = {
+  id: string;
+  name: string;
+  type: string;
+  date?: string;
+  uploadedBy?: string;
+  uploadedAt?: string;
+  mimeType: string;
+  size: number;
+  source: 'fenix' | 'sefaz-ba' | 'test';
+  associatedWith: {
+    buildingId: string;
+    buildingName: string;
+    processId: string;
+    protocol: string;
+    processType: string;
+  };
+  /** Omit contentBase64 for metadata-only files or files over the webhook limit. */
+  contentBase64?: string;
+  availability: 'included' | 'metadata_only';
+  note?: string;
 };
 
 type WebhookTestPayload = {
@@ -161,7 +185,14 @@ export function buildWebhookTestPayload(userId: string): WebhookTestPayload {
     };
     process = {
       id: 'processo-exemplo-teste', buildingId: 'exemplo-teste', protocol: '',
-      type: 'Projeto técnico (exemplo)', status: 'Exemplo', stage: 'Teste de integração', payload: {}
+      type: 'Projeto técnico (exemplo)', status: 'Exemplo', stage: 'Teste de integração', payload: {
+        documents: [{
+          id: 'webhook-test-document', name: 'anexo-exemplo.txt', type: 'Arquivo sintético de teste',
+          mimeType: 'text/plain', size: Buffer.byteLength('Documento sintético para validar o envio Base64 do webhook.'),
+          contentBase64: Buffer.from('Documento sintético para validar o envio Base64 do webhook.').toString('base64'),
+          source: 'test', availability: 'included', note: 'Arquivo sintético; não contém dados de processo.'
+        }]
+      }
     };
     title = 'Exemplo de teste de webhook';
     message = notification
@@ -207,6 +238,117 @@ export async function deliverWebhook(urlValue: string, payload: ProcessWebhookPa
     request.on('error', reject);
     request.end(body);
   });
+}
+
+export type WebhookDeliveryLogItem = {
+  id: number;
+  eventId: string;
+  event: string;
+  title: string;
+  message: string;
+  buildingName: string;
+  processId: string;
+  protocol: string;
+  documents: Array<{ name: string; type: string; availability: string; source: string }>;
+  status: 'sending' | 'delivered' | 'failed';
+  attempts: number;
+  lastHttpStatus: number | null;
+  lastError: string;
+  createdAt: string;
+  lastAttemptAt: string | null;
+  deliveredAt: string | null;
+  attemptHistory: Array<{ source: string; status: string; httpStatus: number | null; error: string; attemptedAt: string }>;
+};
+
+function webhookDocumentSummary(payload: ProcessWebhookPayload) {
+  const processPayload = payload.after.process.payload;
+  const docs = processPayload && typeof processPayload === 'object' && !Array.isArray(processPayload)
+    ? (processPayload as Record<string, unknown>).documents : undefined;
+  return Array.isArray(docs) ? docs.map((doc: any) => ({
+    name: typeof doc === 'string' ? doc : String(doc?.name || doc?.nome || doc?.filename || 'Documento'),
+    type: typeof doc === 'string' ? 'Documento do processo' : String(doc?.type || doc?.tipo || 'Anexo'),
+    availability: String(doc?.availability || (doc?.contentBase64 ? 'included' : 'metadata_only')),
+    source: String(doc?.source || 'fenix')
+  })) : [];
+}
+
+export async function deliverWebhookLogged(
+  userId: string,
+  url: string,
+  payload: ProcessWebhookPayload,
+  production: boolean,
+  source: 'automatic' | 'test' | 'manual' = 'automatic',
+  existingDeliveryId?: number,
+  sourceConnectionId: string | null = null
+) {
+  const now = new Date().toISOString();
+  let deliveryId = existingDeliveryId;
+  if (deliveryId === undefined) {
+    const documents = webhookDocumentSummary(payload);
+    const result = db.prepare(`INSERT INTO webhook_deliveries
+      (user_id,source_connection_id,event_id,event,title,message,building_name,process_id,protocol,documents_json,payload_ciphertext,status,attempts,created_at,last_attempt_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'sending',0,?,?)`).run(
+      userId, sourceConnectionId, payload.changes.eventId, payload.changes.event, payload.changes.title, payload.changes.message,
+      String(payload.after.building.reference || ''), String(payload.after.process.id || ''),
+      String(payload.after.process.protocol || ''), JSON.stringify(documents), seal(JSON.stringify(payload)), now, now
+    );
+    deliveryId = Number(result.lastInsertRowid);
+    db.prepare(`DELETE FROM webhook_deliveries WHERE user_id=? AND id NOT IN
+      (SELECT id FROM webhook_deliveries WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 500)`).run(userId, userId);
+  }
+
+  const attemptAt = new Date().toISOString();
+  db.prepare(`UPDATE webhook_deliveries SET status='sending',attempts=attempts+1,last_attempt_at=?,last_error='',last_http_status=NULL WHERE id=? AND user_id=?`)
+    .run(attemptAt, deliveryId, userId);
+  try {
+    await deliverWebhook(url, payload, production);
+    db.prepare(`UPDATE webhook_deliveries SET status='delivered',last_http_status=200,last_error='',delivered_at=? WHERE id=? AND user_id=?`)
+      .run(new Date().toISOString(), deliveryId, userId);
+    db.prepare(`INSERT INTO webhook_delivery_attempts (delivery_id,source,status,http_status,error,attempted_at) VALUES (?,?, 'delivered',200,'',?)`)
+      .run(deliveryId, source, attemptAt);
+    return { id: deliveryId, delivered: true, error: null as string | null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha desconhecida na entrega.';
+    const statusCode = /^Webhook retornou HTTP (\d+)\.$/.exec(message)?.[1];
+    const httpStatus = statusCode ? Number(statusCode) : null;
+    const safeError = httpStatus ? `Webhook retornou HTTP ${httpStatus}.` : message.slice(0, 500);
+    db.prepare(`UPDATE webhook_deliveries SET status='failed',last_http_status=?,last_error=? WHERE id=? AND user_id=?`)
+      .run(httpStatus, safeError, deliveryId, userId);
+    db.prepare(`INSERT INTO webhook_delivery_attempts (delivery_id,source,status,http_status,error,attempted_at) VALUES (?,?, 'failed',?,?,?)`)
+      .run(deliveryId, source, httpStatus, safeError, attemptAt);
+    return { id: deliveryId, delivered: false, error: safeError };
+  }
+}
+
+export function getWebhookDeliveryLog(userId: string, limit = 100): WebhookDeliveryLogItem[] {
+  const boundedLimit = Math.min(200, Math.max(1, Math.floor(limit) || 100));
+  const rows = db.prepare(`SELECT id,event_id,event,title,message,building_name,process_id,protocol,documents_json,status,attempts,last_http_status,last_error,created_at,last_attempt_at,delivered_at
+    FROM webhook_deliveries WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ?`).all(userId, boundedLimit) as Array<any>;
+  const readAttempts = db.prepare(`SELECT source,status,http_status,error,attempted_at FROM webhook_delivery_attempts WHERE delivery_id=? ORDER BY attempted_at DESC,id DESC LIMIT 20`);
+  return rows.map((row) => {
+    let documents: WebhookDeliveryLogItem['documents'] = [];
+    try { documents = JSON.parse(row.documents_json || '[]'); } catch { /* Keep the log readable if legacy JSON is malformed. */ }
+    const attemptHistory = (readAttempts.all(row.id) as Array<any>).map((attempt) => ({
+      source: attempt.source, status: attempt.status, httpStatus: attempt.http_status,
+      error: attempt.error, attemptedAt: attempt.attempted_at
+    }));
+    return {
+      id: row.id, eventId: row.event_id, event: row.event, title: row.title, message: row.message,
+      buildingName: row.building_name, processId: row.process_id, protocol: row.protocol,
+      documents, status: row.status, attempts: row.attempts, lastHttpStatus: row.last_http_status,
+      lastError: row.last_error, createdAt: row.created_at, lastAttemptAt: row.last_attempt_at,
+      deliveredAt: row.delivered_at, attemptHistory
+    };
+  });
+}
+
+export async function resendWebhookDelivery(userId: string, deliveryId: number, production: boolean) {
+  const row = db.prepare('SELECT payload_ciphertext FROM webhook_deliveries WHERE id=? AND user_id=?').get(deliveryId, userId) as { payload_ciphertext: string } | undefined;
+  if (!row) throw new Error('Envio não encontrado no log da sua conta.');
+  const url = getSetting(WEBHOOK_SETTING);
+  if (!url) throw new Error('Configure o webhook antes de reenviar.');
+  const payload = JSON.parse(unseal(row.payload_ciphertext)) as ProcessWebhookPayload;
+  return deliverWebhookLogged(userId, url, payload, production, 'manual', deliveryId);
 }
 
 export { WEBHOOK_SETTING };

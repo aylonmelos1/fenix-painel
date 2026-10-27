@@ -2,7 +2,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { CookieJar } from 'tough-cookie';
 import { db, getSetting, seal, unseal } from './store.js';
 import { detectProcessChanges, type ProcessSyncState } from './sync-changes.js';
-import { deliverWebhook, WEBHOOK_SETTING, type ProcessWebhookPayload } from './webhook.js';
+import { deliverWebhookLogged, WEBHOOK_SETTING, type ProcessWebhookDocument, type ProcessWebhookPayload } from './webhook.js';
 
 const OFFICIAL_FENIX_ORIGIN = 'https://fenix.cbm.ba.gov.br';
 const FENIX_ORIGIN = (() => {
@@ -458,6 +458,109 @@ export async function getTechnicalProjectDaePdf(userId: string, projectId: strin
   return { filename: `DAE-${daeId.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, content, size: content.length };
 }
 
+const WEBHOOK_DOCUMENT_LIMIT_BYTES = 1_500_000;
+const WEBHOOK_DOCUMENT_TOTAL_LIMIT_BYTES = 5_000_000;
+
+/** Adds only files returned by the Fênix/SEFAZ read routes already used by the panel. */
+export async function addProcessDocumentsToWebhook(userId: string, event: ProcessWebhookPayload): Promise<ProcessWebhookPayload> {
+  const process = event.after.process;
+  const processId = String(process.id || '');
+  const storedRemoteId = db.prepare('SELECT remote_id FROM processes WHERE user_id=? AND id=?').get(userId, processId) as { remote_id: string | null } | undefined;
+  const remoteProcessId = storedRemoteId?.remote_id || processId.replace(/^[^:]+:/, '');
+  const building = event.after.building;
+  const association = {
+    buildingId: String(building.id || ''),
+    buildingName: String(building.reference || ''),
+    processId,
+    protocol: String(process.protocol || ''),
+    processType: String(process.type || '')
+  };
+  const payload = process.payload && typeof process.payload === 'object' && !Array.isArray(process.payload)
+    ? process.payload as Record<string, unknown> : {};
+  const sourceDocuments = Array.isArray(payload.documents) ? payload.documents : [];
+  const documents: ProcessWebhookDocument[] = sourceDocuments.map((item: any, index) => {
+    const name = typeof item === 'string' ? item : String(item?.name || item?.nome || item?.filename || 'Documento');
+    const contentBase64 = typeof item?.contentBase64 === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(item.contentBase64)
+      ? item.contentBase64 : undefined;
+    const source = item?.source === 'test' ? 'test' : 'fenix';
+    return {
+      id: String(item?.id || `${processId}:metadata:${index}`), name,
+      type: typeof item === 'string' ? 'Documento do processo' : String(item?.type || item?.tipo || 'Anexo'),
+      ...(item?.date || item?.createdAt ? { date: String(item.date || item.createdAt) } : {}),
+      ...(item?.uploadedBy ? { uploadedBy: String(item.uploadedBy) } : {}),
+      ...(item?.uploadedAt ? { uploadedAt: String(item.uploadedAt) } : {}),
+      mimeType: String(item?.mimeType || item?.mime_type || 'application/octet-stream'), size: Number(item?.size) || 0,
+      source, associatedWith: association, availability: contentBase64 ? 'included' : 'metadata_only',
+      ...(contentBase64 ? { contentBase64 } : { note: 'O Fênix informou o documento, mas não disponibilizou o conteúdo binário nesta consulta.' })
+    };
+  });
+  const files: Array<{ id: string; name: string; type: string; source: 'fenix' | 'sefaz-ba'; content: Buffer }> = [];
+  const addFile = (id: string, name: string, type: string, source: 'fenix' | 'sefaz-ba', content: Buffer) => {
+    if (content.subarray(0, 5).toString('ascii') === '%PDF-') files.push({ id, name, type, source, content });
+  };
+  const tryRead = async (id: string, type: string, source: 'fenix' | 'sefaz-ba', read: () => Promise<{ filename: string; content: Buffer }>) => {
+    try { const file = await read(); addFile(id, file.filename, type, source, file.content); }
+    catch { /* Missing or unauthorized files remain absent; sync and webhook still proceed. */ }
+  };
+
+  if (processId.startsWith('technicalproject:')) {
+    const projectId = remoteProcessId;
+    try {
+      const daes = await getTechnicalProjectDaes(userId, projectId);
+      const reads: Array<Promise<void>> = [
+        tryRead(`${processId}:protocol-receipt`, 'Comprovante de protocolo', 'fenix', () => getTechnicalProjectProtocolReceipt(userId, projectId)),
+        tryRead(`${processId}:certificate`, 'Certificado de aprovação', 'fenix', () => getTechnicalProjectCertificate(userId, projectId)),
+        tryRead(`${processId}:notification`, 'Notificação oficial', 'fenix', () => getTechnicalProjectNotification(userId, projectId))
+      ];
+      for (const dae of daes.slice(0, 4)) {
+        const metadata: ProcessWebhookDocument = {
+          id: `${processId}:dae:${dae.id}`, name: dae.type, type: 'Documento de arrecadação (DAE)',
+          ...(dae.dueDate ? { date: dae.dueDate } : {}), mimeType: 'application/pdf', size: 0,
+          source: 'fenix', associatedWith: association, availability: 'metadata_only',
+          note: 'O link do DAE é disponibilizado pela SEFAZ; o PDF pode exigir uma etapa manual.'
+        };
+        documents.push(metadata);
+        if (dae.available) reads.push(tryRead(metadata.id, metadata.type, 'sefaz-ba', () => getTechnicalProjectDaePdf(userId, projectId, dae.id)));
+      }
+      await Promise.all(reads);
+    } catch { /* Preserve metadata and deliver the process event even if Fênix document lookup fails. */ }
+  } else if (processId.startsWith('request:')) {
+    const requestId = remoteProcessId;
+    await tryRead(`${processId}:notification`, 'Notificação oficial', 'fenix', () => getFenixRequestNotification(userId, requestId));
+  }
+
+  let totalBytes = 0;
+  for (const file of files.slice(0, 8)) {
+    const existingIndex = documents.findIndex((doc) => doc.id === file.id || (doc.name === file.name && doc.availability === 'included'));
+    if (existingIndex >= 0 && documents[existingIndex]?.availability === 'included') continue;
+    const fits = file.content.length <= WEBHOOK_DOCUMENT_LIMIT_BYTES && totalBytes + file.content.length <= WEBHOOK_DOCUMENT_TOTAL_LIMIT_BYTES;
+    const enrichedDocument: ProcessWebhookDocument = {
+      id: file.id, name: file.name, type: file.type, mimeType: 'application/pdf', size: file.content.length,
+      source: file.source, associatedWith: association,
+      availability: fits ? 'included' : 'metadata_only',
+      ...(fits ? { contentBase64: file.content.toString('base64') } : { note: 'Arquivo omitido do payload por exceder o limite de tamanho do webhook.' })
+    };
+    if (existingIndex >= 0) documents[existingIndex] = { ...documents[existingIndex]!, ...enrichedDocument };
+    else documents.push(enrichedDocument);
+    if (fits) totalBytes += file.content.length;
+  }
+
+  if (event.changes.event === 'webhook.test' && !documents.some((doc) => doc.availability === 'included' && doc.contentBase64)) {
+    const example = Buffer.from('Documento sintético para validar o envio Base64 do webhook.');
+    documents.push({
+      id: 'webhook-test-document', name: 'anexo-exemplo.txt', type: 'Arquivo sintético de teste',
+      mimeType: 'text/plain', size: example.length, source: 'test', associatedWith: association,
+      availability: 'included', contentBase64: example.toString('base64'),
+      note: 'Arquivo sintético; não contém dados de processo.'
+    });
+  }
+
+  return {
+    ...event,
+    after: { ...event.after, process: { ...process, payload: { ...payload, documents } } }
+  };
+}
+
 function records(value: any): any[] {
   if (Array.isArray(value)) return value;
   for (const candidate of [value?.data, value?.rows, value?.items, value?.results, value?.edifications, value?.requests, value?.technicalprojects]) {
@@ -494,6 +597,40 @@ const first = (object: any, keys: string[], fallback: any = ''): any => {
   return fallback;
 };
 
+export type FenixBuildingOption = { id: string; reference: string; municipality: string };
+
+function mapFenixBuildingOptions(rows: any[]): FenixBuildingOption[] {
+  const seen = new Set<string>();
+  return rows.flatMap((building) => {
+    const id = String(first(building, ['id', 'edificacao_id'], ''));
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    return [{
+      id,
+      reference: cleanLabel(first(building, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia'], `Edificação ${id}`)).slice(0, 180),
+      municipality: cleanLabel(first(building, ['address.county', 'county', 'municipio.nome', 'municipality', 'cidade'], '')).slice(0, 120)
+    }];
+  });
+}
+
+export async function listFenixEdificationsForJar(jar: CookieJar, fenixUserId: string): Promise<FenixBuildingOption[]> {
+  const client = new FenixClient(jar);
+  const requester = await client.get('/api/v1/detailsRequester') as any;
+  const actualUserId = String(first(requester, ['user.id', 'data.user.id', 'id'], fenixUserId));
+  if (!actualUserId || actualUserId !== fenixUserId) throw new FenixError('A sessão retornou uma identidade Fênix diferente. Entre novamente.');
+  const rows = await allRecords(client, `/api/v1/usuarios/${encodeURIComponent(actualUserId)}/edifications`, {});
+  return mapFenixBuildingOptions(rows);
+}
+
+export async function listFenixEdificationsForUser(userId: string): Promise<FenixBuildingOption[]> {
+  const user = db.prepare('SELECT fenix_user_id, session_ciphertext FROM users WHERE id=? AND demo=0').get(userId) as { fenix_user_id: string | null; session_ciphertext: string | null } | undefined;
+  if (!user?.fenix_user_id || !user.session_ciphertext) throw new FenixError('Sessão Fênix não encontrada. Reconecte a conta.');
+  const jar = CookieJar.deserializeSync(JSON.parse(unseal(user.session_ciphertext)));
+  const rows = await listFenixEdificationsForJar(jar, user.fenix_user_id);
+  db.prepare('UPDATE users SET session_ciphertext=? WHERE id=?').run(seal(JSON.stringify(jar.serializeSync())), userId);
+  return rows;
+}
+
 function cleanLabel(value: unknown) {
   return String(value || '')
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[e-mail removido]')
@@ -506,7 +643,12 @@ function safeProcessPayload(process: any) {
   const rawDocuments = first(process, ['documents', 'documentos', 'files', 'anexos'], []);
   const documents = (Array.isArray(rawDocuments) ? rawDocuments : []).map((doc: any) => typeof doc === 'string'
     ? cleanLabel(doc)
-    : { name: cleanLabel(first(doc, ['name', 'nome', 'filename', 'arquivo'], 'Documento')), type: cleanLabel(first(doc, ['tipo_documento.nome', 'tipo', 'type'], 'Anexo')), date: String(first(doc, ['created_at', 'data', 'data_envio'], '')) });
+    : {
+      name: cleanLabel(first(doc, ['name', 'nome', 'filename', 'arquivo'], 'Documento')),
+      type: cleanLabel(first(doc, ['tipo_documento.nome', 'tipo', 'type'], 'Anexo')),
+      date: String(first(doc, ['created_at', 'data', 'data_envio'], '')),
+      uploadedBy: cleanLabel(first(doc, ['uploaded_by.name', 'usuario.nome', 'user.name', 'created_by.name', 'responsavel.nome', 'enviado_por.name'], ''))
+    });
   const rawTimeline = first(process, ['timeline', 'historico', 'movimentacoes', 'history'], []);
   const timeline = (Array.isArray(rawTimeline) ? rawTimeline : []).map((step: any) => ({
     label: cleanLabel(first(step, ['label', 'etapa', 'descricao', 'status'], 'Movimentação')),
@@ -550,14 +692,39 @@ export async function syncFenixUser(userId: string) {
   const user = db.prepare('SELECT id, fenix_user_id, session_ciphertext, last_sync FROM users WHERE id = ? AND demo = 0').get(userId) as
     { id: string; fenix_user_id: string; session_ciphertext: string; last_sync: string | null } | undefined;
   if (!user?.session_ciphertext) throw new FenixError('Sessão Fênix não encontrada. Entre novamente.');
+  const connection = db.prepare('SELECT id, owner_user_id, fenix_user_id, label, paused, webhook_enabled FROM fenix_connections WHERE data_user_id=?').get(userId) as
+    { id: string; owner_user_id: string; fenix_user_id: string; label: string; paused: number; webhook_enabled: number } | undefined;
+  if (connection?.paused) throw new FenixError('Esta conexão Fênix está pausada.');
+  const localBuildingId = (remoteId: string) => connection ? `linked:${connection.id}:building:${remoteId}` : remoteId;
+  const localProcessId = (source: string, remoteId: string) => connection ? `${source}:${connection.id}:${remoteId}` : `${source}:${remoteId}`;
   const jar = CookieJar.deserializeSync(JSON.parse(unseal(user.session_ciphertext)));
   const client = new FenixClient(jar);
   const requester = await client.get('/api/v1/detailsRequester') as any;
   const fenixUserId = String(first(requester, ['user.id', 'data.user.id', 'id'], user.fenix_user_id));
-  const buildingRows = await allRecords(client, `/api/v1/usuarios/${encodeURIComponent(fenixUserId)}/edifications`, {});
+  if (connection && fenixUserId !== connection.fenix_user_id) {
+    db.prepare("UPDATE fenix_connections SET status='reauth_required', updated_at=? WHERE id=?").run(new Date().toISOString(), connection.id);
+    throw new FenixError('A sessão autenticada pertence a outra conta Fênix. Reconecte a conta correta.', 401);
+  }
+  const allBuildingRows = await allRecords(client, `/api/v1/usuarios/${encodeURIComponent(fenixUserId)}/edifications`, {});
+  if (connection) {
+    const upsertCatalog = db.prepare(`INSERT INTO fenix_connection_buildings (connection_id,remote_building_id,reference,municipality,selected,updated_at)
+      VALUES (?,?,?,?,0,?) ON CONFLICT(connection_id,remote_building_id) DO UPDATE SET reference=excluded.reference, municipality=excluded.municipality, updated_at=excluded.updated_at`);
+    const catalogOptions = mapFenixBuildingOptions(allBuildingRows);
+    const municipalityById = new Map(catalogOptions.map((item) => [item.id, item.municipality]));
+    const referenceById = new Map(catalogOptions.map((item) => [item.id, item.reference]));
+    const updateCatalog = db.transaction(() => {
+      for (const item of catalogOptions) upsertCatalog.run(connection.id, item.id, referenceById.get(item.id) || 'Edificação', municipalityById.get(item.id) || '', new Date().toISOString());
+    });
+    updateCatalog();
+  }
+  const selectedRemoteIds = connection
+    ? new Set((db.prepare('SELECT remote_building_id FROM fenix_connection_buildings WHERE connection_id=? AND selected=1').all(connection.id) as Array<{ remote_building_id: string }>).map((item) => item.remote_building_id))
+    : null;
+  const buildingRows = connection ? allBuildingRows.filter((row) => selectedRemoteIds!.has(String(first(row, ['id', 'edificacao_id'], '')))) : allBuildingRows;
   const requestRows = await allRecords(client, '/api/v1/request', { tipo_lista: 'minhas_solicitacoes' });
   const projectRows = await allRecords(client, '/api/v1/technicalproject', {});
   const buildingIds = new Set(buildingRows.map((item) => String(first(item, ['id', 'edificacao_id'], ''))).filter(Boolean));
+  const localBuildingIds = new Map([...buildingIds].map((remoteId) => [remoteId, localBuildingId(remoteId)]));
   const fetchedProcesses = [
     ...requestRows.map((row) => ({ ...row, __source: 'request' })),
     ...projectRows.map((row) => ({ ...row, __source: 'technicalproject' }))
@@ -578,37 +745,46 @@ export async function syncFenixUser(userId: string) {
     return buildingId && buildingIds.has(buildingId);
   });
   const hadPriorSync = Boolean(user.last_sync);
-  const previousProcesses = db.prepare('SELECT id, building_id, protocol, type, status, stage, updated_at, payload FROM processes WHERE user_id = ?').all(userId) as Array<{ id: string; building_id: string; protocol: string; type: string; status: string; stage: string; updated_at: string; payload: string }>;
-  const previousBuildings = new Map((db.prepare('SELECT * FROM buildings WHERE user_id=?').all(userId) as Array<any>).map((row) => [row.id, row]));
+  const selectedLocalBuildingIds = [...localBuildingIds.values()];
+  const selectedIdSql = selectedLocalBuildingIds.map(() => '?').join(',');
+  const previousProcesses = (connection
+    ? selectedLocalBuildingIds.length ? db.prepare(`SELECT id, building_id, protocol, type, status, stage, updated_at, payload, remote_id FROM processes WHERE user_id=? AND source_connection_id=? AND building_id IN (${selectedIdSql})`).all(userId, connection.id, ...selectedLocalBuildingIds) : []
+    : db.prepare('SELECT id, building_id, protocol, type, status, stage, updated_at, payload, remote_id FROM processes WHERE user_id = ?').all(userId)) as Array<{ id: string; building_id: string; protocol: string; type: string; status: string; stage: string; updated_at: string; payload: string; remote_id: string | null }>;
+  const previousBuildingRows = (connection
+    ? buildingIds.size ? db.prepare(`SELECT * FROM buildings WHERE user_id=? AND source_connection_id=? AND remote_id IN (${[...buildingIds].map(() => '?').join(',')})`).all(userId, connection.id, ...buildingIds) : []
+    : db.prepare('SELECT * FROM buildings WHERE user_id=?').all(userId)) as Array<any>;
+  const previousBuildings = new Map(previousBuildingRows.map((row) => [row.id, row]));
   const buildingNames = new Map(buildingRows.map((building) => [String(first(building, ['id', 'edificacao_id'], '')), cleanLabel(first(building, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia'], 'Edificação'))]));
   const currentStates: ProcessSyncState[] = [];
   for (const process of processRows) {
-    const buildingId = processBuildingId(process);
+    const remoteBuildingId = processBuildingId(process);
+    const buildingId = localBuildingIds.get(remoteBuildingId) || '';
     const rawId = String(first(process, ['id', 'solicitacao_id', 'projeto_tecnico_id'], ''));
-    const id = rawId ? `${process.__source || 'process'}:${rawId}` : '';
-    if (!id || !buildingIds.has(buildingId)) continue;
+    const id = rawId ? localProcessId(process.__source || 'process', rawId) : '';
+    if (!id || !buildingIds.has(remoteBuildingId)) continue;
     const status = cleanLabel(processStatus(process));
     const stage = cleanLabel(String(first(process, ['etapa_atual', 'fase', 'stage'], status)));
     const protocol = cleanLabel(processProtocol(process));
     currentStates.push({
-      id, buildingId, buildingReference: buildingNames.get(buildingId) || 'Edificação acompanhada', protocol,
+      id, buildingId, buildingReference: buildingNames.get(remoteBuildingId) || 'Edificação acompanhada', protocol,
       type: cleanLabel(`${process.__source === 'request' ? 'Solicitação' : 'Projeto técnico'}${first(process, ['tipo_solicitacao_display', 'tipo_solicitacao', 'sigla'], '') ? ` · ${first(process, ['tipo_solicitacao_display', 'tipo_solicitacao', 'sigla'], '')}` : ''}`),
       status, stage, payload: JSON.stringify(safeProcessPayload(process))
     });
   }
   const previousStates: ProcessSyncState[] = previousProcesses.map((item) => ({
     id: item.id, buildingId: item.building_id,
-    buildingReference: buildingNames.get(item.building_id) || 'Edificação acompanhada',
+    buildingReference: previousBuildings.get(item.building_id)?.reference || 'Edificação acompanhada',
     protocol: item.protocol, type: item.type, status: item.status, stage: item.stage, payload: item.payload
   }));
   const changes = hadPriorSync ? detectProcessChanges(previousStates, currentStates) : [];
   const now = new Date().toISOString();
-  const webhookUrl = getSetting(WEBHOOK_SETTING);
+  const webhookUrl = connection && !connection.webhook_enabled ? '' : getSetting(WEBHOOK_SETTING);
   const webhookEvents: ProcessWebhookPayload[] = [];
   const currentBuildingSnapshots = new Map<string, Record<string, unknown>>();
   for (const row of buildingRows) {
-    const id = String(first(row, ['id', 'edificacao_id'], ''));
-    if (!id) continue;
+    const remoteId = String(first(row, ['id', 'edificacao_id'], ''));
+    const id = localBuildingIds.get(remoteId) || '';
+    if (!remoteId || !id) continue;
     currentBuildingSnapshots.set(id, {
       id, reference: cleanLabel(first(row, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia'], `Edificação ${id}`)),
       municipality: cleanLabel(first(row, ['address.county', 'county', 'municipio.nome', 'municipality', 'cidade'], '')),
@@ -620,7 +796,7 @@ export async function syncFenixUser(userId: string) {
   }
   const currentProcessSnapshots = new Map<string, Record<string, unknown>>();
   for (const process of currentStates) {
-    const raw = processRows.find((row) => `${row.__source || 'process'}:${first(row, ['id', 'solicitacao_id', 'projeto_tecnico_id'], '')}` === process.id);
+    const raw = processRows.find((row) => localProcessId(row.__source || 'process', String(first(row, ['id', 'solicitacao_id', 'projeto_tecnico_id'], ''))) === process.id);
     currentProcessSnapshots.set(process.id, {
       id: process.id, buildingId: process.buildingId, protocol: process.protocol, type: process.type,
       status: process.status, stage: process.stage,
@@ -659,24 +835,32 @@ export async function syncFenixUser(userId: string) {
       .map((field) => ({ field, before: oldFields[field] ?? null, after: newFields[field] ?? null }));
   };
   const upsertBuilding = db.prepare(`INSERT INTO buildings
-    (id, user_id, reference, municipality, address, area, floors, height, payload, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, user_id, source_connection_id, remote_id, reference, municipality, address, area, floors, height, payload, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET reference=excluded.reference, municipality=excluded.municipality,
       address=excluded.address, area=excluded.area, floors=excluded.floors, height=excluded.height,
-      payload=excluded.payload, updated_at=excluded.updated_at`);
+      payload=excluded.payload, updated_at=excluded.updated_at, source_connection_id=excluded.source_connection_id, remote_id=excluded.remote_id`);
   const upsertProcess = db.prepare(`INSERT INTO processes
-    (id, user_id, building_id, protocol, type, status, stage, updated_at, payload)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, user_id, source_connection_id, remote_id, building_id, protocol, type, status, stage, updated_at, payload)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET building_id=excluded.building_id, protocol=excluded.protocol,
       type=excluded.type, status=excluded.status, stage=excluded.stage, updated_at=excluded.updated_at,
-      payload=excluded.payload`);
+      payload=excluded.payload, source_connection_id=excluded.source_connection_id, remote_id=excluded.remote_id`);
   const sync = db.transaction(() => {
-    db.prepare('DELETE FROM processes WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM buildings WHERE user_id = ?').run(userId);
+    if (connection) {
+      if (selectedLocalBuildingIds.length) {
+        db.prepare(`DELETE FROM processes WHERE user_id=? AND source_connection_id=? AND building_id IN (${selectedIdSql})`)
+          .run(userId, connection.id, ...selectedLocalBuildingIds);
+      }
+    } else {
+      db.prepare('DELETE FROM processes WHERE user_id = ?').run(userId);
+      db.prepare('DELETE FROM buildings WHERE user_id = ?').run(userId);
+    }
     for (const building of buildingRows) {
-      const id = String(first(building, ['id', 'edificacao_id'], ''));
-      if (!id) continue;
-      upsertBuilding.run(...([id, userId,
+      const remoteId = String(first(building, ['id', 'edificacao_id'], ''));
+      const id = localBuildingIds.get(remoteId) || '';
+      if (!remoteId || !id) continue;
+      upsertBuilding.run(...([id, userId, connection?.id || null, connection ? remoteId : null,
         String(first(building, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia'], `Edificação ${id}`)),
         String(first(building, ['address.county', 'county', 'municipio.nome', 'municipality', 'cidade'], '')),
         String(first(building, ['address.public_place', 'address.logradouro', 'logradouro'], '')),
@@ -685,11 +869,12 @@ export async function syncFenixUser(userId: string) {
         String(first(building, ['height'], '')), JSON.stringify(safeBuildingPayload(building)), now] as any[]));
     }
     for (const process of processRows) {
-      const buildingId = processBuildingId(process);
-      const rawId = String(first(process, ['id', 'solicitacao_id', 'projeto_tecnico_id'], ''));
-      const id = rawId ? `${process.__source || 'process'}:${rawId}` : '';
-      if (!id || !buildingIds.has(buildingId)) continue;
-      upsertProcess.run(id, userId, buildingId, processProtocol(process),
+      const remoteBuildingId = processBuildingId(process);
+      const buildingId = localBuildingIds.get(remoteBuildingId) || '';
+      const remoteId = String(first(process, ['id', 'solicitacao_id', 'projeto_tecnico_id'], ''));
+      const id = remoteId ? localProcessId(process.__source || 'process', remoteId) : '';
+      if (!id || !buildingIds.has(remoteBuildingId)) continue;
+      upsertProcess.run(id, userId, connection?.id || null, connection ? remoteId : null, buildingId, processProtocol(process),
         `${process.__source === 'request' ? 'Solicitação' : 'Projeto técnico'}${first(process, ['tipo_solicitacao_display', 'tipo_solicitacao', 'sigla'], '') ? ` · ${first(process, ['tipo_solicitacao_display', 'tipo_solicitacao', 'sigla'], '')}` : ''}`,
         processStatus(process), String(first(process, ['etapa_atual', 'fase', 'stage'], processStatus(process))),
         String(first(process, ['updated_at', 'data_atualizacao', 'created_at'], now)), JSON.stringify(safeProcessPayload(process)));
@@ -716,6 +901,7 @@ export async function syncFenixUser(userId: string) {
         const before = newSnapshot(oldBuildingSnapshot(oldBuildingRow), oldProcess);
         const after = newSnapshot(currentBuildingSnapshots.get(change.buildingId), currentProcess) as ProcessWebhookPayload['after'];
         webhookEvents.push({
+          ...(connection ? { sourceAccount: { id: connection.id, label: connection.label } } : {}),
           before, after,
           changes: {
             eventId: randomUUID(), event: oldProcess ? 'process.updated' : 'process.created',
@@ -729,13 +915,16 @@ export async function syncFenixUser(userId: string) {
   });
   sync();
   db.prepare(`UPDATE users SET session_ciphertext = ? WHERE id = ?`).run(seal(JSON.stringify(jar.serializeSync())), userId);
+  if (connection) db.prepare("UPDATE fenix_connections SET status='active', updated_at=? WHERE id=?").run(now, connection.id);
   if (webhookUrl) {
     for (const event of webhookEvents) {
-      void deliverWebhook(webhookUrl, event, process.env.NODE_ENV === 'production').catch((error) => {
-        const status = error instanceof Error && /^Webhook retornou HTTP \d+\.$/.test(error.message)
-          ? error.message.replace(/\D/g, '') : 'falha de rede ou validação';
-        console.warn(`Entrega do webhook de notificações falhou (${status}).`);
-      });
+      void addProcessDocumentsToWebhook(userId, event)
+        .then((enrichedEvent) => deliverWebhookLogged(connection?.owner_user_id || userId, webhookUrl, enrichedEvent, process.env.NODE_ENV === 'production', 'automatic', undefined, connection?.id || null))
+        .catch((error) => {
+          const status = error instanceof Error && /^Webhook retornou HTTP \d+\.$/.test(error.message)
+            ? error.message.replace(/\D/g, '') : 'falha de rede ou validação';
+          console.warn(`Entrega do webhook de notificações falhou (${status}).`);
+        });
     }
   }
   return { buildings: buildingRows.length, processes: processRows.length, changes: changes.length, completedAt: now };

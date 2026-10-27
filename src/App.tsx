@@ -4,7 +4,8 @@ import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Bot, Building2, CalendarClock, Check, CheckCircle2, CheckCheck,
   CircleAlert, ClipboardList, Cloud, FileCheck2, FileSpreadsheet, FileText, Filter, Flame,
   Gauge, HelpCircle, Home, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
-  Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen
+  Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen,
+  Plus, Pause, Play, Trash2, Pencil, KeyRound, ChevronRight
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey } from './types';
@@ -135,8 +136,8 @@ function Login() {
 }
 
 type NavItem = { label: string; icon: typeof Home; path?: string };
-type UserNotification = { id: number; buildingId: string | null; processId: string | null; title: string; message: string; createdAt: string; readAt: string | null };
-type RenewalRecord = { id: string; buildingId: string; buildingReference: string; municipality: string; protocol: string; type: string; status: string; stage: string; homologatedAt: string; renewalAt: string; monthsUntilRenewal: number; daysUntilRenewal: number; severity: 'normal' | 'attention' | 'urgent' | 'overdue'; urgency: 'current' | 'next' | 'upcoming' | 'later'; disposition: 'archived' | 'lost' | null };
+type UserNotification = { id: number; buildingId: string | null; processId: string | null; title: string; message: string; createdAt: string; readAt: string | null; sourceAccountName?: string | null; sourceAccountPaused?: boolean };
+type RenewalRecord = { id: string; buildingId: string; buildingReference: string; municipality: string; sourceAccountName?: string | null; sourceConnectionId?: string | null; sourceAccountPaused?: boolean; protocol: string; type: string; status: string; stage: string; homologatedAt: string; renewalAt: string; monthsUntilRenewal: number; daysUntilRenewal: number; severity: 'normal' | 'attention' | 'urgent' | 'overdue'; urgency: 'current' | 'next' | 'upcoming' | 'later'; disposition: 'archived' | 'lost' | null };
 const navItems: NavItem[] = [
   { label: 'Visão geral', icon: Home, path: '/painel' },
   { label: 'Edificações', icon: Building2, path: '/painel?view=buildings' },
@@ -146,7 +147,8 @@ const navItems: NavItem[] = [
   { label: 'AVCBs e CLCBs', icon: ShieldCheck, path: '/painel?view=certificates' },
   { label: 'Projetos (ACP)', icon: FileText, path: '/painel?view=projects' },
   { label: 'Renovações', icon: CalendarClock, path: '/painel?view=renewals' },
-  { label: 'Consultas', icon: Search, path: '/painel?view=sync' }
+  { label: 'Consultas', icon: Search, path: '/painel?view=sync' },
+  { label: 'Log do webhook', icon: ListChecks, path: '/log' }
 ];
 
 const DEFAULT_PROCESS_MENU_FILTERS: ProcessMenuFilters = {
@@ -250,7 +252,7 @@ function NotificationCenter({ onActivate }: { onActivate?: (notification: UserNo
     if (!item.readAt) await api(`/api/notifications/${item.id}/read`, { method: 'POST' });
     setOpen(false); await loadNotifications(); onActivate?.(item);
   }
-  return <div className="notification-wrap" ref={notificationRef}><button className="icon-button notification-button" title="Notificações" aria-label={`Notificações${unreadCount ? `, ${unreadCount} não lidas` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); void loadNotifications(); }}><Bell size={18} />{unreadCount > 0 && <i />}</button>{open && <section className="notification-popover" aria-label="Notificações"><header><div><b>Notificações</b><small>{unreadCount ? `${unreadCount} não lidas` : 'Tudo em dia'}</small></div>{unreadCount > 0 && <button onClick={() => void markAllRead()}><CheckCheck size={14} /> Marcar como lidas</button>}</header>{permission !== 'granted' && permission !== 'unsupported' && <div className="notification-permission"><span>Receba um aviso do computador quando novos dados chegarem. O painel precisa estar aberto.</span><button onClick={async () => { const next = await Notification.requestPermission(); setPermission(next); }}>Ativar avisos</button></div>}{permission === 'denied' && <div className="notification-permission">Avisos do navegador bloqueados. Você ainda pode acompanhar as mudanças nesta campainha.</div>}{permission === 'unsupported' && <div className="notification-permission">Avisos do computador não estão disponíveis neste navegador; as mudanças ficam salvas nesta campainha.</div>}<div className="notification-list">{items.length ? items.map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => void select(item)}><span className="notification-item-icon"><Bell size={15} /></span><span><b>{item.title}</b><small>{item.message}</small><time>{formatDate(item.createdAt)}</time></span></button>) : <p className="notification-empty">Nenhuma alteração encontrada nas últimas sincronizações.</p>}</div></section>}</div>;
+  return <div className="notification-wrap" ref={notificationRef}><button className="icon-button notification-button" title="Notificações" aria-label={`Notificações${unreadCount ? `, ${unreadCount} não lidas` : ''}`} aria-expanded={open} onClick={() => { setOpen((value) => !value); void loadNotifications(); }}><Bell size={18} />{unreadCount > 0 && <i />}</button>{open && <section className="notification-popover" aria-label="Notificações"><header><div><b>Notificações</b><small>{unreadCount ? `${unreadCount} não lidas` : 'Tudo em dia'}</small></div>{unreadCount > 0 && <button onClick={() => void markAllRead()}><CheckCheck size={14} /> Marcar como lidas</button>}</header>{permission !== 'granted' && permission !== 'unsupported' && <div className="notification-permission"><span>Receba um aviso do computador quando novos dados chegarem. O painel precisa estar aberto.</span><button onClick={async () => { const next = await Notification.requestPermission(); setPermission(next); }}>Ativar avisos</button></div>}{permission === 'denied' && <div className="notification-permission">Avisos do navegador bloqueados. Você ainda pode acompanhar as mudanças nesta campainha.</div>}{permission === 'unsupported' && <div className="notification-permission">Avisos do computador não estão disponíveis neste navegador; as mudanças ficam salvas nesta campainha.</div>}<div className="notification-list">{items.length ? items.map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => void select(item)}><span className="notification-item-icon"><Bell size={15} /></span><span><b>{item.title}</b>{item.sourceAccountName && <AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} />}<small>{item.message}</small><time>{formatDate(item.createdAt)}</time></span></button>) : <p className="notification-empty">Nenhuma alteração encontrada nas últimas sincronizações.</p>}</div></section>}</div>;
 }
 
 function useDashboard() {
@@ -284,6 +286,11 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`status-pill ${tone}`}><i />{status}</span>;
 }
 
+function AccountSourceBadge({ name, paused }: { name?: string | null; paused?: boolean }) {
+  if (!name) return null;
+  return <small className={`account-source-badge ${paused ? 'paused' : ''}`} title={`${name}${paused ? ' · acompanhamento pausado' : ''}`}><Cloud size={11} />{name}{paused ? ' · pausada' : ''}</small>;
+}
+
 function MetricCard({ label, value, trend, trendTone, trendPlain, icon: Icon, tone, onClick }: { label: string; value: number | string; trend?: string; trendTone?: string; trendPlain?: boolean; icon: typeof Building2; tone: string; onClick?: () => void }) {
   const content = <><span className={`metric-icon ${tone}`}><Icon size={19} /></span><span className="metric-copy"><small>{label}</small><b>{value}</b>{trend && <span className={`metric-trend ${trendTone || ''} ${trendPlain ? 'metric-trend-plain' : ''}`}>{!trendPlain && <Activity size={12} />} {trend}</span>}</span>{onClick && <span className="metric-go"><ArrowRight size={15} /></span>}</>;
   return onClick ? <button className="metric-card" onClick={onClick}>{content}</button> : <div className="metric-card metric-card-static">{content}</div>;
@@ -296,13 +303,14 @@ function dateKeyInBahia(value: string | null | undefined) {
   return `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
 }
 
-function ProcessWorkspace({ view, processes, buildings, historyRefreshStatus, processMenuFilters, searchInputRef, onOpen, onAsk }: {
-  view: string; processes: DashboardProcess[]; buildings: Building[]; historyRefreshStatus: string; processMenuFilters: ProcessMenuFilters; searchInputRef: RefObject<HTMLInputElement | null>;
+function ProcessWorkspace({ view, processes, buildings, sourceAccounts, historyRefreshStatus, processMenuFilters, searchInputRef, onOpen, onAsk }: {
+  view: string; processes: DashboardProcess[]; buildings: Building[]; sourceAccounts: Array<{ id: string; label: string }>; historyRefreshStatus: string; processMenuFilters: ProcessMenuFilters; searchInputRef: RefObject<HTMLInputElement | null>;
   onOpen: (building: Building, tab?: string, processId?: string) => void; onAsk: (building: Building, prompt?: string) => void;
 }) {
   const location = useLocation();
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState(new URLSearchParams(location.search).get('filter') || 'all');
+  const [sourceFilter, setSourceFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [appliedDateFrom, setAppliedDateFrom] = useState('');
@@ -313,6 +321,8 @@ function ProcessWorkspace({ view, processes, buildings, historyRefreshStatus, pr
   const title = view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : 'Processos';
   const menuFilterKey = (['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? view : null) as ProcessMenuKey | null;
   const matchingView = processes.filter((item) => {
+    if (sourceFilter === 'primary' && item.sourceConnectionId) return false;
+    if (sourceFilter !== 'all' && sourceFilter !== 'primary' && item.sourceConnectionId !== sourceFilter) return false;
     const category = `${item.type} ${item.status} ${item.stage}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const status = `${item.status} ${item.stage}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     if (menuFilterKey && !matchesProcessMenuFilter(item, processMenuFilters[menuFilterKey] || DEFAULT_PROCESS_MENU_FILTERS[menuFilterKey])) return false;
@@ -337,13 +347,13 @@ function ProcessWorkspace({ view, processes, buildings, historyRefreshStatus, pr
   const tabs: string[][] = [];
   const pageSize = 12;
   const [page, setPage] = useState(1);
-  useEffect(() => setPage(1), [query, scope, view, appliedDateFrom, appliedDateTo]);
+  useEffect(() => setPage(1), [query, scope, sourceFilter, view, appliedDateFrom, appliedDateTo]);
   const pageCount = Math.max(1, Math.ceil(matchingView.length / pageSize));
   const pageRows = matchingView.slice((page - 1) * pageSize, page * pageSize);
   const buildingsById = new Map(buildings.map((building) => [building.id, building]));
   const exportRows: ExcelCell[][] = matchingView.map((item) => {
     const dateValue = view === 'analysis' ? item.analysisEnteredAt : view === 'notified' ? item.notificationEnteredAt : item.latestActivityAt;
-    return [item.buildingReference, item.municipality, item.protocol, item.type, item.status, item.stage, item.documentCount, formatDate(dateValue)];
+    return [item.sourceAccountName || 'Conta principal', item.buildingReference, item.municipality, item.protocol, item.type, item.status, item.stage, item.documentCount, formatDate(dateValue)];
   });
   const intro = view === 'projects' ? 'Projetos técnicos PT e PTS vinculados às edificações acompanhadas.'
     : view === 'analysis' ? 'Processos com etapa atual em análise pelo Corpo de Bombeiros.'
@@ -352,13 +362,13 @@ function ProcessWorkspace({ view, processes, buildings, historyRefreshStatus, pr
     : view === 'certificates' ? 'Edificações com processo homologado ou certificado de aprovação.'
     : 'Os indicadores e esta lista usam a mesma unidade: processos do Fênix.';
   return <section className="building-section process-workspace">
-    <div className="section-title-row"><div><h2>{title} <span>{matchingView.length}</span></h2><p>{intro}</p></div><ExcelExportButton filename={`fenix-${title}`} sheetName={title} columns={['Edificação', 'Município', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Documentos sincronizados', view === 'analysis' ? 'Entrada em análise' : view === 'notified' ? 'Data da notificação' : 'Última atualização']} rows={exportRows} /></div>
-    <div className="table-toolbar process-toolbar"><div className="process-date-filters"><label>De<input ref={dateFromRef} type="date" aria-label="Data inicial do período" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label>Até<input ref={dateToRef} type="date" aria-label="Data final do período" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedDateFrom(dateFromRef.current?.value || ''); setAppliedDateTo(dateToRef.current?.value || ''); }}>Aplicar</button>{(dateFrom || dateTo || appliedDateFrom || appliedDateTo) && <button className="text-link" onClick={() => { setDateFrom(''); setDateTo(''); setAppliedDateFrom(''); setAppliedDateTo(''); }}>Limpar datas</button>}</div><label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label></div>
+    <div className="section-title-row"><div><h2>{title} <span>{matchingView.length}</span></h2><p>{intro}</p></div><ExcelExportButton filename={`fenix-${title}`} sheetName={title} columns={['Conta Fênix', 'Edificação', 'Município', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Documentos sincronizados', view === 'analysis' ? 'Entrada em análise' : view === 'notified' ? 'Data da notificação' : 'Última atualização']} rows={exportRows} /></div>
+    <div className="table-toolbar process-toolbar"><div className="process-date-filters"><label>De<input ref={dateFromRef} type="date" aria-label="Data inicial do período" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label>Até<input ref={dateToRef} type="date" aria-label="Data final do período" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedDateFrom(dateFromRef.current?.value || ''); setAppliedDateTo(dateToRef.current?.value || ''); }}>Aplicar</button>{(dateFrom || dateTo || appliedDateFrom || appliedDateTo) && <button className="text-link" onClick={() => { setDateFrom(''); setDateTo(''); setAppliedDateFrom(''); setAppliedDateTo(''); }}>Limpar datas</button>}{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}</div><label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label></div>
     <div className="table-wrap"><table className="process-table"><thead><tr><th>EDIFICAÇÃO</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA</th><th>DOCUMENTOS</th><th>{view === 'analysis' ? 'ENTRADA EM ANÁLISE' : view === 'notified' ? 'DATA DA NOTIFICAÇÃO' : 'ÚLTIMA ATUALIZAÇÃO'}</th><th></th></tr></thead><tbody>{pageRows.map((item) => {
       const building = buildingsById.get(item.buildingId);
       const dateValue = view === 'analysis' ? item.analysisEnteredAt : view === 'notified' ? item.notificationEnteredAt : item.latestActivityAt;
       return <tr key={item.id} className="clickable-row" onClick={() => building && onOpen(building, view === 'documents' ? 'Documentos' : undefined, item.id)}>
-        <td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span><b>{item.buildingReference}</b><small>{item.municipality || 'Município não informado'}</small></span></span></td>
+        <td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span><b>{item.buildingReference}</b><small>{item.municipality || 'Município não informado'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></span></span></td>
         <td><b className="protocol-text">{item.protocol || 'Protocolo não informado'}</b><small className="table-subtext">{item.type}</small></td>
         <td><StatusPill status={item.stage || item.status} /><small className="table-subtext">{item.status}</small></td>
         <td><span className={item.documentCount ? 'document-count' : 'document-count document-count-muted'}>{item.documentCount ? `${item.documentCount} anexo${item.documentCount === 1 ? '' : 's'} sincronizado${item.documentCount === 1 ? '' : 's'}` : 'Consultar no Fênix ao abrir'}</span></td>
@@ -370,17 +380,38 @@ function ProcessWorkspace({ view, processes, buildings, historyRefreshStatus, pr
   </section>;
 }
 
-function RenewalsWorkspace({ records, list, onListChange, windowMonths, onWindowChange, onSaveWindow, savingWindow, error, updatingId, onDisposition, onOpen }: {
+function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, windowMonths, onWindowChange, onSaveWindow, savingWindow, error, updatingId, onDisposition, onOpen }: {
   records: RenewalRecord[]; list: 'active' | 'archived'; onListChange: (list: 'active' | 'archived') => void;
+  sourceAccounts: Array<{ id: string; label: string }>;
   windowMonths: number; onWindowChange: (months: number) => void; onSaveWindow: () => void; savingWindow: boolean;
   error: string; updatingId: string; onDisposition: (item: RenewalRecord, disposition: 'archived' | 'lost' | 'active') => void;
   onOpen: (buildingId: string, processId: string) => void;
 }) {
+  const [search, setSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [situation, setSituation] = useState('all');
+  const [month, setMonth] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  useEffect(() => { setSearch(''); setSourceFilter('all'); setSituation('all'); setMonth('all'); setDateFrom(''); setDateTo(''); }, [list]);
   const dateLabel = (value: string) => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Bahia' }).format(new Date(value));
   const dispositionLabel = (item: RenewalRecord) => item.disposition === 'lost' ? 'Perdido' : item.disposition === 'archived' ? 'Arquivado' : item.severity === 'overdue' ? `Vencido há ${Math.abs(item.daysUntilRenewal)} dia${Math.abs(item.daysUntilRenewal) === 1 ? '' : 's'}` : item.severity === 'urgent' ? 'No limite' : item.severity === 'attention' ? 'Prazo próximo' : 'Dentro do prazo';
   const badgeClass = (item: RenewalRecord) => item.disposition === 'lost' ? 'lost-state' : item.disposition === 'archived' ? 'archived-state' : item.severity;
-  const exportRows: ExcelCell[][] = records.map((item) => [item.buildingReference, item.municipality, item.protocol, item.type, item.status, item.stage, dateLabel(item.homologatedAt), dateLabel(item.renewalAt), dispositionLabel(item)]);
-  const exportColumns = ['Edificação', 'Município', 'Protocolo', 'Tipo', 'Status', 'Etapa', 'Homologado em', 'Renovação em', 'Situação'];
+  const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+  const filteredRecords = records.filter((item) => {
+    const renewalDate = dateKeyInBahia(item.renewalAt);
+    const text = normalize(`${item.buildingReference} ${item.municipality} ${item.sourceAccountName || ''} ${item.protocol} ${item.type} ${item.status} ${item.stage} ${dispositionLabel(item)}`);
+    const matchesSearch = !search.trim() || text.includes(normalize(search.trim()));
+    const matchesSource = sourceFilter === 'all' || (sourceFilter === 'primary' ? !item.sourceConnectionId : item.sourceConnectionId === sourceFilter);
+    const matchesSituation = situation === 'all' || (situation === 'lost' ? item.disposition === 'lost' : situation === 'archived' ? item.disposition === 'archived' : item.severity === situation);
+    const matchesMonth = month === 'all' || renewalDate.slice(5, 7) === month;
+    const matchesDate = (!dateFrom || (renewalDate && renewalDate >= dateFrom)) && (!dateTo || (renewalDate && renewalDate <= dateTo));
+    return matchesSearch && matchesSource && matchesSituation && matchesMonth && matchesDate;
+  });
+  const hasFilters = Boolean(search || sourceFilter !== 'all' || situation !== 'all' || month !== 'all' || dateFrom || dateTo);
+  const clearFilters = () => { setSearch(''); setSourceFilter('all'); setSituation('all'); setMonth('all'); setDateFrom(''); setDateTo(''); };
+  const exportRows: ExcelCell[][] = filteredRecords.map((item) => [item.sourceAccountName || 'Conta principal', item.buildingReference, item.municipality, item.protocol, item.type, item.status, item.stage, dateLabel(item.homologatedAt), dateLabel(item.renewalAt), dispositionLabel(item)]);
+  const exportColumns = ['Conta Fênix', 'Edificação', 'Município', 'Protocolo', 'Tipo', 'Status', 'Etapa', 'Homologado em', 'Renovação em', 'Situação'];
   return <section className="renewal-section">
     <div className="section-title-row">
       <div><h2>{list === 'active' ? 'Renovações a acompanhar' : 'Arquivados e perdidos'} <span>{records.length}</span></h2><p>{list === 'active' ? 'Certificados dentro da janela configurada, com base na homologação do Fênix.' : 'Itens guardados ou marcados como perdidos; eles não aparecem na lista ativa.'}</p></div>
@@ -388,13 +419,14 @@ function RenewalsWorkspace({ records, list, onListChange, windowMonths, onWindow
     </div>
     {error && <div className="settings-message error">{error}</div>}
     {list === 'active' && <ul className="renewal-legend"><li><i className="normal" /> <b>Verde:</b> Dentro do prazo (Normal/Seguro)</li><li><i className="attention" /> <b>Amarelo/Laranja:</b> Prazo próximo (Atenção)</li><li><i className="urgent" /> <b>Vermelho:</b> No limite do prazo (Alerta/Urgência)</li><li><i className="overdue" /> <b>Preto ou Roxo:</b> Prazo perdido (Vencido)</li></ul>}
+    <div className="table-toolbar renewal-filters"><div className="renewal-filter-controls"><label>De<input type="date" aria-label="Renovação a partir de" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label>Até<input type="date" aria-label="Renovação até" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><label>Situação<select value={situation} onChange={(event) => setSituation(event.target.value)}><option value="all">Todas</option>{list === 'active' ? <><option value="normal">Dentro do prazo</option><option value="attention">Prazo próximo</option><option value="urgent">No limite</option><option value="overdue">Vencidas</option></> : <><option value="archived">Arquivados</option><option value="lost">Perdidos</option></>}</select></label><label>Mês<select value={month} onChange={(event) => setMonth(event.target.value)}><option value="all">Todos</option>{Array.from({ length: 12 }, (_, index) => { const value = String(index + 1).padStart(2, '0'); const label = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, index, 1))); return <option key={value} value={value}>{label}</option>; })}</select></label>{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}{hasFilters && <button className="text-link renewal-clear-filters" onClick={clearFilters}>Limpar filtros</button>}</div><label className="search-box renewal-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar edificação, município ou processo..." aria-label="Buscar renovações" /></label><span className="renewal-result-count">Exibindo {filteredRecords.length} de {records.length}</span></div>
     <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>PROCESSO</th><th>HOMOLOGADO EM</th><th>RENOVAÇÃO EM</th><th>SITUAÇÃO</th><th>AÇÕES</th></tr></thead><tbody>
-      {records.map((item) => <tr key={item.id} className="clickable-row" onClick={() => onOpen(item.buildingId, item.id)}>
-        <td><b>{item.buildingReference}</b></td><td>{item.municipality || '—'}</td><td><b className="protocol-text">{item.protocol || 'Sem protocolo'}</b><small className="table-subtext">{item.type}</small></td><td>{dateLabel(item.homologatedAt)}</td><td>{dateLabel(item.renewalAt)}</td>
+      {filteredRecords.map((item) => <tr key={item.id} className="clickable-row" onClick={() => onOpen(item.buildingId, item.id)}>
+        <td><b>{item.buildingReference}</b><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></td><td>{item.municipality || '—'}</td><td><b className="protocol-text">{item.protocol || 'Sem protocolo'}</b><small className="table-subtext">{item.type}</small></td><td>{dateLabel(item.homologatedAt)}</td><td>{dateLabel(item.renewalAt)}</td>
         <td><span className={`renewal-badge ${badgeClass(item)}`}>{dispositionLabel(item)}</span></td>
         <td><div className="renewal-row-actions" onClick={(event) => event.stopPropagation()}>{list === 'active' ? <><button disabled={Boolean(updatingId)} title="Arquivar renovação" aria-label="Arquivar renovação" onClick={() => onDisposition(item, 'archived')}><Archive size={15} /></button><button disabled={Boolean(updatingId)} title="Marcar como perdido" aria-label="Marcar como perdido" onClick={() => onDisposition(item, 'lost')}><UserX size={15} /></button></> : <><button disabled={Boolean(updatingId)} title="Reativar renovação" aria-label="Reativar renovação" onClick={() => onDisposition(item, 'active')}><RotateCcw size={15} /></button><button disabled={Boolean(updatingId)} title={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} aria-label={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} onClick={() => onDisposition(item, item.disposition === 'lost' ? 'archived' : 'lost')}>{item.disposition === 'lost' ? <Archive size={15} /> : <UserX size={15} />}</button></>}</div></td>
       </tr>)}
-      {!records.length && <tr><td colSpan={7} className="empty-row"><CalendarClock size={20} /><b>{list === 'active' ? 'Nenhuma renovação na janela' : 'Nenhum item arquivado'}</b><span>{list === 'active' ? 'A lista considera AVCBs e CLCBs homologados com histórico sincronizado.' : 'Ao arquivar ou marcar como perdido, o processo aparecerá aqui.'}</span></td></tr>}
+      {!filteredRecords.length && <tr><td colSpan={7} className="empty-row">{records.length ? <><Search size={20} /><b>Nenhum resultado para esses filtros</b><span>Altere a pesquisa, o período, o mês ou a situação.</span></> : <><CalendarClock size={20} /><b>{list === 'active' ? 'Nenhuma renovação na janela' : 'Nenhum item arquivado'}</b><span>{list === 'active' ? 'A lista considera AVCBs e CLCBs homologados com histórico sincronizado.' : 'Ao arquivar ou marcar como perdido, o processo aparecerá aqui.'}</span></>}</td></tr>}
     </tbody></table></div>
   </section>;
 }
@@ -405,6 +437,7 @@ function DashboardPage() {
   const view = new URLSearchParams(location.search).get('view') || 'overview';
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('Todas');
+  const [sourceFilter, setSourceFilter] = useState('all');
   const [buildingDateFrom, setBuildingDateFrom] = useState('');
   const [buildingDateTo, setBuildingDateTo] = useState('');
   const [appliedBuildingDateFrom, setAppliedBuildingDateFrom] = useState('');
@@ -425,13 +458,15 @@ function DashboardPage() {
   const [selected, setSelected] = useState<Building | null>(null);
   const [selectedTab, setSelectedTab] = useState('Edificação');
   const [selectedProcessId, setSelectedProcessId] = useState<string | undefined>();
+  const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary } | null>(null);
+  const [connectionRevision, setConnectionRevision] = useState(0);
   const [aiBuilding, setAiBuilding] = useState<Building | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const launchAi = (building: Building | null, prompt = '') => { setAiBuilding(building); setAiPrompt(prompt); setAiOpen(true); };
   const [syncMenu, setSyncMenu] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { setPage(1); }, [view, query, filter, appliedBuildingDateFrom, appliedBuildingDateTo]);
+  useEffect(() => { setPage(1); }, [view, query, filter, sourceFilter, appliedBuildingDateFrom, appliedBuildingDateTo]);
   useEffect(() => {
     if (view !== 'renewals') return;
     let active = true;
@@ -452,10 +487,10 @@ function DashboardPage() {
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
   const activeNav = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
   const viewTitle = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
-  const viewBuildings = data.buildings;
+  const viewBuildings = data.buildings.filter((item) => sourceFilter === 'all' || (sourceFilter === 'primary' ? !item.sourceConnectionId : item.sourceConnectionId === sourceFilter));
   const visible = viewBuildings.filter((item) => {
     const q = query.toLocaleLowerCase('pt-BR');
-    const matchesText = `${item.reference} ${item.municipality} ${item.protocol} ${item.status}`.toLocaleLowerCase('pt-BR').includes(q);
+    const matchesText = `${item.reference} ${item.municipality} ${item.protocol} ${item.status} ${item.sourceAccountName || ''}`.toLocaleLowerCase('pt-BR').includes(q);
     const matchesFilter = filter === 'Todas' || (filter === 'Em análise' && /an[aá]lise/i.test(item.status)) || (filter === 'Aguardando ação' && /pend|exig|document|retific/i.test(item.status)) || (filter === 'Aprovadas' && /aprov|homolog|conclu/i.test(item.status));
     const dateKey = dateKeyInBahia(item.lastUpdated);
     const matchesDate = (!appliedBuildingDateFrom || (dateKey && dateKey >= appliedBuildingDateFrom)) && (!appliedBuildingDateTo || (dateKey && dateKey <= appliedBuildingDateTo));
@@ -466,12 +501,12 @@ function DashboardPage() {
   const pageRows = buildingPageSize === 'all' ? visible : visible.slice((page - 1) * pageSize, page * pageSize);
   async function syncNow() {
     setSyncing(true); setSyncMenu(false);
-    try { await api('/api/sync/now', { method: 'POST' }); await refresh(); setToast('Informações sincronizadas.'); }
+    try { const result = await api<{ partial?: boolean }>('/api/sync/now', { method: 'POST' }); await refresh(); setConnectionRevision((revision) => revision + 1); setToast(result.partial ? 'Atualização parcial. Consulte o estado das contas em Consultas.' : 'Informações sincronizadas.'); }
     catch (e) { setToast(e instanceof Error ? e.message : 'Falha ao sincronizar.'); }
     finally { setSyncing(false); window.setTimeout(() => setToast(''), 4200); }
   }
   const visibleProcessCount = visible.reduce((total, item) => total + item.processCount, 0);
-  const buildingExportRows: ExcelCell[][] = visible.map((item) => [item.reference, item.municipality, formatArea(item.area), item.floors, item.protocol, item.processType, item.status, item.stage, formatDate(item.lastUpdated), item.processCount]);
+  const buildingExportRows: ExcelCell[][] = visible.map((item) => [item.sourceAccountName || 'Conta principal', item.reference, item.municipality, formatArea(item.area), item.floors, item.protocol, item.processType, item.status, item.stage, formatDate(item.lastUpdated), item.processCount]);
   const processMenuFilters = data.processMenuFilters || DEFAULT_PROCESS_MENU_FILTERS;
   const projectProcesses = data.processes.filter((item) => matchesProcessMenuFilter(item, processMenuFilters.projects));
   const requestProcesses = data.processes.filter((item) => /solicitacao|vistoria/i.test(item.type));
@@ -585,10 +620,10 @@ function DashboardPage() {
       <section className="metrics-grid">{contextualMetrics.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} trend={metric.trend} trendPlain={'trendPlain' in metric ? metric.trendPlain : false} icon={metric.icon} tone={metric.tone} onClick={'filter' in metric && metric.filter ? () => navigate(`/painel?view=${view}&filter=${encodeURIComponent(metric.filter!)}`) : undefined} />)}</section>
       {view === 'analysis' && <section className="average-breakdown"><h2>Tempo médio em análise por tipo</h2><p>Tempo decorrido desde a movimentação mais recente de entrada em análise, conforme o histórico do Fênix.</p><div className="average-breakdown-grid">{analysisGroups.map((group) => <div key={group.label}><b>{group.label}</b><strong>{group.value}</strong><small>{group.coverage}</small></div>)}</div></section>}
       <section className="ai-alert-card"><span className="ai-alert-icon"><Sparkles size={19} /></span><div className="ai-alert-copy"><b>Sinalização automática <span className="ai-label">DADOS</span></b><p>{data.metrics.attention ? `Encontramos ${data.metrics.attention} processo${data.metrics.attention > 1 ? 's' : ''} com status que merece${data.metrics.attention > 1 ? 'm' : ''} atenção. Abra uma edificação para entender os dados e próximos passos.` : 'Não há processos com pendências sinalizadas nos dados sincronizados.'}</p><small>Resumo baseado no status recebido do Fênix · {data.sync.lastSync ? `atualizado ${formatDate(data.sync.lastSync)}` : 'aguardando primeira consulta'}</small></div><button className="button button-ghost" onClick={() => launchAi(null, 'Analise a situação geral das edificações e processos acompanhados, destacando as pendências e prioridades de atenção.')}>Perguntar à IA <ArrowRight size={15} /></button></section>
-      {view === 'renewals' ? <RenewalsWorkspace records={renewals} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO COM O FÊNIX</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando' : 'Atualizar agora'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
-        <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações do seu cadastro.</p></div><div className="section-actions"><ExcelExportButton filename="fenix-edificacoes" sheetName="Edificações" columns={['Edificação', 'Município', 'Área total', 'Pavimentos', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Última atualização', 'Quantidade de processos']} rows={buildingExportRows} /><button className="text-link" onClick={() => { setQuery(''); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div></div>
-        <div className="table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="table-controls"><div className="process-date-filters building-date-filters"><label>De<input ref={buildingDateFromRef} type="date" aria-label="Data inicial da última atualização" value={buildingDateFrom} onChange={(event) => setBuildingDateFrom(event.target.value)} /></label><label>Até<input ref={buildingDateToRef} type="date" aria-label="Data final da última atualização" value={buildingDateTo} onChange={(event) => setBuildingDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedBuildingDateFrom(buildingDateFromRef.current?.value || ''); setAppliedBuildingDateTo(buildingDateToRef.current?.value || ''); }}>Aplicar</button></div><label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label><button className="button button-outline filter-button" onClick={() => setFilter(filter === 'Todas' ? 'Aguardando ação' : 'Todas')}><Filter size={14} /> Filtros</button></div></div>
-        <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span><b>{item.reference}</b><small>{item.floors ? `${item.floors} pavimentos` : 'Edificação cadastrada'}</small></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small></td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
+      {view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
+        <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações acompanhadas.</p></div><div className="section-actions"><ExcelExportButton filename="fenix-edificacoes" sheetName="Edificações" columns={['Conta Fênix', 'Edificação', 'Município', 'Área total', 'Pavimentos', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Última atualização', 'Quantidade de processos']} rows={buildingExportRows} /><button className="text-link" onClick={() => { setQuery(''); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div></div>
+        <div className="table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="table-controls"><div className="process-date-filters building-date-filters"><label>De<input ref={buildingDateFromRef} type="date" aria-label="Data inicial da última atualização" value={buildingDateFrom} onChange={(event) => setBuildingDateFrom(event.target.value)} /></label><label>Até<input ref={buildingDateToRef} type="date" aria-label="Data final da última atualização" value={buildingDateTo} onChange={(event) => setBuildingDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedBuildingDateFrom(buildingDateFromRef.current?.value || ''); setAppliedBuildingDateTo(buildingDateToRef.current?.value || ''); }}>Aplicar</button></div>{(data.sourceAccounts?.length || 0) > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{data.sourceAccounts!.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}<label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label><button className="button button-outline filter-button" onClick={() => setFilter(filter === 'Todas' ? 'Aguardando ação' : 'Todas')}><Filter size={14} /> Filtros</button></div></div>
+        <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span><b>{item.reference}</b><small>{item.floors ? `${item.floors} pavimentos` : 'Edificação cadastrada'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small></td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
         <div className="table-foot"><span>Exibindo <b>{visible.length ? (page - 1) * pageSize + 1 : 0}–{Math.min(page * pageSize, visible.length)}</b> de <b>{visible.length}</b> edificações · {visibleProcessCount} processos nas edificações exibidas</span><div className="table-foot-right"><label className="page-size-select">Por página<select value={buildingPageSize} onChange={(event) => { setBuildingPageSize(event.target.value === 'all' ? 'all' : Number(event.target.value)); setPage(1); }} aria-label="Quantidade de edificações por página"><option value={50}>50</option><option value={75}>75</option><option value={100}>100</option><option value={150}>150</option><option value="all">Todos</option></select></label><span className={`sync-state ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><span className="connection-dot" /> {data.sync.status === 'error' ? 'Falha na consulta' : `Última atualização: ${data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não sincronizado'}`}</span>{pageCount > 1 && <nav className="table-pagination" aria-label="Paginação da lista"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>Anterior</button><span>{page} / {pageCount}</span><button onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>Próxima</button></nav>}</div></div>
       </section>}
       <section className="bottom-insight"><span className="insight-icon"><Sparkles size={19} /></span><div className="insight-copy"><div className="insight-title"><b>Leitura contextual com IA</b><span className="ai-label">SOB DEMANDA</span></div><p>Selecione uma edificação para entender o status, as etapas e as informações disponíveis no Fênix.</p></div><button className="button button-ai-outline" onClick={() => visible[0] && launchAi(visible[0], `Explique a situação atual da edificação ${visible[0].reference}, considerando seus processos, etapas, documentos e próximos passos.`)} disabled={!visible.length}><Sparkles size={14} /> Explicar processo <ArrowRight size={14} /></button></section>
@@ -596,6 +631,7 @@ function DashboardPage() {
     {selected && <BuildingDrawer key={selected.id} building={selected} initialTab={selectedTab} initialProcessId={selectedProcessId} onClose={() => setSelected(null)} onAsk={(prompt) => launchAi(selected, prompt)} demo={data.user.demo} />}
     {aiOpen && <AiPanel building={aiBuilding} initialPrompt={aiPrompt} onClose={() => setAiOpen(false)} />}
     {toast && <div className="toast"><CheckCircle2 size={16} /> {toast}</div>}
+    {connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(message) => { setToast(message); window.setTimeout(() => setToast(''), 4200); setConnectionRevision((revision) => revision + 1); void refresh(); setConnectionModal(null); }} />}
   </Shell>;
 }
 
@@ -726,7 +762,7 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   const relatedProcesses = (items: ProcessDetail[]) => items.length > 1 && <div className="related-process-list"><div className="timeline-title"><h4>Processos nesta edificação <span className="doc-count">{items.length}</span></h4></div>{items.map((item) => <button className={`related-process ${process?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => setSelectedProcessId(item.id)}><span><b>{item.protocol || 'Protocolo não informado'}</b><small>{item.type} · {formatDate(item.updatedAt)}</small></span><StatusPill status={item.status} /></button>)}</div>;
   return <div className="drawer-backdrop"><section className="building-drawer" aria-label={`Detalhes de ${building.reference}`}>
     <header className="drawer-header"><div><span className="section-kicker">FICHA DA EDIFICAÇÃO</span><h2>Detalhes da edificação</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={19} /></button></header>
-    <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span></div><StatusPill status={building.status} />{validityHighlights.length > 0 && <div className="profile-validity">{validityHighlights.map((item) => <div key={item.key}><b>{item.label}</b><strong>{item.value}</strong><small>{item.detail}</small></div>)}</div>}</div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail && <div className="building-facts" aria-label="Características da edificação">{[
+    <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span><AccountSourceBadge name={building.sourceAccountName} paused={building.sourceAccountPaused} /></div><StatusPill status={building.status} />{validityHighlights.length > 0 && <div className="profile-validity">{validityHighlights.map((item) => <div key={item.key}><b>{item.label}</b><strong>{item.value}</strong><small>{item.detail}</small></div>)}</div>}</div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail && <div className="building-facts" aria-label="Características da edificação">{[
       detail.building.use ? { label: 'Uso / ocupação', value: detail.building.use } : null,
       (detail.building.totalArea ?? detail.building.area) ? { label: 'Área total', value: formatArea(detail.building.totalArea ?? detail.building.area) } : null,
       detail.building.buildingArea ? { label: 'Área construída', value: formatArea(detail.building.buildingArea) } : null,
@@ -945,6 +981,305 @@ function WebhookIntegration() {
   </section>;
 }
 
+type WebhookDeliveryLog = {
+  id: number; eventId: string; event: string; title: string; message: string; buildingName: string;
+  processId: string; protocol: string; documents: Array<{ name: string; type: string; availability: string; source: string }>;
+  status: 'sending' | 'delivered' | 'failed'; attempts: number; lastHttpStatus: number | null;
+  lastError: string; createdAt: string; lastAttemptAt: string | null; deliveredAt: string | null;
+  attemptHistory: Array<{ source: string; status: string; httpStatus: number | null; error: string; attemptedAt: string }>;
+};
+function formatWebhookDate(value: string | null) {
+  if (!value || !Number.isFinite(Date.parse(value))) return '—';
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bahia' }).format(new Date(value));
+}
+function WebhookLogPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [user, setUser] = useState<{ name: string; demo: boolean } | null>(null);
+  const [deliveries, setDeliveries] = useState<WebhookDeliveryLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [resendingId, setResendingId] = useState<number | null>(null);
+  const [query, setQuery] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  async function load() {
+    setLoading(true);
+    try {
+      const [log, me] = await Promise.all([
+        api<{ deliveries: WebhookDeliveryLog[] }>('/api/webhook/log?limit=200'),
+        api<{ user: { name: string; demo: boolean } }>('/api/auth/me')
+      ]);
+      setDeliveries(log.deliveries); setUser(me.user); setError('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Não foi possível carregar o log.');
+      if (!user) navigate('/entrar');
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); }, [location.key]);
+  async function resend(delivery: WebhookDeliveryLog) {
+    setResendingId(delivery.id); setMessage(''); setError('');
+    try {
+      const result = await api<{ delivered: boolean; message: string; error?: string }>(`/api/webhook/log/${delivery.id}/resend`, { method: 'POST' });
+      if (result.delivered) setMessage(`${result.message} · ${delivery.protocol || delivery.title}`);
+      else setError(`${result.message} ${result.error || ''}`);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível reenviar.'); await load(); }
+    finally { setResendingId(null); }
+  }
+  const normalizedQuery = query.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+  const visible = deliveries.filter((item) => !normalizedQuery || [item.title, item.message, item.buildingName, item.protocol, ...item.documents.map((doc) => doc.name)].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').includes(normalizedQuery));
+  if (!user) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /></div>;
+  return <Shell user={user} active="Log do webhook"><div className="page-content webhook-log-page">
+    <div className="page-heading"><div><span className="section-kicker">INTEGRAÇÕES</span><h1>Log do webhook</h1><p>Consulte as entregas, arquivos associados e reenvie um payload quando necessário.</p></div><div className="page-heading-actions"><button className="button button-outline" onClick={() => void load()} disabled={loading}>{loading ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} Atualizar</button><Link to="/configuracoes" className="button button-outline"><Settings size={15} /> Configurar webhook</Link></div></div>
+    <div className="webhook-log-note"><ShieldCheck size={16} /><span>Os payloads ficam criptografados no banco para permitir reenvio. O Base64 dos documentos não é exibido nesta tela. O log mantém os 500 envios mais recentes.</span></div>
+    {message && <div className="settings-message webhook-log-message">{message}</div>}{error && <div className="settings-message error webhook-log-message">{error}</div>}
+    <section className="settings-card webhook-log-card"><div className="webhook-log-toolbar"><div><b>{visible.length} {visible.length === 1 ? 'envio' : 'envios'}</b><small> · {deliveries.filter((item) => item.status === 'failed').length} com falha</small></div><label className="webhook-log-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar processo, edificação ou documento" /></label></div>
+      {loading && !deliveries.length ? <div className="webhook-log-empty"><LoaderCircle className="spin" size={18} /> Carregando envios...</div> : !visible.length ? <div className="webhook-log-empty"><ListChecks size={20} /><b>Nenhum envio encontrado</b><span>Os próximos testes e notificações aparecerão aqui.</span></div> : <div className="webhook-log-list">{visible.map((item) => <article className="webhook-log-row" key={item.id}>
+        <div className="webhook-log-row-main"><div className="webhook-log-title"><div><b>{item.title || item.event}</b><small>{formatWebhookDate(item.createdAt)} · {item.event}</small></div><span className={`webhook-delivery-status ${item.status}`}><i />{item.status === 'delivered' ? 'Entregue' : item.status === 'sending' ? 'Enviando' : 'Falhou'}{item.lastHttpStatus ? ` · HTTP ${item.lastHttpStatus}` : ''}</span></div>
+          <div className="webhook-log-process"><b>{item.buildingName || 'Edificação não identificada'}</b><span>{item.protocol || item.processId || 'Sem protocolo'}</span><p>{item.message}</p></div>
+          <div className="webhook-log-documents"><b>Documentos ({item.documents.length})</b>{item.documents.length ? <div>{item.documents.map((doc, index) => <span className={`webhook-document-chip ${doc.availability === 'included' ? 'included' : ''}`} key={`${doc.name}-${index}`} title={`${doc.type} · ${doc.source}`}><FileText size={13} />{doc.name}{doc.availability === 'included' ? ' · Base64' : ' · metadados'}</span>)}</div> : <small>Nenhum documento associado</small>}</div>
+          {item.lastError && <p className="webhook-log-error"><CircleAlert size={14} />{item.lastError}</p>}
+          <details className="webhook-attempt-details"><summary>{item.attempts} {item.attempts === 1 ? 'tentativa' : 'tentativas'} · ver histórico</summary>{item.attemptHistory.map((attempt, index) => <div key={`${attempt.attemptedAt}-${index}`}><span>{formatWebhookDate(attempt.attemptedAt)} · {attempt.source === 'manual' ? 'reenvio manual' : attempt.source === 'test' ? 'teste' : 'automático'}</span><b>{attempt.status === 'delivered' ? 'Entregue' : 'Falhou'}{attempt.httpStatus ? ` · HTTP ${attempt.httpStatus}` : ''}</b>{attempt.error && <small>{attempt.error}</small>}</div>)}</details>
+        </div><div className="webhook-log-row-action"><button className="button button-outline" onClick={() => void resend(item)} disabled={resendingId !== null || user.demo}>{resendingId === item.id ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />} Reenviar</button></div>
+      </article>)}</div>}
+    </section>
+  </div></Shell>;
+}
+
+type FenixConnectionSummary = {
+  id: string; label: string; status: 'active' | 'paused' | 'reauth_required' | 'error'; paused: boolean;
+  webhookEnabled: boolean; selectedCount: number; lastSync: string | null; syncStatus: string; syncMessage: string;
+};
+type FenixConnectionBuilding = { id: string; reference: string; municipality: string; selected: boolean; available: boolean; possibleDuplicates?: string[] };
+
+function connectionStatusLabel(status: FenixConnectionSummary['status']) {
+  if (status === 'paused') return 'Pausada';
+  if (status === 'reauth_required') return 'Precisa reconectar';
+  if (status === 'error') return 'Falha na última consulta';
+  return 'Ativa';
+}
+
+function FenixConnectionsPanel({ user, revision, onAdd, onManage, onReauthenticate, onChanged }: {
+  revision: number;
+  user: { demo: boolean }; onAdd: () => void; onManage: (connection: FenixConnectionSummary) => void;
+  onReauthenticate: (connection: FenixConnectionSummary) => void; onChanged: () => Promise<void>;
+}) {
+  const [connections, setConnections] = useState<FenixConnectionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState('');
+  const [editingId, setEditingId] = useState('');
+  const [editingLabel, setEditingLabel] = useState('');
+  const [confirmRemoveId, setConfirmRemoveId] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  async function load() {
+    setLoading(true);
+    try {
+      const result = await api<{ connections: FenixConnectionSummary[] }>('/api/fenix-connections');
+      setConnections(result.connections); setError('');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível carregar as conexões.'); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); }, [revision]);
+  async function update(connection: FenixConnectionSummary, patch: Record<string, unknown>, successMessage: string) {
+    setBusyId(connection.id); setMessage(''); setError('');
+    try {
+      await api(`/api/fenix-connections/${encodeURIComponent(connection.id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      setMessage(successMessage); await load(); await onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível atualizar a conexão.'); }
+    finally { setBusyId(''); }
+  }
+  async function sync(connection: FenixConnectionSummary) {
+    setBusyId(connection.id); setMessage(''); setError('');
+    try {
+      const result = await api<{ syncWarning?: boolean; error?: string }>('/api/fenix-connections/' + encodeURIComponent(connection.id) + '/sync', { method: 'POST' });
+      setMessage(result.syncWarning ? 'A conexão foi consultada, mas a atualização teve falhas.' : `Dados de ${connection.label} atualizados.`);
+      await load(); await onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível atualizar essa conta.'); await load(); }
+    finally { setBusyId(''); }
+  }
+  async function saveLabel(connection: FenixConnectionSummary) {
+    if (!editingLabel.trim()) { setError('Informe um nome para a conexão.'); return; }
+    await update(connection, { label: editingLabel.trim() }, 'Nome da conexão atualizado.');
+    setEditingId('');
+  }
+  async function remove(connection: FenixConnectionSummary) {
+    setBusyId(connection.id); setError(''); setMessage('');
+    try {
+      const result = await api<{ deletedBuildings: number }>('/api/fenix-connections/' + encodeURIComponent(connection.id), { method: 'DELETE', body: JSON.stringify({ deleteLocalData: true }) });
+      setConfirmRemoveId(''); setMessage(`${connection.label} removida. ${result.deletedBuildings} edificações e os dados locais relacionados foram excluídos.`);
+      await load(); await onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível remover a conexão.'); }
+    finally { setBusyId(''); }
+  }
+  return <section className="settings-card fenix-connections-card">
+    <div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Contas Fênix acompanhadas</h2><p>Conecte contas de clientes e selecione quais edificações entram no painel.</p></div><button className="button button-teal" onClick={onAdd} disabled={user.demo}><Plus size={15} /> Conta Fênix</button></div>
+    {message && <div className="settings-message">{message}</div>}{error && <div className="settings-message error">{error}</div>}
+    {loading ? <div className="connection-empty"><LoaderCircle size={18} className="spin" /> Carregando conexões...</div> : connections.length ? <div className="fenix-connection-list">{connections.map((connection) => <article className="fenix-connection-item" key={connection.id}>
+      <div className="fenix-connection-top"><span className="connection-company-icon"><Cloud size={18} /></span><div className="fenix-connection-title"><div><b>{connection.label}</b><span className={`settings-status ${connection.status === 'active' ? 'active' : ''}`}><i />{connectionStatusLabel(connection.status)}</span></div><small>{connection.selectedCount} {connection.selectedCount === 1 ? 'edificação acompanhada' : 'edificações acompanhadas'} · última consulta {connection.lastSync ? formatDate(connection.lastSync) : 'ainda não realizada'}</small>{connection.syncMessage && connection.status !== 'active' && <small className="connection-last-error">{connection.syncMessage}</small>}</div></div>
+      {editingId === connection.id && <form className="connection-rename-form" onSubmit={(event) => { event.preventDefault(); void saveLabel(connection); }}><label>Nome desta conexão<input value={editingLabel} maxLength={60} onChange={(event) => setEditingLabel(event.target.value)} autoFocus /></label><button className="button button-teal button-sm" disabled={busyId === connection.id}><Check size={14} /> Salvar</button><button className="button button-outline button-sm" type="button" onClick={() => setEditingId('')}>Cancelar</button></form>}
+      <div className="fenix-connection-actions"><button className="button button-outline button-sm" onClick={() => onManage(connection)}><Building2 size={14} /> Gerenciar edificações</button>{connection.status === 'reauth_required' && <button className="button button-outline button-sm" onClick={() => onReauthenticate(connection)}><KeyRound size={14} /> Reconectar</button>}<button className="button button-outline button-sm" onClick={() => void sync(connection)} disabled={busyId === connection.id || connection.paused || !connection.selectedCount} title={!connection.selectedCount ? 'Selecione edificações para consultar esta conta.' : undefined}>{busyId === connection.id ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} Atualizar</button><button className="button button-outline button-sm" onClick={() => void update(connection, { paused: !connection.paused }, connection.paused ? 'Sincronização retomada.' : 'Sincronização pausada.') } disabled={busyId === connection.id}>{connection.paused ? <Play size={14} /> : <Pause size={14} />}{connection.paused ? 'Retomar' : 'Pausar'}</button><button className="button button-outline button-sm" onClick={() => { setEditingId(connection.id); setEditingLabel(connection.label); setError(''); }}><Pencil size={14} /> Renomear</button><button className="button button-danger button-sm" onClick={() => setConfirmRemoveId(confirmRemoveId === connection.id ? '' : connection.id)} disabled={busyId === connection.id}><Trash2 size={14} /> Remover</button></div>
+      <label className="connection-webhook-toggle"><input type="checkbox" checked={connection.webhookEnabled} onChange={(event) => void update(connection, { webhookEnabled: event.target.checked }, event.target.checked ? 'Mudanças dessa conta serão enviadas ao webhook.' : 'O webhook foi desativado para essa conta.')} /><span><b>Enviar mudanças ao webhook</b><small>Desativado por padrão para novas contas.</small></span></label>
+      {confirmRemoveId === connection.id && <div className="connection-delete-confirm" role="alert"><b>Excluir conexão e dados locais?</b><p>A sessão, as edificações, processos, históricos, notificações e conversas dessa conta serão apagados do painel. Isso não altera o Fênix.</p><button className="button button-danger button-sm" onClick={() => void remove(connection)} disabled={busyId === connection.id}>{busyId === connection.id ? 'Excluindo…' : 'Excluir conexão e dados'}</button><button className="button button-outline button-sm" onClick={() => setConfirmRemoveId('')}>Cancelar</button></div>}
+    </article>)}</div> : <div className="connection-empty"><Cloud size={20} /><b>Nenhuma conta de cliente conectada</b><span>Adicione uma conta Fênix para selecionar edificações de clientes.</span>{user.demo && <small>Entre com uma conta real da empresa para conectar contas adicionais.</small>}</div>}
+  </section>;
+}
+
+function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
+  mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary;
+  onClose: () => void; onSaved: (message: string) => void;
+}) {
+  const [siteKey, setSiteKey] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [step, setStep] = useState<'connect' | 'select'>(mode === 'manage' ? 'select' : 'connect');
+  const [pendingId, setPendingId] = useState('');
+  const [label, setLabel] = useState(connection?.label || 'Conta Fênix');
+  const [buildings, setBuildings] = useState<FenixConnectionBuilding[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [catalogAvailable, setCatalogAvailable] = useState(true);
+  const [error, setError] = useState('');
+  const [loginStage, setLoginStage] = useState(-1);
+  const [loginCompleted, setLoginCompleted] = useState<number[]>([]);
+  const captchaRef = useRef<HCaptcha>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const title = mode === 'new' ? 'Conectar conta Fênix' : mode === 'reauth' ? `Reconectar ${connection?.label || 'conta Fênix'}` : `Gerenciar ${connection?.label || 'conta Fênix'}`;
+  async function loadExistingCatalog(preserveSelection = false) {
+    if (!connection) return;
+    setLoadingCatalog(true); setError('');
+    try {
+      const result = await api<{ buildings: FenixConnectionBuilding[]; catalogAvailable: boolean }>(`/api/fenix-connections/${encodeURIComponent(connection.id)}/buildings`);
+      setBuildings(result.buildings);
+      setSelectedIds((current) => new Set(result.buildings.filter((item) => preserveSelection ? current.has(item.id) : item.selected).map((item) => item.id)));
+      setCatalogAvailable(result.catalogAvailable);
+    } catch (e) { setCatalogAvailable(false); setError(e instanceof Error ? e.message : 'Não foi possível carregar as edificações.'); }
+    finally { setLoadingCatalog(false); }
+  }
+  async function loadPendingCatalog(id: string) {
+    setLoadingCatalog(true); setCatalogAvailable(true); setError('');
+    try {
+      const catalog = await api<{ buildings: FenixConnectionBuilding[] }>(`/api/fenix-connections/pending/${encodeURIComponent(id)}/buildings`);
+      setBuildings(catalog.buildings.map((item) => ({ ...item, selected: false, available: true })));
+      setSelectedIds(new Set());
+    } catch (e) {
+      setCatalogAvailable(false);
+      setError(e instanceof Error ? e.message : 'Não foi possível carregar as edificações dessa conta.');
+    } finally { setLoadingCatalog(false); }
+  }
+  function retryCatalog() {
+    if (pendingId) void loadPendingCatalog(pendingId);
+    else void loadExistingCatalog(true);
+  }
+  function restartExpiredLogin() {
+    if (pendingId) void api(`/api/fenix-connections/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }).catch(() => undefined);
+    setPendingId(''); setStep('connect'); setBuildings([]); setSelectedIds(new Set()); setLabel('Conta Fênix');
+    setCatalogAvailable(true); setError(''); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
+    window.setTimeout(() => emailRef.current?.focus(), 80);
+  }
+  useEffect(() => {
+    void api<{ hcaptchaSiteKey: string }>('/api/config').then((result) => setSiteKey(result.hcaptchaSiteKey)).catch(() => setError('Não foi possível carregar o hCaptcha.'));
+    if (mode === 'manage') void loadExistingCatalog();
+    else window.setTimeout(() => emailRef.current?.focus(), 80);
+  }, []);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) close(); };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, [busy, pendingId]);
+  useEffect(() => () => { if (pendingId) void api(`/api/fenix-connections/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }).catch(() => undefined); }, [pendingId]);
+  function close() {
+    if (busy) return;
+    if (pendingId) { void api(`/api/fenix-connections/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }).catch(() => undefined); setPendingId(''); }
+    onClose();
+  }
+  async function login(event: FormEvent) {
+    event.preventDefault(); setError('');
+    if (!captchaToken) { setError('Conclua o hCaptcha para continuar.'); return; }
+    setBusy(true); setLoginStage(-1); setLoginCompleted([]);
+    let poller: number | undefined;
+    try {
+      if (mode === 'reauth' && connection) {
+        await api(`/api/fenix-connections/${encodeURIComponent(connection.id)}/reauthenticate`, { method: 'POST', body: JSON.stringify({ email, password, hcaptchaToken: captchaToken }) });
+        setPassword(''); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
+        await loadExistingCatalog(); setStep('select');
+      } else {
+        const progressId = crypto.randomUUID();
+        poller = window.setInterval(() => void api<{ stage: number; completedStages: number[] }>(`/api/auth/login/progress/${progressId}`).then((progress) => {
+          setLoginStage((current) => Math.max(current, progress.stage)); setLoginCompleted((current) => [...new Set([...current, ...progress.completedStages])]);
+        }).catch(() => undefined), 300);
+        const result = await api<{ pendingId: string; accountName?: string }>('/api/fenix-connections/login', { method: 'POST', body: JSON.stringify({ email, password, hcaptchaToken: captchaToken, progressId }) });
+        setPendingId(result.pendingId);
+        setLabel(result.accountName || 'Conta Fênix'); setLoginStage(6); setLoginCompleted([0, 1, 2, 3, 4, 5, 6]); setStep('select');
+        setPassword(''); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
+        await loadPendingCatalog(result.pendingId);
+      }
+      setPassword(''); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Não foi possível autenticar essa conta.';
+      setError(message); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
+      if (mode === 'new' && pendingId) { await api(`/api/fenix-connections/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }).catch(() => undefined); setPendingId(''); }
+    } finally { if (poller) window.clearInterval(poller); setBusy(false); }
+  }
+  async function saveSelection() {
+    if (mode === 'new' && !selectedIds.size) { setError('Selecione ao menos uma edificação para acompanhar.'); return; }
+    setBusy(true); setError('');
+    try {
+      if (mode === 'new') {
+        const result = await api<{ connection: FenixConnectionSummary; syncWarning: boolean; syncMessage: string }>('/api/fenix-connections', { method: 'POST', body: JSON.stringify({ pendingId, label, selectedBuildingIds: [...selectedIds] }) });
+        setPendingId(''); onSaved(result.syncWarning ? `${result.connection.label} foi conectada. A sincronização inicial precisa de nova tentativa: ${result.syncMessage}` : `${selectedIds.size} edificações de ${result.connection.label} agora estão em acompanhamento.`);
+      } else if (connection) {
+        const result = await api<{ syncWarning: boolean; syncMessage: string }>(`/api/fenix-connections/${encodeURIComponent(connection.id)}/buildings`, { method: 'PUT', body: JSON.stringify({ selectedBuildingIds: [...selectedIds] }) });
+        if (label.trim() && label.trim() !== connection.label) await api(`/api/fenix-connections/${encodeURIComponent(connection.id)}`, { method: 'PATCH', body: JSON.stringify({ label: label.trim() }) });
+        onSaved(result.syncWarning ? `Seleção salva. A atualização de ${label} teve uma falha: ${result.syncMessage}` : `Seleção de ${label} atualizada: ${selectedIds.size} edificações em acompanhamento.${result.syncMessage ? ` ${result.syncMessage}` : ''}`);
+      }
+      onClose();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível salvar as edificações selecionadas.'); }
+    finally { setBusy(false); }
+  }
+  const visibleBuildings = buildings.filter((item) => `${item.reference} ${item.municipality}`.toLocaleLowerCase('pt-BR').includes(query.trim().toLocaleLowerCase('pt-BR')));
+  const selectedCount = selectedIds.size;
+  const toggleBuilding = (item: FenixConnectionBuilding) => {
+    if (!item.available && !selectedIds.has(item.id)) return;
+    setSelectedIds((current) => { const next = new Set(current); next.has(item.id) ? next.delete(item.id) : next.add(item.id); return next; });
+  };
+  return <div className="fenix-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+    <section className="fenix-connect-modal" role="dialog" aria-modal="true" aria-labelledby="fenix-connect-title" aria-busy={busy}>
+      <header className="fenix-modal-header"><div><span className="section-kicker">{step === 'connect' ? 'PASSO 1 DE 2 · CONECTAR' : 'PASSO 2 DE 2 · SELECIONAR'}</span><h2 id="fenix-connect-title">{title}</h2><p>{step === 'connect' ? 'A conta principal do Painel continuará conectada.' : 'Escolha quais edificações essa conta vai acompanhar.'}</p></div><button className="icon-button" aria-label="Fechar" onClick={close} disabled={busy}><X size={19} /></button></header>
+      <div className={`fenix-modal-step ${step === 'select' ? 'fenix-step-active' : ''}`} key={step}>
+        {step === 'connect' ? <form className="fenix-login-form" onSubmit={(event) => void login(event)}>
+          <div className="fenix-modal-notice"><ShieldCheck size={17} /><span>Use a conta do cliente. Você precisa ter autorização para acompanhar os dados dela.</span></div>
+          <label>Usuário ou e-mail Fênix<input ref={emailRef} autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+          <label>Senha Fênix<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+          <div className="captcha-wrap fenix-modal-captcha">{siteKey && <HCaptcha ref={captchaRef} sitekey={siteKey} onVerify={setCaptchaToken} onExpire={() => setCaptchaToken('')} onError={() => setError('Não foi possível validar o hCaptcha. Tente novamente.')} />}</div>
+          {error && <div className="form-error" role="alert"><CircleAlert size={15} />{error}</div>}
+          {busy && <div className="connection-login-progress" aria-live="polite"><LoaderCircle className="spin" size={16} />{loginStage < 0 ? 'Validando acesso com o Fênix…' : loginStage < 4 ? 'Autenticando a conta…' : 'Acesso aprovado; carregando a lista…'}</div>}
+          <button className="button button-teal button-wide" type="submit" disabled={busy || !siteKey}>{busy ? <><LoaderCircle size={15} className="spin" /> Conectando…</> : <>Conectar conta <ArrowRight size={15} /></>}</button>
+          <small className="field-hint">A senha e o token hCaptcha são usados apenas para autenticar. O Painel guarda a sessão criptografada para futuras consultas.</small>
+        </form> : <div className="fenix-building-picker">
+          <div className="fenix-selection-summary"><div><b>{selectedCount} {selectedCount === 1 ? 'selecionada' : 'selecionadas'}</b><small>{mode === 'new' ? 'Apenas as selecionadas serão adicionadas ao painel.' : 'As desmarcadas deixam as listas ativas e ficam guardadas para reativação.'}</small></div><label className="fenix-connection-label">{mode === 'new' ? 'Nome para identificar esta conta' : 'Nome da conexão'}<input value={label} maxLength={60} onChange={(event) => setLabel(event.target.value)} /></label></div>
+          {!catalogAvailable && <div className="settings-message error fenix-catalog-retry" role="alert"><span>{error || (buildings.length ? 'Não foi possível atualizar a lista agora. A última lista salva continua disponível.' : 'Não foi possível carregar a lista desta conta.')}</span>{mode === 'new' && pendingId && error.toLocaleLowerCase('pt-BR').includes('expirou') ? <button className="button button-outline button-sm" type="button" onClick={restartExpiredLogin}>Fazer login novamente</button> : <button className="button button-outline button-sm" type="button" onClick={retryCatalog} disabled={loadingCatalog || (mode === 'new' && !pendingId)}>{loadingCatalog ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} Tentar carregar novamente</button>}</div>}
+          {loadingCatalog ? <div className="fenix-building-skeletons" aria-label="Carregando edificações">{Array.from({ length: 6 }, (_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : buildings.length ? <>
+            <label className="fenix-building-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar edificação ou município" /></label>
+            <div className="fenix-building-list">{visibleBuildings.map((item) => {
+              const selected = selectedIds.has(item.id);
+              return <button type="button" key={item.id} role="checkbox" aria-checked={selected} aria-label={`${item.reference}, ${item.municipality || 'município não informado'}`} className={`fenix-building-option ${selected ? 'selected' : ''} ${!item.available ? 'unavailable' : ''}`} onClick={() => toggleBuilding(item)} disabled={!item.available && !selected}>
+                <span className="fenix-building-option-icon"><Building2 size={17} /></span><span className="fenix-building-option-copy"><b>{item.reference}</b><small>{item.municipality || 'Município não informado'}{!item.available ? ' · não retornada na última consulta' : ''}</small>{Boolean(item.possibleDuplicates?.length) && <small className="fenix-building-duplicate">Possível duplicidade: já acompanhada em {item.possibleDuplicates?.join(', ')}</small>}</span><span className={`fenix-switch ${selected ? 'on' : ''}`} aria-hidden="true"><i /></span>
+              </button>;
+            })}{!visibleBuildings.length && <div className="connection-empty"><Search size={18} />Nenhuma edificação corresponde à busca.</div>}</div>
+          </> : !catalogAvailable ? <div className="connection-empty"><Building2 size={20} /><b>Lista temporariamente indisponível</b><span>Você pode tentar novamente sem repetir o login.</span></div> : <div className="connection-empty"><Building2 size={20} /><b>Nenhuma edificação encontrada nessa conta</b><span>O Fênix não retornou edificações disponíveis para acompanhamento.</span><button className="button button-outline button-sm" type="button" onClick={retryCatalog} disabled={loadingCatalog}><RefreshCw size={14} /> Tentar carregar novamente</button></div>}
+          {error && catalogAvailable && <div className="settings-message error" role="alert">{error}</div>}
+        </div>}
+      </div>
+      {step === 'select' && <footer className="fenix-modal-footer"><button className="button button-outline" onClick={() => mode === 'new' ? close() : setStep('connect')} disabled={busy}>{mode === 'new' ? 'Cancelar' : mode === 'reauth' ? 'Voltar ao login' : 'Fechar'}</button><span>{selectedCount} {selectedCount === 1 ? 'edificação' : 'edificações'} selecionadas</span><button className="button button-teal" onClick={() => void saveSelection()} disabled={busy || (mode === 'new' && selectedCount === 0)}>{busy ? <><LoaderCircle size={15} className="spin" /> Salvando…</> : <>{mode === 'new' ? 'Acompanhar' : 'Salvar seleção'} {mode === 'new' ? selectedCount : ''} <ArrowRight size={15} /></>}</button></footer>}
+      {busy && !(step === 'select' && loadingCatalog) && <div className="fenix-modal-processing" aria-live="polite"><div><LoaderCircle size={30} className="spin" /><b>{step === 'connect' ? 'Conectando à conta Fênix' : 'Salvando acompanhamento'}</b><span>{step === 'connect' ? 'O login não altera sua conta principal.' : 'Aplicando a seleção e preparando a sincronização.'}</span></div></div>}
+    </section>
+  </div>;
+}
+
 function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -954,6 +1289,9 @@ function SettingsPage() {
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [user, setUser] = useState<{ name: string; demo: boolean } | null>(null);
+  const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary } | null>(null);
+  const [connectionRevision, setConnectionRevision] = useState(0);
+  const [connectionMessage, setConnectionMessage] = useState('');
   useEffect(() => {
     Promise.all([api<{ configured: boolean; model: string }>('/api/settings/ai'), api<{ user: { name: string; demo: boolean } }>('/api/auth/me')])
       .then(([ai, me]) => { setConfigured(ai.configured); setModel(ai.model); setUser(me.user); })
@@ -966,7 +1304,7 @@ function SettingsPage() {
     finally { setSaving(false); }
   }
   if (!user) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /></div>;
-  return <Shell user={user} active="Configurações"><div className="page-content settings-page"><div className="page-heading"><div><span className="section-kicker">PREFERÊNCIAS DO PAINEL</span><h1>Configurações</h1><p>Configure os filtros de acompanhamento, a IA e a conexão com o Fênix.</p></div></div><section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label>Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label>Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section><UserPreferences /><ProcessMenuSettings /><RenewalSettings /><WebhookIntegration /><section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section></div></Shell>;
+  return <Shell user={user} active="Configurações"><div className="page-content settings-page"><div className="page-heading"><div><span className="section-kicker">PREFERÊNCIAS DO PAINEL</span><h1>Configurações</h1><p>Configure os filtros, a IA e as conexões com o Fênix.</p></div></div><section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label>Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label>Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section><UserPreferences /><ProcessMenuSettings /><RenewalSettings /><WebhookIntegration /><FenixConnectionsPanel user={user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => undefined} />{connectionMessage && <div className="settings-message">{connectionMessage}</div>}<section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso principal ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section>{connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(savedMessage) => { setConnectionMessage(savedMessage); setConnectionRevision((revision) => revision + 1); setConnectionModal(null); }} />}</div></Shell>;
 }
 
 function ProtectedDashboard() {
@@ -974,5 +1312,5 @@ function ProtectedDashboard() {
 }
 
 export default function App() {
-  return <Routes><Route path="/" element={<Landing />} /><Route path="/entrar" element={<Login />} /><Route path="/painel" element={<ProtectedDashboard />} /><Route path="/configuracoes" element={<SettingsPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes>;
+  return <Routes><Route path="/" element={<Landing />} /><Route path="/entrar" element={<Login />} /><Route path="/painel" element={<ProtectedDashboard />} /><Route path="/configuracoes" element={<SettingsPage />} /><Route path="/log" element={<WebhookLogPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes>;
 }

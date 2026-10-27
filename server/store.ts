@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS buildings (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_connection_id TEXT,
+  remote_id TEXT,
   reference TEXT NOT NULL,
   municipality TEXT NOT NULL DEFAULT '',
   address TEXT NOT NULL DEFAULT '',
@@ -65,6 +67,8 @@ CREATE TABLE IF NOT EXISTS buildings (
 CREATE TABLE IF NOT EXISTS processes (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_connection_id TEXT,
+  remote_id TEXT,
   building_id TEXT NOT NULL,
   protocol TEXT NOT NULL DEFAULT '',
   type TEXT NOT NULL DEFAULT 'Projeto técnico',
@@ -133,6 +137,37 @@ CREATE TABLE IF NOT EXISTS notifications (
   read_at TEXT
 );
 CREATE INDEX IF NOT EXISTS notifications_user_created ON notifications(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL,
+  event TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  building_name TEXT NOT NULL DEFAULT '',
+  process_id TEXT NOT NULL DEFAULT '',
+  protocol TEXT NOT NULL DEFAULT '',
+  documents_json TEXT NOT NULL DEFAULT '[]',
+  payload_ciphertext TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'sending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_http_status INTEGER,
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  last_attempt_at TEXT,
+  delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS webhook_deliveries_user_created ON webhook_deliveries(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  delivery_id INTEGER NOT NULL REFERENCES webhook_deliveries(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  http_status INTEGER,
+  error TEXT NOT NULL DEFAULT '',
+  attempted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS webhook_delivery_attempts_delivery ON webhook_delivery_attempts(delivery_id, attempted_at DESC);
 CREATE TABLE IF NOT EXISTS ai_chat_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -161,6 +196,51 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   ai_custom_prompt TEXT NOT NULL DEFAULT ''
 );
 UPDATE user_preferences SET ai_max_processes = 1000 WHERE ai_max_processes = 100 AND ai_custom_prompt = '' AND ai_data_access = 1 AND ai_include_documents = 1;
+`);
+
+// A linked Fênix identity has its own encrypted session and data partition. It
+// is never inserted into `sessions`, which remains the panel's login boundary.
+db.exec(`
+CREATE TABLE IF NOT EXISTS fenix_connections (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  data_user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  fenix_user_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  paused INTEGER NOT NULL DEFAULT 0,
+  webhook_enabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(owner_user_id, fenix_user_id)
+);
+CREATE INDEX IF NOT EXISTS fenix_connections_owner ON fenix_connections(owner_user_id, created_at);
+CREATE TABLE IF NOT EXISTS fenix_connection_buildings (
+  connection_id TEXT NOT NULL REFERENCES fenix_connections(id) ON DELETE CASCADE,
+  remote_building_id TEXT NOT NULL,
+  reference TEXT NOT NULL DEFAULT 'Edificação',
+  municipality TEXT NOT NULL DEFAULT '',
+  selected INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(connection_id, remote_building_id)
+);
+CREATE INDEX IF NOT EXISTS fenix_connection_buildings_selected ON fenix_connection_buildings(connection_id, selected);
+`);
+
+for (const [table, column] of [
+  ['buildings', 'source_connection_id'], ['buildings', 'remote_id'],
+  ['processes', 'source_connection_id'], ['processes', 'remote_id'],
+  ['webhook_deliveries', 'source_connection_id']
+] as const) {
+  try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`); }
+  catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
+  }
+}
+db.exec(`
+CREATE INDEX IF NOT EXISTS buildings_source ON buildings(source_connection_id, remote_id);
+CREATE INDEX IF NOT EXISTS processes_source ON processes(source_connection_id, remote_id);
+CREATE INDEX IF NOT EXISTS webhook_deliveries_source ON webhook_deliveries(source_connection_id);
 `);
 
 db.exec(`

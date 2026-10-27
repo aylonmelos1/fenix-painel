@@ -9,6 +9,10 @@ export type ProcessRecord = {
   stage: string;
   updated_at: string;
   payload: string;
+  remote_id?: string | null;
+  source_account_name?: string | null;
+  source_connection_id?: string | null;
+  source_account_paused?: number | boolean | null;
 };
 
 export type DashboardProcess = {
@@ -22,6 +26,9 @@ export type DashboardProcess = {
   stage: string;
   updatedAt: string;
   documentCount: number;
+  sourceAccountName?: string | null;
+  sourceConnectionId?: string | null;
+  sourceAccountPaused?: boolean;
   analysisEnteredAt?: string | null;
   notificationEnteredAt?: string | null;
   latestActivityAt?: string | null;
@@ -93,6 +100,9 @@ export function toDashboardProcess(process: ProcessRecord): DashboardProcess {
     status: process.status,
     stage: process.stage,
     updatedAt: process.updated_at,
-    documentCount: countProcessDocuments(process.payload)
+    documentCount: countProcessDocuments(process.payload),
+    sourceAccountName: process.source_account_name || null,
+    sourceConnectionId: process.source_connection_id || null,
+    sourceAccountPaused: Boolean(process.source_account_paused)
   };
 }
