@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
-import { sendNotification, setVapidDetails, type PushSubscription, type WebPushError } from 'web-push';
+import { createRequire } from 'node:module';
+import type { PushSubscription, WebPushError } from 'web-push';
 import { db, seal, unseal } from './store.js';
+
+const require = createRequire(import.meta.url);
+const { sendNotification, setVapidDetails } = require('web-push') as typeof import('web-push');
 
 const MAX_ATTEMPTS = 8;
 const MAX_DELIVERY_BATCH = 20;
