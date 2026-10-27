@@ -869,6 +869,8 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   const [tab, setTab] = useState(initialTab);
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [historyRefreshFeedback, setHistoryRefreshFeedback] = useState<{ message: string; tone: 'success' | 'warning' | 'error' } | null>(null);
   const [downloadingDocumentId, setDownloadingDocumentId] = useState<string | null>(null);
   const [manualDaeIds, setManualDaeIds] = useState<Set<string>>(() => new Set());
   const [documentErrors, setDocumentErrors] = useState<Record<string, string>>({});
@@ -880,6 +882,7 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   useEffect(() => {
     let active = true;
     setDetail(null); setError(''); setAiInsight(''); setAiInsightSources([]); setAiInsightUnavailable(false);
+    setHistoryRefreshFeedback(null);
     api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`).then(async (result) => {
       if (!active) return;
       setDetail(result);
@@ -894,6 +897,16 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
     }).catch((e) => { if (active) setError(e.message); });
     return () => { active = false; };
   }, [building.id, demo]);
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
+    };
+  }, []);
   useEffect(() => { const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.querySelector('.ai-panel')) onClose(); }; window.addEventListener('keydown', closeOnEscape); return () => window.removeEventListener('keydown', closeOnEscape); }, [onClose]);
   useEffect(() => { setSelectedProcessId(null); }, [tab, building.id]);
   useEffect(() => { if (initialProcessId && detail?.processes.some((process) => process.id === initialProcessId)) setSelectedProcessId(initialProcessId); }, [detail, initialProcessId]);
@@ -979,6 +992,34 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
     } catch (error) { const message = error instanceof Error ? error.message : 'Falha ao baixar o documento oficial.'; setDocumentErrors((current) => ({ ...current, [doc.id]: message })); }
     finally { setDownloadingDocumentId(null); }
   }
+  async function refreshBuildingHistory() {
+    if (demo || historyRefreshing) return;
+    setHistoryRefreshing(true);
+    setHistoryRefreshFeedback(null);
+    try {
+      const result = await api<{ total: number; refreshed: number; failed: number; histories: Array<{ processId: string; timeline: ProcessDetail['timeline'] }> }>(
+        `/api/buildings/${encodeURIComponent(building.id)}/history/refresh`,
+        { method: 'POST' }
+      );
+      const timelines = new Map(result.histories.map((item) => [item.processId, item.timeline]));
+      setDetail((current) => current ? {
+        ...current,
+        processes: current.processes.map((item) => timelines.has(item.id) ? { ...item, timeline: timelines.get(item.id)! } : item)
+      } : current);
+      setHistoryRefreshFeedback({
+        message: result.failed
+          ? `${result.refreshed} histórico(s) atualizado(s); ${result.failed} não puderam ser consultados.`
+          : result.refreshed
+            ? `Histórico atualizado para ${result.refreshed} processo(s) desta edificação.`
+            : 'Esta edificação não tem processos técnicos com histórico atualizável.',
+        tone: result.failed ? (result.refreshed ? 'warning' : 'error') : 'success'
+      });
+    } catch (refreshError) {
+      setHistoryRefreshFeedback({ message: refreshError instanceof Error ? refreshError.message : 'Não foi possível atualizar o histórico agora.', tone: 'error' });
+    } finally {
+      setHistoryRefreshing(false);
+    }
+  }
   const documentsPanel = <div className="documents-block"><div className="timeline-title"><div><h4>Documentos anexados <span className="doc-count">{documents.length}</span></h4><small>O estado e a origem são informados por arquivo; documentos oficiais são consultados no Fênix.</small></div><button className="button button-ai-min" onClick={() => onAsk(`Analise os documentos vinculados à edificação ${building.reference}. Identifique quais constam nos dados, o que cada um indica e o que ainda precisa ser conferido no Fênix.`)}><Sparkles size={13} /> Analisar documentos</button></div>{documents.length ? <div className="document-list">{documents.map((doc) => {
     const errorMessage = documentErrors[doc.id] || doc.availabilityMessage;
     const manualDae = manualDaeIds.has(doc.id) || doc.availabilityMessage?.startsWith('A emissão deste DAE exige') === true;
@@ -986,7 +1027,8 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
     const stateLabel = doc.kind === 'dae' && doc.available ? 'Abrir na SEFAZ-BA' : doc.status === 'demo' ? 'Arquivo ilustrativo' : errorMessage ? 'Indisponível' : doc.available ? 'Disponível' : 'Sem download';
     return <div className="document-row" key={doc.id}><span className="pdf-icon">PDF</span><span className="doc-info"><b>{doc.name}</b><small>{doc.source === 'fenix' ? `${doc.type} · Documento oficial` : `${doc.type} · ${formatDate(doc.date)}`}</small>{errorMessage && <small className="document-error-text">{errorMessage}</small>}</span><span className={`document-state ${errorMessage || !doc.available ? 'document-state-warning' : 'document-state-ready'}`}>{stateLabel}</span>{retryMetadata ? <button className="button button-ghost document-retry" onClick={async () => { setDownloadingDocumentId(doc.id); try { const result = await api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`); setDetail(result); setDocumentErrors((current) => { const next = { ...current }; delete next[doc.id]; return next; }); } catch (error) { setDocumentErrors((current) => ({ ...current, [doc.id]: error instanceof Error ? error.message : 'Falha ao consultar o Fênix.' })); } finally { setDownloadingDocumentId(null); } }}>{downloadingDocumentId === doc.id ? 'Consultando…' : 'Tentar novamente'}</button> : doc.source === 'fenix' ? <button className="icon-button doc-download" title={manualDae && doc.kind !== 'dae' ? 'A emissão do DAE exige uma etapa manual no portal da SEFAZ-BA' : !doc.available ? (errorMessage || 'Documento não disponível no Fênix.') : doc.kind === 'dae' ? 'Abrir DAE no portal SEFAZ-BA' : `Baixar ${doc.kind === 'protocol' ? 'comprovante de protocolo' : doc.kind === 'notification' ? 'notificação' : 'certificado'} oficial do Fênix`} aria-label={`${doc.kind === 'dae' ? 'Abrir' : 'Baixar'} ${doc.name}`} disabled={downloadingDocumentId === doc.id || (manualDae && doc.kind !== 'dae') || !doc.available} onClick={() => void downloadOfficialDocument(doc)}>{downloadingDocumentId === doc.id ? <LoaderCircle className="spin" size={16} /> : <ArrowDownToLine size={16} />}</button> : demo ? <button className="icon-button doc-download" title="Arquivo ilustrativo; clique para ver o aviso" onClick={() => setNotice('Demonstração: este registro ilustra a lista de anexos e não contém um arquivo oficial.')}><ArrowDownToLine size={16} /></button> : <button className="icon-button doc-download" title="O Fênix não forneceu um endereço de download validado para este anexo." disabled><ArrowDownToLine size={16} /></button>}</div>;
   })}</div> : <div className="documents-empty"><FileText size={17} /> O Fênix não retornou documentos ou certificados disponíveis para esta edificação.</div>}{notice && <div className="document-notice" role="status"><CircleAlert size={13} /> {notice}</div>}{!demo && documents.some((doc) => doc.source === 'fenix') && <small className="source-limit">Documentos de retificação podem não ser autorizados pela sessão Fênix. O DAE pode exigir emissão manual na SEFAZ-BA.</small>}</div>;
-  const historyPanel = <div className="history-list"><div className="timeline-title"><div><h4>Movimentações do processo</h4><small>Histórico oficial de status retornado pelo Fênix.</small></div><button className="button button-ai-min" onClick={() => onAsk(`Resuma em ordem cronológica o histórico dos processos da edificação ${building.reference}. Explique as mudanças relevantes, a situação atual e o próximo passo que os dados permitem inferir.`)}><Sparkles size={13} /> Resumir histórico</button></div>{allProcesses.length ? allProcesses.map((item) => <section className="history-process" key={item.id}><div className="history-process-title"><span className="history-entry-icon"><ClipboardList size={15} /></span><div><b>{item.type} · {item.protocol || 'Protocolo não informado'}</b><small>{item.timeline.length ? `${item.timeline.length} movimentações` : item.stage || item.status}</small></div><StatusPill status={item.status} /></div>{item.timeline.length ? <div className="history-event-list">{item.timeline.map((event, index) => <div className="history-event" key={`${event.label}-${event.date}-${index}`}><span className={`history-event-dot ${event.current ? 'current' : event.done ? 'done' : ''}`} /><span><b>{event.label}</b><small>{event.date ? formatDate(event.date) : 'Data não informada'}</small></span></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas para este processo.</div>}</section>) : <div className="timeline-empty">Não há processos vinculados para compor o histórico.</div>}</div>;
+  const updatableHistoryCount = allProcesses.filter((item) => item.id.startsWith('technicalproject:')).length;
+  const historyPanel = <div className="history-list"><div className="timeline-title"><div><h4>Movimentações do processo</h4><small>Histórico oficial de status retornado pelo Fênix.</small></div><div className="history-actions"><button className="button button-outline history-refresh-button" onClick={() => void refreshBuildingHistory()} disabled={demo || historyRefreshing || updatableHistoryCount === 0} title={demo ? 'Disponível em contas conectadas ao Fênix.' : updatableHistoryCount === 0 ? 'Esta edificação não tem processos técnicos com histórico atualizável.' : 'Atualiza somente os processos técnicos desta edificação.'}><RefreshCw className={historyRefreshing ? 'spin' : ''} size={14} /> {historyRefreshing ? 'Atualizando…' : 'Atualizar histórico'}</button><button className="button button-ai-min" onClick={() => onAsk(`Resuma em ordem cronológica o histórico dos processos da edificação ${building.reference}. Explique as mudanças relevantes, a situação atual e o próximo passo que os dados permitem inferir.`)}><Sparkles size={13} /> Resumir histórico</button></div></div>{historyRefreshFeedback && <div className={`history-refresh-feedback ${historyRefreshFeedback.tone}`} role="status">{historyRefreshFeedback.message}</div>}{allProcesses.length ? allProcesses.map((item) => <section className="history-process" key={item.id}><div className="history-process-title"><span className="history-entry-icon"><ClipboardList size={15} /></span><div><b>{item.type} · {item.protocol || 'Protocolo não informado'}</b><small>{item.timeline.length ? `${item.timeline.length} movimentações` : item.stage || item.status}</small></div><StatusPill status={item.status} /></div>{item.timeline.length ? <div className="history-event-list">{item.timeline.map((event, index) => <div className="history-event" key={`${event.label}-${event.date}-${index}`}><span className={`history-event-dot ${event.current ? 'current' : event.done ? 'done' : ''}`} /><span><b>{event.label}</b><small>{event.date ? formatDate(event.date) : 'Data não informada'}</small></span></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas para este processo.</div>}</section>) : <div className="timeline-empty">Não há processos vinculados para compor o histórico.</div>}</div>;
   const relatedProcesses = (items: ProcessDetail[]) => items.length > 1 && <div className="related-process-list"><div className="timeline-title"><h4>Processos nesta edificação <span className="doc-count">{items.length}</span></h4></div>{items.map((item) => <button className={`related-process ${process?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => setSelectedProcessId(item.id)}><span><b>{item.protocol || 'Protocolo não informado'}</b><small>{item.type} · {formatDate(item.updatedAt)}</small></span><StatusPill status={item.status} /></button>)}</div>;
   return <div className="drawer-backdrop"><section className="building-drawer" aria-label={`Detalhes de ${building.reference}`}>
     <header className="drawer-header"><div><span className="section-kicker">FICHA DA EDIFICAÇÃO</span><h2>Detalhes da edificação</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={19} /></button></header>

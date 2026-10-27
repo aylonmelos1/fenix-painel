@@ -196,6 +196,22 @@ function storedTechnicalTimeline(userId: string, processId: string) {
   catch { return []; }
 }
 
+function persistTechnicalProjectHistory(userId: string, processId: string, snapshot: Awaited<ReturnType<typeof refreshTechnicalProjectDetails>>) {
+  const { timeline, profile } = snapshot;
+  const dated: Array<{ label: string; date?: string; done?: boolean; current?: boolean }> = timeline.filter((event: { label: string; date?: string }) => event.date && Number.isFinite(Date.parse(event.date)));
+  const analysisEvents = dated.filter((event) => /an[aá]lise/i.test(event.label));
+  const notificationEvents = dated.filter((event) => /notific/i.test(event.label));
+  const latestActivity = dated.reduce((latest, event) => !latest || Date.parse(event.date!) > Date.parse(latest.date!) ? event : latest, undefined as typeof dated[number] | undefined);
+  db.prepare(`INSERT INTO process_histories (user_id,process_id,timeline_json,latest_activity_at,analysis_entered_at,notification_entered_at,notification_count,project_kind,history_available,refresh_status,refreshed_at,error)
+    VALUES (?,?,?,?,?,?,?,?,?,'success',?,NULL) ON CONFLICT(user_id,process_id) DO UPDATE SET timeline_json=excluded.timeline_json,latest_activity_at=excluded.latest_activity_at,analysis_entered_at=excluded.analysis_entered_at,notification_entered_at=excluded.notification_entered_at,notification_count=excluded.notification_count,project_kind=excluded.project_kind,history_available=excluded.history_available,refresh_status='success',refreshed_at=excluded.refreshed_at,error=NULL`)
+    .run(userId, processId, JSON.stringify(timeline), latestActivity?.date || null, analysisEvents.at(-1)?.date || null, notificationEvents.at(-1)?.date || null, notificationEvents.length, profile.technicalFacts.find((fact) => /tipo de projeto/i.test(fact.label))?.value || null, timeline.length > 0 ? 1 : 0, new Date().toISOString());
+}
+
+function releaseHistoryRefresh(userId: string) {
+  historyRefreshInProgress.delete(userId);
+  if (historyRefreshQueued.delete(userId)) scheduleHistoryRefresh(userId, historyRefreshFullQueued.delete(userId));
+}
+
 async function executeSync(userId: string, source: 'manual' | 'automatic' | 'login') {
   if (syncInProgress.has(userId)) return { status: 'busy' as const };
   syncInProgress.add(userId);
@@ -228,8 +244,7 @@ function scheduleHistoryRefresh(userId: string, fullRefresh = false) {
   void refreshUserHistories(userId, fullRefresh).catch((error) => {
     logger.warn('Atualização dos históricos do Fênix falhou', { status: error instanceof FenixError ? error.status : undefined });
   }).finally(() => {
-    historyRefreshInProgress.delete(userId);
-    if (historyRefreshQueued.delete(userId)) scheduleHistoryRefresh(userId, historyRefreshFullQueued.delete(userId));
+    releaseHistoryRefresh(userId);
   });
 }
 
@@ -275,14 +290,7 @@ async function refreshUserHistories(userId: string, fullRefresh: boolean) {
         }
         if (!snapshot) throw new FenixError('O Fênix não retornou o histórico deste processo.');
         if (!candidateIsActive(candidate.id)) { stopped = true; break; }
-        const { timeline, profile } = snapshot;
-        const dated: Array<{ label: string; date?: string; done?: boolean; current?: boolean }> = timeline.filter((event: { label: string; date?: string }) => event.date && Number.isFinite(Date.parse(event.date)));
-        const analysisEvents = dated.filter((event) => /an[aá]lise/i.test(event.label));
-        const notificationEvents = dated.filter((event) => /notific/i.test(event.label));
-        const latestActivity = dated.reduce((latest, event) => !latest || Date.parse(event.date!) > Date.parse(latest.date!) ? event : latest, undefined as typeof dated[number] | undefined);
-        db.prepare(`INSERT INTO process_histories (user_id,process_id,timeline_json,latest_activity_at,analysis_entered_at,notification_entered_at,notification_count,project_kind,history_available,refresh_status,refreshed_at,error)
-          VALUES (?,?,?,?,?,?,?,?,?,'success',?,NULL) ON CONFLICT(user_id,process_id) DO UPDATE SET timeline_json=excluded.timeline_json,latest_activity_at=excluded.latest_activity_at,analysis_entered_at=excluded.analysis_entered_at,notification_entered_at=excluded.notification_entered_at,notification_count=excluded.notification_count,project_kind=excluded.project_kind,history_available=excluded.history_available,refresh_status='success',refreshed_at=excluded.refreshed_at,error=NULL`)
-          .run(userId, candidate.id, JSON.stringify(timeline), latestActivity?.date || null, analysisEvents.at(-1)?.date || null, notificationEvents.at(-1)?.date || null, notificationEvents.length, profile.technicalFacts.find((fact) => /tipo de projeto/i.test(fact.label))?.value || null, timeline.length > 0 ? 1 : 0, new Date().toISOString());
+        persistTechnicalProjectHistory(userId, candidate.id, snapshot);
       } catch (error) {
         if (!candidateIsActive(candidate.id)) { stopped = true; break; }
         failed = true;
@@ -866,6 +874,64 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     areaToBeBuilt: officialProfile?.areaToBeBuilt || projectProfile?.areaToBeBuilt,
     validUntil: projectProfile?.validUntil || ''
   }, processes: withCertificates });
+});
+
+app.post('/api/buildings/:buildingId/history/refresh', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  if (user.demo) return res.status(400).json({ error: 'A atualização do histórico está disponível nas contas conectadas ao Fênix.' });
+  const building = ownedBuilding(user.id, String(req.params.buildingId || ''));
+  if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
+
+  if (building.source_connection_id) {
+    const connection = db.prepare('SELECT status,paused FROM fenix_connections WHERE id=? AND owner_user_id=?').get(building.source_connection_id, user.id) as { status: string; paused: number } | undefined;
+    if (!connection) return res.status(404).json({ error: 'Conexão Fênix não encontrada.' });
+    if (connection.paused || connection.status !== 'active') return res.status(409).json({ error: 'Reative ou reconecte a conta Fênix desta edificação antes de atualizar o histórico.' });
+  }
+
+  const userId = building.data_user_id as string;
+  if (syncInProgress.has(userId) || historyRefreshInProgress.has(userId)) {
+    return res.status(409).json({ error: 'Já existe uma atualização em andamento para esta conta Fênix. Tente novamente quando ela terminar.' });
+  }
+  const projects = db.prepare(`SELECT p.id,p.remote_id FROM processes p JOIN buildings b ON b.id=p.building_id AND b.user_id=p.user_id
+    WHERE p.user_id=? AND p.building_id=? AND p.id LIKE 'technicalproject:%' AND ${ACTIVE_BUILDING_SQL}
+    ORDER BY p.updated_at DESC`).all(userId, building.id) as Array<{ id: string; remote_id: string | null }>;
+  if (!projects.length) return res.json({ total: 0, refreshed: 0, failed: 0, histories: [] });
+
+  historyRefreshInProgress.add(userId);
+  const histories: Array<{ processId: string; timeline: Awaited<ReturnType<typeof refreshTechnicalProjectDetails>>['timeline'] }> = [];
+  const failed: string[] = [];
+  try {
+    for (const project of projects) {
+      const isActive = () => Boolean(db.prepare(`SELECT 1 FROM processes p JOIN buildings b ON b.id=p.building_id AND b.user_id=p.user_id
+        WHERE p.user_id=? AND p.building_id=? AND p.id=? AND ${ACTIVE_BUILDING_SQL}`).get(userId, building.id, project.id));
+      if (!isActive()) break;
+      try {
+        const projectId = project.remote_id || project.id.slice('technicalproject:'.length);
+        const snapshot = await refreshTechnicalProjectDetails(userId, projectId);
+        if (!isActive()) break;
+        persistTechnicalProjectHistory(userId, project.id, snapshot);
+        histories.push({ processId: project.id, timeline: snapshot.timeline });
+      } catch (error) {
+        failed.push(project.id);
+        const upstreamStatus = error instanceof FenixError ? error.status : undefined;
+        const message = upstreamStatus === 429 ? 'O Fênix limitou esta consulta. Tente novamente em instantes.' : 'Não foi possível consultar o histórico deste processo no Fênix.';
+        db.prepare(`INSERT INTO process_histories (user_id,process_id,timeline_json,refresh_status,refreshed_at,error)
+          VALUES (?,?,'[]','error',?,?) ON CONFLICT(user_id,process_id) DO UPDATE SET refresh_status='error',refreshed_at=excluded.refreshed_at,error=excluded.error`)
+          .run(userId, project.id, new Date().toISOString(), message);
+        logger.info('Atualização manual do histórico de processo falhou', { status: upstreamStatus });
+        if ([401, 403, 419].includes(Number(upstreamStatus))) {
+          if (building.source_connection_id) db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?").run(new Date().toISOString(), building.source_connection_id);
+          break;
+        }
+      }
+    }
+    return res.json({ total: projects.length, refreshed: histories.length, failed: failed.length, histories });
+  } catch (error) {
+    logger.warn('Atualização manual do histórico da edificação falhou', { status: error instanceof FenixError ? error.status : undefined });
+    return res.status(502).json({ error: 'Não foi possível atualizar o histórico desta edificação agora.' });
+  } finally {
+    releaseHistoryRefresh(userId);
+  }
 });
 
 app.get('/api/renewals', requireSession, (req, res) => {
