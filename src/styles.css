@@ -383,11 +383,11 @@
 .building-filter-row{display:flex;align-items:stretch;gap:9px;min-width:0;width:100%}
 .building-filter-search{width:auto;min-width:0;min-height:39px;height:auto;flex:1;padding:5px 9px;gap:7px;flex-wrap:nowrap}
 .building-filter-chips{display:flex;align-items:center;gap:5px;flex:none;max-width:65%;min-width:0;overflow:hidden}
-.building-filter-chip{display:inline-flex;align-items:center;gap:4px;max-width:210px;min-width:0;padding:3px 5px 3px 8px;border:1px solid #d5e8e7;border-radius:6px;background:#f1f8f7;color:#42666c;font-size:9px;white-space:nowrap}
+.building-filter-chip{display:inline-flex;align-items:center;gap:4px;max-width:210px;min-width:0;padding:3px 5px 3px 8px;border:1px solid #d5e8e7;border-radius:6px;background:#f1f8f7;color:#42666c;font-size:10px;white-space:nowrap}
 .building-filter-chip>span{overflow:hidden;text-overflow:ellipsis}
 .building-filter-chip button{width:17px;height:17px;display:grid;place-items:center;flex:none;padding:0;border:0;border-radius:4px;background:transparent;color:#66858a;cursor:pointer}
 .building-filter-chip button:hover{background:#dfeeed;color:#176c69}
-.building-filter-search input{width:auto;min-width:120px;height:25px;flex:1;padding:0;border:0;outline:0;background:transparent;color:#31475b;font:400 10px 'DM Sans',sans-serif}
+.building-filter-search input{width:auto;min-width:120px;height:25px;flex:1;padding:0;border:0;outline:0;background:transparent;color:#31475b;font:400 11px 'DM Sans',sans-serif}
 .building-filter-search input::placeholder{color:#8795a2}
 .building-filter-search kbd{flex:none}
 .period-trigger{min-width:188px;max-width:245px;min-height:39px;display:flex;align-items:center;gap:9px;padding:5px 10px;border:1px solid #dce4e9;border-radius:7px;background:#fff;color:#177f7b;text-align:left;cursor:pointer;transition:border-color .15s ease,background .15s ease}
@@ -398,15 +398,15 @@
 .period-trigger-chevron{color:#8795a2;transform:rotate(90deg)}
 .building-filter-suggestions,.period-picker-popover{z-index:80;overflow:auto;border:1px solid #dfe6eb;border-radius:10px;background:#fff;box-shadow:0 16px 42px rgba(17,38,57,.2);overscroll-behavior:contain}
 .building-filter-suggestions{max-height:min(520px,calc(100dvh - 24px));padding:7px}
-.filter-suggestion-heading{padding:8px 9px 6px;color:#8593a0;font-size:8px;font-weight:800;letter-spacing:.75px}
+.filter-suggestion-heading{padding:8px 9px 6px;color:#8593a0;font-size:9px;font-weight:800;letter-spacing:.75px}
 .filter-suggestion-subheading{margin-top:4px;border-top:1px solid #edf0f2}
-.filter-suggestion-hint{margin:0;padding:4px 9px 11px;color:#687b8d;font-size:10px;line-height:1.5}
+.filter-suggestion-hint{margin:0;padding:4px 9px 11px;color:#687b8d;font-size:11px;line-height:1.5}
 .filter-suggestion-option{width:100%;display:flex;align-items:center;gap:9px;padding:8px;border:0;border-radius:6px;background:transparent;color:#30475b;text-align:left;cursor:pointer}
 .filter-suggestion-option:hover,.filter-suggestion-option.primary{background:#f0f8f7}
 .filter-suggestion-icon{width:26px;height:26px;display:grid;place-items:center;flex:none;border-radius:6px;background:#edf4f4;color:#168b87}
 .filter-suggestion-option>span:last-child{display:grid;gap:2px;min-width:0}
-.filter-suggestion-option b{overflow:hidden;font-size:10px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
-.filter-suggestion-option small{overflow:hidden;color:#7c8b99;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.filter-suggestion-option b{overflow:hidden;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+.filter-suggestion-option small{overflow:hidden;color:#7c8b99;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
 .period-picker-popover{max-height:calc(100dvh - 24px);display:flex;flex-direction:column}
 .period-picker-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:15px 17px;border-bottom:1px solid #e9eef1}
 .period-picker-header>div{display:grid;gap:4px}
@@ -423,15 +423,16 @@
 .period-calendar-heading b{color:#344a5e;font:700 12px 'Manrope',sans-serif;text-transform:none}
 .period-calendar-heading button{width:29px;height:29px;display:grid;place-items:center;border:1px solid #e4e9ed;border-radius:6px;background:#fff;color:#5d7184;cursor:pointer}
 .period-calendar-heading button:hover{border-color:#b9d8d6;background:#f4faf9;color:#117f7a}
-.period-range-summary{display:flex;align-items:center;gap:12px;margin:11px 0;padding:8px 10px;border:1px solid #e7ecef;border-radius:7px;background:#fafcfc}
-.period-range-summary>span:not(.period-range-dash){display:grid;gap:3px;min-width:0;flex:1}
+.period-range-summary{display:flex;align-items:center;gap:8px;margin:9px 0;padding:6px 8px;border:1px solid #e7ecef;border-radius:7px;background:#fafcfc}
+.period-range-date{display:grid;gap:3px;min-width:0;flex:1}
 .period-range-summary small{color:#82909c;font-size:8px}
-.period-range-summary b{overflow:hidden;color:#3c5368;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.period-range-date input{width:100%;min-width:0;height:28px;padding:0 6px;border:1px solid #dce4e9;border-radius:5px;background:#fff;color:#344b60;font:500 11px 'DM Sans',sans-serif}
+.period-range-date input:focus{border-color:#56aaa5;outline:2px solid rgba(35,166,160,.12)}
 .period-range-dash{color:#9aa7b1;font-size:11px}
-.period-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.period-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px}
 .period-weekdays{margin-bottom:4px}
-.period-weekdays span{height:23px;display:grid;place-items:center;color:#8996a2;font-size:9px;font-weight:700}
-.period-calendar-grid>button,.period-calendar-empty{width:100%;aspect-ratio:1;max-height:36px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:#41566a;font:500 10px 'DM Sans',sans-serif}
+.period-weekdays span{height:19px;display:grid;place-items:center;color:#8996a2;font-size:9px;font-weight:700}
+.period-calendar-grid>button,.period-calendar-empty{width:100%;height:29px;max-height:29px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:#41566a;font:500 10px 'DM Sans',sans-serif}
 .period-calendar-grid>button{cursor:pointer}
 .period-calendar-grid>button:hover{background:#edf6f5;color:#087f7b}
 .period-calendar-grid>button.in-range{border-radius:0;background:#e8f4f3;color:#1b7572}
@@ -460,13 +461,13 @@
   .period-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;overflow:visible;padding:8px;border-right:0;border-bottom:1px solid #edf0f2}
   .period-presets button{width:100%;min-height:29px;padding:0 8px;border:1px solid #e7ecef;background:#fff;font-size:9px;text-align:center;white-space:nowrap}
   .period-calendar{padding:10px 12px}
-  .period-calendar-grid>button,.period-calendar-empty{max-height:39px}
+  .period-calendar-grid>button,.period-calendar-empty{height:29px;max-height:29px}
   .renewal-filter-controls{align-items:stretch}
   .renewal-filter-controls>.period-trigger{flex:1 1 100%}
 }
 @media(max-width:420px){
   .building-filter-search{gap:5px;padding-inline:7px}
-  .building-filter-search input{min-width:85px;font-size:9px}
+  .building-filter-search input{min-width:85px;font-size:10px}
   .building-filter-search kbd{display:none}
   .building-filter-chip{max-width:155px;font-size:8px}
   .period-picker-header{padding:12px}
