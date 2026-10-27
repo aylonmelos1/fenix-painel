@@ -376,3 +376,111 @@
 .account-source-badge.paused{border-color:#e7d7b7;background:#fff9ed;color:#8b651d}
 @media(prefers-reduced-motion:reduce){.fenix-modal-step,.fenix-building-skeletons>div{animation:none}.fenix-step-active{transform:none}.fenix-building-option,.fenix-switch,.fenix-switch i{transition:none}}
 .fenix-building-option-copy .fenix-building-duplicate{color:#956519;line-height:1.4;overflow:visible;text-overflow:clip;white-space:normal}.fenix-catalog-retry{display:flex;align-items:center;justify-content:space-between;gap:10px}.fenix-catalog-retry>span{flex:1;min-width:0}.fenix-catalog-retry>.button{flex:none}
+
+/* Building list search, date range popovers and source badge refinements. */
+.app-shell .building-table-toolbar{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;gap:0;padding:0 16px 11px;min-width:0}
+.building-table-toolbar .filter-tabs{width:100%;min-width:0;height:44px;gap:20px;overscroll-behavior-inline:contain}
+.building-filter-row{display:flex;align-items:stretch;gap:9px;min-width:0;width:100%}
+.building-filter-search{width:auto;min-width:0;min-height:39px;height:auto;flex:1;padding:5px 9px;gap:7px;flex-wrap:nowrap}
+.building-filter-chips{display:flex;align-items:center;gap:5px;flex:none;max-width:65%;min-width:0;overflow:hidden}
+.building-filter-chip{display:inline-flex;align-items:center;gap:4px;max-width:210px;min-width:0;padding:3px 5px 3px 8px;border:1px solid #d5e8e7;border-radius:6px;background:#f1f8f7;color:#42666c;font-size:9px;white-space:nowrap}
+.building-filter-chip>span{overflow:hidden;text-overflow:ellipsis}
+.building-filter-chip button{width:17px;height:17px;display:grid;place-items:center;flex:none;padding:0;border:0;border-radius:4px;background:transparent;color:#66858a;cursor:pointer}
+.building-filter-chip button:hover{background:#dfeeed;color:#176c69}
+.building-filter-search input{width:auto;min-width:120px;height:25px;flex:1;padding:0;border:0;outline:0;background:transparent;color:#31475b;font:400 10px 'DM Sans',sans-serif}
+.building-filter-search input::placeholder{color:#8795a2}
+.building-filter-search kbd{flex:none}
+.period-trigger{min-width:188px;max-width:245px;min-height:39px;display:flex;align-items:center;gap:9px;padding:5px 10px;border:1px solid #dce4e9;border-radius:7px;background:#fff;color:#177f7b;text-align:left;cursor:pointer;transition:border-color .15s ease,background .15s ease}
+.period-trigger:hover,.period-trigger[aria-expanded="true"]{border-color:#66b8b3;background:#fbfefe}
+.period-trigger>span{display:grid;gap:2px;flex:1;min-width:0}
+.period-trigger small{color:#8593a0;font-size:8px;line-height:1.1}
+.period-trigger b{overflow:hidden;color:#344b60;font-size:10px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+.period-trigger-chevron{color:#8795a2;transform:rotate(90deg)}
+.building-filter-suggestions,.period-picker-popover{z-index:80;overflow:auto;border:1px solid #dfe6eb;border-radius:10px;background:#fff;box-shadow:0 16px 42px rgba(17,38,57,.2);overscroll-behavior:contain}
+.building-filter-suggestions{max-height:min(520px,calc(100dvh - 24px));padding:7px}
+.filter-suggestion-heading{padding:8px 9px 6px;color:#8593a0;font-size:8px;font-weight:800;letter-spacing:.75px}
+.filter-suggestion-subheading{margin-top:4px;border-top:1px solid #edf0f2}
+.filter-suggestion-hint{margin:0;padding:4px 9px 11px;color:#687b8d;font-size:10px;line-height:1.5}
+.filter-suggestion-option{width:100%;display:flex;align-items:center;gap:9px;padding:8px;border:0;border-radius:6px;background:transparent;color:#30475b;text-align:left;cursor:pointer}
+.filter-suggestion-option:hover,.filter-suggestion-option.primary{background:#f0f8f7}
+.filter-suggestion-icon{width:26px;height:26px;display:grid;place-items:center;flex:none;border-radius:6px;background:#edf4f4;color:#168b87}
+.filter-suggestion-option>span:last-child{display:grid;gap:2px;min-width:0}
+.filter-suggestion-option b{overflow:hidden;font-size:10px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+.filter-suggestion-option small{overflow:hidden;color:#7c8b99;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.period-picker-popover{max-height:calc(100dvh - 24px);display:flex;flex-direction:column}
+.period-picker-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:15px 17px;border-bottom:1px solid #e9eef1}
+.period-picker-header>div{display:grid;gap:4px}
+.period-picker-header b{color:#293f53;font:700 13px 'Manrope',sans-serif}
+.period-picker-header small{color:#778899;font-size:10px}
+.period-picker-header>button{width:28px;height:28px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:#718294;cursor:pointer}
+.period-picker-header>button:hover{background:#f0f4f6;color:#34495c}
+.period-picker-body{display:grid;grid-template-columns:155px minmax(0,1fr);min-height:0;overflow:auto}
+.period-presets{display:flex;flex-direction:column;gap:2px;padding:12px 9px;border-right:1px solid #edf0f2;background:#fbfcfd}
+.period-presets button{min-height:31px;padding:0 9px;border:0;border-radius:5px;background:transparent;color:#53677a;text-align:left;font:500 10px 'DM Sans',sans-serif;cursor:pointer}
+.period-presets button:hover,.period-presets button.selected{background:#e9f5f4;color:#087f7b;font-weight:700}
+.period-calendar{min-width:0;padding:13px 16px 12px}
+.period-calendar-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.period-calendar-heading b{color:#344a5e;font:700 12px 'Manrope',sans-serif;text-transform:none}
+.period-calendar-heading button{width:29px;height:29px;display:grid;place-items:center;border:1px solid #e4e9ed;border-radius:6px;background:#fff;color:#5d7184;cursor:pointer}
+.period-calendar-heading button:hover{border-color:#b9d8d6;background:#f4faf9;color:#117f7a}
+.period-range-summary{display:flex;align-items:center;gap:12px;margin:11px 0;padding:8px 10px;border:1px solid #e7ecef;border-radius:7px;background:#fafcfc}
+.period-range-summary>span:not(.period-range-dash){display:grid;gap:3px;min-width:0;flex:1}
+.period-range-summary small{color:#82909c;font-size:8px}
+.period-range-summary b{overflow:hidden;color:#3c5368;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.period-range-dash{color:#9aa7b1;font-size:11px}
+.period-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.period-weekdays{margin-bottom:4px}
+.period-weekdays span{height:23px;display:grid;place-items:center;color:#8996a2;font-size:9px;font-weight:700}
+.period-calendar-grid>button,.period-calendar-empty{width:100%;aspect-ratio:1;max-height:36px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:#41566a;font:500 10px 'DM Sans',sans-serif}
+.period-calendar-grid>button{cursor:pointer}
+.period-calendar-grid>button:hover{background:#edf6f5;color:#087f7b}
+.period-calendar-grid>button.in-range{border-radius:0;background:#e8f4f3;color:#1b7572}
+.period-calendar-grid>button.selected{position:relative;z-index:1;border-radius:6px;background:#0e9994;color:#fff;font-weight:700}
+.period-calendar-grid>button.today:not(.selected){box-shadow:inset 0 0 0 1px #70bdb8;color:#087f7b;font-weight:700}
+.period-calendar-grid>button.selected.today{color:#fff}
+.period-calendar-help{display:block;margin-top:8px;color:#84919c;font-size:8px;text-align:center}
+.period-picker-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;border-top:1px solid #e9eef1;background:#fbfcfd}
+.period-picker-footer>div{display:flex;align-items:center;gap:7px}
+.period-picker-footer .button{min-height:32px;padding:0 11px;font-size:10px}
+.period-picker-footer .text-link{font-size:9px}
+.building-cell-copy{min-width:0}
+.building-details-line{display:flex;align-items:center;gap:7px;min-width:0;margin-top:4px}
+.building-details-line .building-floor-count{display:inline;color:#8492a0;font-size:8px;line-height:1.2;margin:0;white-space:nowrap}
+.building-details-line .account-source-badge{display:inline-flex;max-width:160px;margin:0;padding:2px 6px;font-size:8px;line-height:1.2}
+.building-details-line .account-source-badge svg{width:10px;height:10px}
+.building-cell-copy>b{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:760px){
+  .app-shell .building-table-toolbar{padding:0 11px 10px}
+  .building-table-toolbar .filter-tabs{height:39px;gap:14px}
+  .building-filter-row{align-items:stretch;flex-direction:column}
+  .building-filter-search{min-height:39px;flex:none}
+  .building-filter-chips{max-width:58%}
+  .period-trigger{width:100%;max-width:none;min-height:38px}
+  .period-picker-body{grid-template-columns:1fr}
+  .period-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;overflow:visible;padding:8px;border-right:0;border-bottom:1px solid #edf0f2}
+  .period-presets button{width:100%;min-height:29px;padding:0 8px;border:1px solid #e7ecef;background:#fff;font-size:9px;text-align:center;white-space:nowrap}
+  .period-calendar{padding:10px 12px}
+  .period-calendar-grid>button,.period-calendar-empty{max-height:39px}
+  .renewal-filter-controls{align-items:stretch}
+  .renewal-filter-controls>.period-trigger{flex:1 1 100%}
+}
+@media(max-width:420px){
+  .building-filter-search{gap:5px;padding-inline:7px}
+  .building-filter-search input{min-width:85px;font-size:9px}
+  .building-filter-search kbd{display:none}
+  .building-filter-chip{max-width:155px;font-size:8px}
+  .period-picker-header{padding:12px}
+  .period-picker-footer{padding:9px}
+  .period-picker-footer .button{padding-inline:8px}
+}
+.building-list-table{width:100%;min-width:0;table-layout:fixed}
+.building-list-table th:nth-child(1),.building-list-table td:nth-child(1){width:23%}
+.building-list-table th:nth-child(2),.building-list-table td:nth-child(2){width:13%}
+.building-list-table th:nth-child(3),.building-list-table td:nth-child(3){width:8%}
+.building-list-table th:nth-child(4),.building-list-table td:nth-child(4){width:21%}
+.building-list-table th:nth-child(5),.building-list-table td:nth-child(5){width:17%}
+.building-list-table th:nth-child(6),.building-list-table td:nth-child(6){width:12%}
+.building-list-table th:nth-child(7),.building-list-table td:nth-child(7){width:6%}
+.building-list-table td:nth-child(4) .table-subtext{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.building-list-table .row-actions{justify-content:flex-end}
+@media(max-width:760px){.building-list-table{min-width:890px}}

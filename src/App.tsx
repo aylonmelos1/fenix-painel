@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import HCaptcha from '@hcaptcha/react-hcaptcha';
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Bot, Building2, CalendarClock, Check, CheckCircle2, CheckCheck,
   CircleAlert, ClipboardList, Cloud, FileCheck2, FileSpreadsheet, FileText, Filter, Flame,
   Gauge, HelpCircle, Home, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
   Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen,
-  Plus, Pause, Play, Trash2, Pencil, KeyRound, ChevronRight
+  Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey } from './types';
@@ -172,7 +173,7 @@ function matchesProcessMenuFilter(process: DashboardProcess, filter: ProcessMenu
   return filter.join === 'any' ? groups.some(Boolean) : groups.every(Boolean);
 }
 
-function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigate, onNotification, onOpenAi }: { children: ReactNode; user: { name: string; demo: boolean }; active?: string; breadcrumbs?: ReactNode; onNavigate?: () => void; onNotification?: (notification: UserNotification) => void; onOpenAi?: () => void }) {
+function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigate, onNotification, onOpenAi, onSyncRunningChange }: { children: ReactNode; user: { name: string; demo: boolean }; active?: string; breadcrumbs?: ReactNode; onNavigate?: () => void; onNotification?: (notification: UserNotification) => void; onOpenAi?: () => void; onSyncRunningChange?: (running: boolean) => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('fenix-sidebar-collapsed') === 'true');
   const [helpOpen, setHelpOpen] = useState(false);
@@ -185,6 +186,7 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
     const timer = window.setInterval(refreshStatus, 3000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => { onSyncRunningChange?.(fenixSync.status === 'running'); }, [fenixSync.status, onSyncRunningChange]);
   useEffect(() => {
     if (fenixSync.status !== 'running') return;
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
@@ -303,6 +305,221 @@ function dateKeyInBahia(value: string | null | undefined) {
   return `${datePart('year')}-${datePart('month')}-${datePart('day')}`;
 }
 
+type BuildingSearchField = 'all' | 'reference' | 'municipality' | 'area' | 'protocol' | 'type' | 'status' | 'stage' | 'account';
+type BuildingSearchFilter = { id: string; field: BuildingSearchField; value: string; label: string; accountId?: string };
+
+const buildingSearchFields: Array<{ key: BuildingSearchField; label: string }> = [
+  { key: 'reference', label: 'Edificação / referência' }, { key: 'municipality', label: 'Município' },
+  { key: 'area', label: 'Área' }, { key: 'protocol', label: 'Processo / protocolo' },
+  { key: 'type', label: 'Tipo de processo' }, { key: 'status', label: 'Situação' },
+  { key: 'stage', label: 'Etapa atual' }, { key: 'account', label: 'Conta Fênix' },
+];
+
+function normalizedFilterText(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+}
+
+function buildingFilterLabel(field: BuildingSearchField) {
+  return field === 'all' ? 'Todos os campos' : buildingSearchFields.find((option) => option.key === field)?.label || 'Campo';
+}
+
+function matchesBuildingSearchFilter(item: Building, filter: BuildingSearchFilter) {
+  if (filter.field === 'account' && filter.accountId) {
+    return filter.accountId === 'primary' ? !item.sourceConnectionId : item.sourceConnectionId === filter.accountId;
+  }
+  const values: Record<BuildingSearchField, string> = {
+    all: `${item.reference} ${item.municipality} ${item.address} ${item.area ?? ''} ${formatArea(item.area)} ${item.floors ?? ''} ${item.protocol} ${item.processType} ${item.status} ${item.stage} ${item.sourceAccountName || 'Conta principal'}`,
+    reference: item.reference,
+    municipality: item.municipality,
+    area: `${item.area ?? ''} ${formatArea(item.area)}`,
+    protocol: item.protocol,
+    type: item.processType,
+    status: item.status,
+    stage: item.stage,
+    account: item.sourceAccountName || 'Conta principal',
+  };
+  return normalizedFilterText(values[filter.field]).includes(normalizedFilterText(filter.value));
+}
+
+function dateFromKey(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function dateKeyFromDate(value: Date) {
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`;
+}
+
+function shiftDateKey(value: string, days: number) {
+  const date = dateFromKey(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateKeyFromDate(date);
+}
+
+function formatPickerDate(value: string, includeYear = true) {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', ...(includeYear ? { year: 'numeric' } : {}), timeZone: 'UTC' }).format(dateFromKey(value)).replace(/\.$/, '');
+}
+
+function useAnchoredPopover<T extends HTMLElement>(open: boolean, close: () => void, width: number, alignment: 'start' | 'end' = 'start') {
+  const anchorRef = useRef<T>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(close);
+  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) { setPosition(null); return; }
+    const updatePosition = () => {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const panelWidth = Math.min(width, Math.max(0, window.innerWidth - 24));
+      const panelHeight = popoverRef.current?.getBoundingClientRect().height || Math.min(500, window.innerHeight - 24);
+      const left = Math.max(12, Math.min(alignment === 'end' ? rect.right - panelWidth : rect.left, window.innerWidth - panelWidth - 12));
+      let top = rect.bottom + 8;
+      if (top + panelHeight > window.innerHeight - 12 && rect.top - panelHeight - 8 >= 12) top = rect.top - panelHeight - 8;
+      else top = Math.min(top, Math.max(12, window.innerHeight - panelHeight - 12));
+      setPosition({ top, left, width: panelWidth });
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!anchorRef.current?.contains(target) && !popoverRef.current?.contains(target)) closeRef.current();
+    };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') closeRef.current(); };
+    updatePosition();
+    const frame = window.requestAnimationFrame(updatePosition);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open, width, alignment]);
+  return { anchorRef, popoverRef, position };
+}
+
+function BuildingFilterSearch({ filters, sourceAccounts, inputRef, onAdd, onRemove }: {
+  filters: BuildingSearchFilter[]; sourceAccounts: Array<{ id: string; label: string }>;
+  inputRef: RefObject<HTMLInputElement | null>; onAdd: (filter: BuildingSearchFilter) => void; onRemove: (id: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const { anchorRef, popoverRef, position } = useAnchoredPopover<HTMLDivElement>(open, () => setOpen(false), 470);
+  const value = query.trim();
+  const availableAccounts = [{ id: 'primary', label: 'Conta principal' }, ...sourceAccounts];
+  const addFilter = (field: BuildingSearchField, account?: { id: string; label: string }) => {
+    const filterValue = account?.label || value;
+    if (!filterValue) return;
+    onAdd({ id: crypto.randomUUID(), field, value: filterValue, label: `${buildingFilterLabel(field)}: ${filterValue}`, ...(account ? { accountId: account.id } : {}) });
+    setQuery('');
+    setOpen(false);
+    inputRef.current?.focus();
+  };
+  const suggestions = value ? [
+    { field: 'all' as const, label: 'Todos os campos', detail: `Buscar “${value}” em todos os campos` },
+    ...buildingSearchFields.map(({ key, label }) => ({ field: key, label, detail: `Buscar “${value}” em ${label.toLocaleLowerCase('pt-BR')}` })),
+  ] : [];
+  return <>
+    <div className="search-box building-filter-search" ref={anchorRef}>
+      <Search size={15} aria-hidden="true" />
+      <div className="building-filter-chips" aria-label="Filtros ativos">
+        {filters.map((filter) => <span className="building-filter-chip" key={filter.id} title={filter.label}><span>{filter.label}</span><button type="button" aria-label={`Remover filtro ${filter.label}`} onClick={() => onRemove(filter.id)}><X size={12} /></button></span>)}
+      </div>
+      <input ref={inputRef} value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true); }} onKeyDown={(event) => { if (event.key === 'Enter' && suggestions.length) { event.preventDefault(); addFilter(suggestions[0].field); } }} placeholder={filters.length ? 'Adicionar filtro…' : 'Buscar por edificação, município, processo…'} aria-label="Pesquisar ou adicionar um filtro" aria-expanded={open} aria-controls="building-filter-suggestions" />
+      <kbd>⌘ K</kbd>
+    </div>
+    {open && position && createPortal(<div id="building-filter-suggestions" className="building-filter-suggestions" ref={popoverRef} role="listbox" style={{ position: 'fixed', top: position.top, left: position.left, width: position.width }}>
+      {value ? <>
+        <div className="filter-suggestion-heading">BUSCAR {value.toLocaleUpperCase('pt-BR')}</div>
+        {suggestions.map((suggestion, index) => <button type="button" role="option" aria-selected="false" className={`filter-suggestion-option ${index === 0 ? 'primary' : ''}`} key={suggestion.field} onMouseDown={(event) => event.preventDefault()} onClick={() => addFilter(suggestion.field)}><span className="filter-suggestion-icon"><Search size={14} /></span><span><b>{suggestion.label}</b><small>{suggestion.detail}</small></span></button>)}
+        {availableAccounts.filter((account) => normalizedFilterText(account.label).includes(normalizedFilterText(value))).map((account) => <button type="button" role="option" aria-selected="false" className="filter-suggestion-option" key={account.id} onMouseDown={(event) => event.preventDefault()} onClick={() => addFilter('account', account)}><span className="filter-suggestion-icon"><Cloud size={14} /></span><span><b>Conta Fênix: {account.label}</b><small>Filtrar apenas esta conta</small></span></button>)}
+      </> : <>
+        <div className="filter-suggestion-heading">PESQUISA E FILTROS</div>
+        <p className="filter-suggestion-hint">Digite um valor para escolher em qual campo pesquisar.</p>
+        <div className="filter-suggestion-heading filter-suggestion-subheading">CONTAS FÊNIX</div>{availableAccounts.map((account) => <button type="button" role="option" aria-selected="false" className="filter-suggestion-option" key={account.id} onMouseDown={(event) => event.preventDefault()} onClick={() => addFilter('account', account)}><span className="filter-suggestion-icon"><Cloud size={14} /></span><span><b>{account.label}</b><small>Mostrar edificações desta conta</small></span></button>)}
+      </>}
+    </div>, document.body)}
+  </>;
+}
+
+function DateRangePicker({ from, to, onApply, label = 'Período' }: { from: string; to: string; onApply: (from: string, to: string) => void; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const today = dateKeyInBahia(new Date().toISOString());
+  const [draftFrom, setDraftFrom] = useState(from);
+  const [draftTo, setDraftTo] = useState(to);
+  const [visibleMonth, setVisibleMonth] = useState(`${(from || today).slice(0, 7)}-01`);
+  const { anchorRef, popoverRef, position } = useAnchoredPopover<HTMLButtonElement>(open, () => setOpen(false), 650, 'end');
+  useEffect(() => {
+    if (!open) return;
+    setDraftFrom(from); setDraftTo(to); setVisibleMonth(`${(from || today).slice(0, 7)}-01`);
+  }, [open, from, to, today]);
+  const choosePreset = (preset: string) => {
+    if (preset === 'all') { setDraftFrom(''); setDraftTo(''); return; }
+    let nextFrom = today; let nextTo = today;
+    if (preset === 'yesterday') nextFrom = nextTo = shiftDateKey(today, -1);
+    if (preset === '7days') nextFrom = shiftDateKey(today, -6);
+    if (preset === '30days') nextFrom = shiftDateKey(today, -29);
+    if (preset === 'thisMonth') nextFrom = `${today.slice(0, 7)}-01`;
+    if (preset === 'lastMonth') {
+      const current = dateFromKey(`${today.slice(0, 7)}-01`);
+      const previousStart = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - 1, 1));
+      nextFrom = dateKeyFromDate(previousStart);
+      nextTo = shiftDateKey(`${today.slice(0, 7)}-01`, -1);
+    }
+    setDraftFrom(nextFrom); setDraftTo(nextTo); setVisibleMonth(`${nextFrom.slice(0, 7)}-01`);
+  };
+  const selectDay = (day: string) => {
+    if (!draftFrom || draftTo) { setDraftFrom(day); setDraftTo(''); return; }
+    if (day < draftFrom) { setDraftTo(draftFrom); setDraftFrom(day); }
+    else setDraftTo(day);
+  };
+  const monthDate = dateFromKey(visibleMonth);
+  const year = monthDate.getUTCFullYear(); const monthIndex = monthDate.getUTCMonth();
+  const monthLabel = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(monthDate);
+  const monthHeading = `${monthLabel.charAt(0).toLocaleUpperCase('pt-BR')}${monthLabel.slice(1)}`;
+  const firstWeekday = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  const cellCount = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
+  const calendarDays = Array.from({ length: cellCount }, (_, index) => {
+    const day = index - firstWeekday + 1;
+    return day > 0 && day <= daysInMonth ? `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : '';
+  });
+  const title = !from && !to ? 'Todo o período' : from && to && from === to ? formatPickerDate(from) : `${formatPickerDate(from, false)} – ${formatPickerDate(to || from)}`;
+  const shiftMonth = (delta: number) => {
+    const next = new Date(Date.UTC(year, monthIndex + delta, 1));
+    setVisibleMonth(dateKeyFromDate(next));
+  };
+  return <>
+    <button ref={anchorRef} type="button" className="period-trigger" onClick={() => setOpen((value) => !value)} aria-haspopup="dialog" aria-expanded={open}><CalendarDays size={15} /><span><small>{label}</small><b>{title}</b></span><ChevronRight size={14} className="period-trigger-chevron" /></button>
+    {open && position && createPortal(<div className="period-picker-popover" ref={popoverRef} role="dialog" aria-label="Selecionar período" style={{ position: 'fixed', top: position.top, left: position.left, width: position.width }}>
+      <header className="period-picker-header"><div><b>Selecionar período</b><small>Escolha uma opção rápida ou monte um intervalo.</small></div><button type="button" aria-label="Fechar seletor de período" onClick={() => setOpen(false)}><X size={16} /></button></header>
+      <div className="period-picker-body">
+        <nav className="period-presets" aria-label="Períodos predefinidos">{[
+          ['today', 'Hoje'], ['yesterday', 'Ontem'], ['7days', 'Últimos 7 dias'], ['30days', 'Últimos 30 dias'], ['thisMonth', 'Este mês'], ['lastMonth', 'Mês passado'], ['all', 'Todo o período'],
+        ].map(([key, text]) => <button type="button" key={key} className={key === 'all' && !draftFrom && !draftTo ? 'selected' : ''} onClick={() => choosePreset(key)}>{text}</button>)}</nav>
+        <div className="period-calendar">
+          <div className="period-calendar-heading"><button type="button" aria-label="Mês anterior" onClick={() => shiftMonth(-1)}><ChevronLeft size={17} /></button><b>{monthHeading}</b><button type="button" aria-label="Próximo mês" onClick={() => shiftMonth(1)}><ChevronRight size={17} /></button></div>
+          <div className="period-range-summary"><span><small>Início</small><b>{draftFrom ? formatPickerDate(draftFrom) : 'Selecione'}</b></span><span className="period-range-dash">—</span><span><small>Término</small><b>{draftTo ? formatPickerDate(draftTo) : 'Selecione'}</b></span></div>
+          <div className="period-calendar-grid period-weekdays">{['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
+          <div className="period-calendar-grid">{calendarDays.map((day, index) => {
+            if (!day) return <span className="period-calendar-empty" key={`empty-${index}`} />;
+            const selected = day === draftFrom || day === draftTo;
+            const inRange = Boolean(draftFrom && draftTo && day > draftFrom && day < draftTo);
+            return <button type="button" key={day} className={`${selected ? 'selected' : ''} ${inRange ? 'in-range' : ''} ${day === today ? 'today' : ''}`} aria-pressed={selected} onClick={() => selectDay(day)}>{Number(day.slice(-2))}</button>;
+          })}</div>
+          <small className="period-calendar-help">Selecione a data inicial e depois a final.</small>
+        </div>
+      </div>
+      <footer className="period-picker-footer"><button type="button" className="text-link" onClick={() => { setDraftFrom(''); setDraftTo(''); }}>Limpar período</button><div><button type="button" className="button button-outline" onClick={() => setOpen(false)}>Cancelar</button><button type="button" className="button button-teal" onClick={() => { const start = draftFrom; const end = draftTo || draftFrom; onApply(start, end); setOpen(false); }}>Aplicar</button></div></footer>
+    </div>, document.body)}
+  </>;
+}
+
 function ProcessWorkspace({ view, processes, buildings, sourceAccounts, historyRefreshStatus, processMenuFilters, searchInputRef, onOpen, onAsk }: {
   view: string; processes: DashboardProcess[]; buildings: Building[]; sourceAccounts: Array<{ id: string; label: string }>; historyRefreshStatus: string; processMenuFilters: ProcessMenuFilters; searchInputRef: RefObject<HTMLInputElement | null>;
   onOpen: (building: Building, tab?: string, processId?: string) => void; onAsk: (building: Building, prompt?: string) => void;
@@ -311,13 +528,9 @@ function ProcessWorkspace({ view, processes, buildings, sourceAccounts, historyR
   const [query, setQuery] = useState('');
   const [scope, setScope] = useState(new URLSearchParams(location.search).get('filter') || 'all');
   const [sourceFilter, setSourceFilter] = useState('all');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
   const [appliedDateFrom, setAppliedDateFrom] = useState('');
   const [appliedDateTo, setAppliedDateTo] = useState('');
-  const dateFromRef = useRef<HTMLInputElement>(null);
-  const dateToRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { setScope(new URLSearchParams(location.search).get('filter') || 'all'); setQuery(''); setDateFrom(''); setDateTo(''); setAppliedDateFrom(''); setAppliedDateTo(''); }, [view, location.search]);
+  useEffect(() => { setScope(new URLSearchParams(location.search).get('filter') || 'all'); setQuery(''); setAppliedDateFrom(''); setAppliedDateTo(''); }, [view, location.search]);
   const title = view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : 'Processos';
   const menuFilterKey = (['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? view : null) as ProcessMenuKey | null;
   const matchingView = processes.filter((item) => {
@@ -363,7 +576,7 @@ function ProcessWorkspace({ view, processes, buildings, sourceAccounts, historyR
     : 'Os indicadores e esta lista usam a mesma unidade: processos do Fênix.';
   return <section className="building-section process-workspace">
     <div className="section-title-row"><div><h2>{title} <span>{matchingView.length}</span></h2><p>{intro}</p></div><ExcelExportButton filename={`fenix-${title}`} sheetName={title} columns={['Conta Fênix', 'Edificação', 'Município', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Documentos sincronizados', view === 'analysis' ? 'Entrada em análise' : view === 'notified' ? 'Data da notificação' : 'Última atualização']} rows={exportRows} /></div>
-    <div className="table-toolbar process-toolbar"><div className="process-date-filters"><label>De<input ref={dateFromRef} type="date" aria-label="Data inicial do período" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label>Até<input ref={dateToRef} type="date" aria-label="Data final do período" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedDateFrom(dateFromRef.current?.value || ''); setAppliedDateTo(dateToRef.current?.value || ''); }}>Aplicar</button>{(dateFrom || dateTo || appliedDateFrom || appliedDateTo) && <button className="text-link" onClick={() => { setDateFrom(''); setDateTo(''); setAppliedDateFrom(''); setAppliedDateTo(''); }}>Limpar datas</button>}{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}</div><label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label></div>
+    <div className="table-toolbar process-toolbar"><div className="process-date-filters"><DateRangePicker from={appliedDateFrom} to={appliedDateTo} onApply={(from, to) => { setAppliedDateFrom(from); setAppliedDateTo(to); }} label="Atividade" />{(appliedDateFrom || appliedDateTo) && <button className="text-link" onClick={() => { setAppliedDateFrom(''); setAppliedDateTo(''); }}>Limpar datas</button>}{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}</div><label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label></div>
     <div className="table-wrap"><table className="process-table"><thead><tr><th>EDIFICAÇÃO</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA</th><th>DOCUMENTOS</th><th>{view === 'analysis' ? 'ENTRADA EM ANÁLISE' : view === 'notified' ? 'DATA DA NOTIFICAÇÃO' : 'ÚLTIMA ATUALIZAÇÃO'}</th><th></th></tr></thead><tbody>{pageRows.map((item) => {
       const building = buildingsById.get(item.buildingId);
       const dateValue = view === 'analysis' ? item.analysisEnteredAt : view === 'notified' ? item.notificationEnteredAt : item.latestActivityAt;
@@ -419,7 +632,7 @@ function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, window
     </div>
     {error && <div className="settings-message error">{error}</div>}
     {list === 'active' && <ul className="renewal-legend"><li><i className="normal" /> <b>Verde:</b> Dentro do prazo (Normal/Seguro)</li><li><i className="attention" /> <b>Amarelo/Laranja:</b> Prazo próximo (Atenção)</li><li><i className="urgent" /> <b>Vermelho:</b> No limite do prazo (Alerta/Urgência)</li><li><i className="overdue" /> <b>Preto ou Roxo:</b> Prazo perdido (Vencido)</li></ul>}
-    <div className="table-toolbar renewal-filters"><div className="renewal-filter-controls"><label>De<input type="date" aria-label="Renovação a partir de" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label><label>Até<input type="date" aria-label="Renovação até" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label><label>Situação<select value={situation} onChange={(event) => setSituation(event.target.value)}><option value="all">Todas</option>{list === 'active' ? <><option value="normal">Dentro do prazo</option><option value="attention">Prazo próximo</option><option value="urgent">No limite</option><option value="overdue">Vencidas</option></> : <><option value="archived">Arquivados</option><option value="lost">Perdidos</option></>}</select></label><label>Mês<select value={month} onChange={(event) => setMonth(event.target.value)}><option value="all">Todos</option>{Array.from({ length: 12 }, (_, index) => { const value = String(index + 1).padStart(2, '0'); const label = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, index, 1))); return <option key={value} value={value}>{label}</option>; })}</select></label>{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}{hasFilters && <button className="text-link renewal-clear-filters" onClick={clearFilters}>Limpar filtros</button>}</div><label className="search-box renewal-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar edificação, município ou processo..." aria-label="Buscar renovações" /></label><span className="renewal-result-count">Exibindo {filteredRecords.length} de {records.length}</span></div>
+    <div className="table-toolbar renewal-filters"><div className="renewal-filter-controls"><DateRangePicker from={dateFrom} to={dateTo} onApply={(from, to) => { setDateFrom(from); setDateTo(to); }} label="Renovação" /><label>Situação<select value={situation} onChange={(event) => setSituation(event.target.value)}><option value="all">Todas</option>{list === 'active' ? <><option value="normal">Dentro do prazo</option><option value="attention">Prazo próximo</option><option value="urgent">No limite</option><option value="overdue">Vencidas</option></> : <><option value="archived">Arquivados</option><option value="lost">Perdidos</option></>}</select></label><label>Mês<select value={month} onChange={(event) => setMonth(event.target.value)}><option value="all">Todos</option>{Array.from({ length: 12 }, (_, index) => { const value = String(index + 1).padStart(2, '0'); const label = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, index, 1))); return <option key={value} value={value}>{label}</option>; })}</select></label>{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}{hasFilters && <button className="text-link renewal-clear-filters" onClick={clearFilters}>Limpar filtros</button>}</div><label className="search-box renewal-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar edificação, município ou processo..." aria-label="Buscar renovações" /></label><span className="renewal-result-count">Exibindo {filteredRecords.length} de {records.length}</span></div>
     <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>PROCESSO</th><th>HOMOLOGADO EM</th><th>RENOVAÇÃO EM</th><th>SITUAÇÃO</th><th>AÇÕES</th></tr></thead><tbody>
       {filteredRecords.map((item) => <tr key={item.id} className="clickable-row" onClick={() => onOpen(item.buildingId, item.id)}>
         <td><b>{item.buildingReference}</b><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></td><td>{item.municipality || '—'}</td><td><b className="protocol-text">{item.protocol || 'Sem protocolo'}</b><small className="table-subtext">{item.type}</small></td><td>{dateLabel(item.homologatedAt)}</td><td>{dateLabel(item.renewalAt)}</td>
@@ -435,18 +648,14 @@ function DashboardPage() {
   const { data, error, loading, refresh } = useDashboard();
   const location = useLocation();
   const view = new URLSearchParams(location.search).get('view') || 'overview';
-  const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('Todas');
-  const [sourceFilter, setSourceFilter] = useState('all');
-  const [buildingDateFrom, setBuildingDateFrom] = useState('');
-  const [buildingDateTo, setBuildingDateTo] = useState('');
+  const [searchFilters, setSearchFilters] = useState<BuildingSearchFilter[]>([]);
   const [appliedBuildingDateFrom, setAppliedBuildingDateFrom] = useState('');
   const [appliedBuildingDateTo, setAppliedBuildingDateTo] = useState('');
-  const buildingDateFromRef = useRef<HTMLInputElement>(null);
-  const buildingDateToRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
   const [buildingPageSize, setBuildingPageSize] = useState<number | 'all'>(50);
   const [syncing, setSyncing] = useState(false);
+  const [externalSyncRunning, setExternalSyncRunning] = useState(false);
   const [renewals, setRenewals] = useState<RenewalRecord[]>([]);
   const [renewalList, setRenewalList] = useState<'active' | 'archived'>('active');
   const [renewalWindow, setRenewalWindow] = useState(2);
@@ -466,7 +675,7 @@ function DashboardPage() {
   const launchAi = (building: Building | null, prompt = '') => { setAiBuilding(building); setAiPrompt(prompt); setAiOpen(true); };
   const [syncMenu, setSyncMenu] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { setPage(1); }, [view, query, filter, sourceFilter, appliedBuildingDateFrom, appliedBuildingDateTo]);
+  useEffect(() => { setPage(1); }, [view, searchFilters, filter, appliedBuildingDateFrom, appliedBuildingDateTo]);
   useEffect(() => {
     if (view !== 'renewals') return;
     let active = true;
@@ -487,10 +696,9 @@ function DashboardPage() {
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
   const activeNav = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
   const viewTitle = view === 'buildings' ? 'Edificações' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
-  const viewBuildings = data.buildings.filter((item) => sourceFilter === 'all' || (sourceFilter === 'primary' ? !item.sourceConnectionId : item.sourceConnectionId === sourceFilter));
+  const viewBuildings = data.buildings;
   const visible = viewBuildings.filter((item) => {
-    const q = query.toLocaleLowerCase('pt-BR');
-    const matchesText = `${item.reference} ${item.municipality} ${item.protocol} ${item.status} ${item.sourceAccountName || ''}`.toLocaleLowerCase('pt-BR').includes(q);
+    const matchesText = searchFilters.every((searchFilter) => matchesBuildingSearchFilter(item, searchFilter));
     const matchesFilter = filter === 'Todas' || (filter === 'Em análise' && /an[aá]lise/i.test(item.status)) || (filter === 'Aguardando ação' && /pend|exig|document|retific/i.test(item.status)) || (filter === 'Aprovadas' && /aprov|homolog|conclu/i.test(item.status));
     const dateKey = dateKeyInBahia(item.lastUpdated);
     const matchesDate = (!appliedBuildingDateFrom || (dateKey && dateKey >= appliedBuildingDateFrom)) && (!appliedBuildingDateTo || (dateKey && dateKey <= appliedBuildingDateTo));
@@ -499,7 +707,9 @@ function DashboardPage() {
   const pageSize = buildingPageSize === 'all' ? Math.max(visible.length, 1) : buildingPageSize;
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
   const pageRows = buildingPageSize === 'all' ? visible : visible.slice((page - 1) * pageSize, page * pageSize);
+  const updateInProgress = syncing || externalSyncRunning || data.sync.status === 'running';
   async function syncNow() {
+    if (updateInProgress) return;
     setSyncing(true); setSyncMenu(false);
     try { const result = await api<{ partial?: boolean }>('/api/sync/now', { method: 'POST' }); await refresh(); setConnectionRevision((revision) => revision + 1); setToast(result.partial ? 'Atualização parcial. Consulte o estado das contas em Consultas.' : 'Informações sincronizadas.'); }
     catch (e) { setToast(e instanceof Error ? e.message : 'Falha ao sincronizar.'); }
@@ -611,19 +821,19 @@ function DashboardPage() {
     { label: 'Processos com vistoria', value: data.metrics.inspections, trend: 'etapas de vistoria', icon: FileCheck2, tone: 'violet', target: 'analysis' }
   ];
   const openBuilding = (building: Building, tab = 'Edificação', processId?: string) => { setSelectedTab(tab); setSelectedProcessId(processId); setSelected(building); };
-  return <Shell user={data.user} active={selected ? 'Edificações' : activeNav} breadcrumbs={selected ? <><b>Edificações</b><span>/</span><b>{selected.reference}</b></> : undefined} onNavigate={() => { setSelected(null); setAiOpen(false); }} onOpenAi={() => launchAi(null)} onNotification={(notification) => {
+  return <Shell user={data.user} active={selected ? 'Edificações' : activeNav} breadcrumbs={selected ? <><b>Edificações</b><span>/</span><b>{selected.reference}</b></> : undefined} onNavigate={() => { setSelected(null); setAiOpen(false); }} onOpenAi={() => launchAi(null)} onSyncRunningChange={setExternalSyncRunning} onNotification={(notification) => {
     const target = data.buildings.find((item) => item.id === notification.buildingId);
     if (target) openBuilding(target, 'Edificação', notification.processId || undefined);
   }}>
     <div className="page-content dashboard-page">
-      <div className="page-heading"><div><span className="section-kicker">PAINEL DE ACOMPANHAMENTO</span><h1>{viewTitle}</h1><p>{view === 'overview' ? 'Acompanhe suas edificações e processos de segurança contra incêndio.' : view === 'sync' ? 'Acompanhe quando os dados do Fênix foram atualizados.' : `Consulte ${viewTitle.toLocaleLowerCase('pt-BR')} vinculados às edificações do seu cadastro.`}</p></div><div className="page-heading-actions"><button className="button button-outline sync-button" onClick={() => void syncNow()} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando' : 'Atualizar agora'}</button><button className="icon-button heading-more" onClick={() => setSyncMenu(!syncMenu)} aria-label="Mais opções"><MoreHorizontal size={19} /></button>{syncMenu && <div className="popover"><b>Sincronização automática</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas.</p><span><Clock3 size={13} /> Próxima: {data.sync.intervalMinutes === 0 ? 'desativada; apenas manual' : data.sync.nextSync ? formatDate(data.sync.nextSync) : 'após a primeira consulta'}</span></div>}</div></div>
+      <div className="page-heading"><div><span className="section-kicker">PAINEL DE ACOMPANHAMENTO</span><h1>{viewTitle}</h1><p>{view === 'overview' ? 'Acompanhe suas edificações e processos de segurança contra incêndio.' : view === 'sync' ? 'Acompanhe quando os dados do Fênix foram atualizados.' : `Consulte ${viewTitle.toLocaleLowerCase('pt-BR')} vinculados às edificações do seu cadastro.`}</p></div><div className="page-heading-actions"><button className="button button-outline sync-button" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar agora'}</button><button className="icon-button heading-more" onClick={() => setSyncMenu(!syncMenu)} aria-label="Mais opções"><MoreHorizontal size={19} /></button>{syncMenu && <div className="popover"><b>Sincronização automática</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas.</p><span><Clock3 size={13} /> Próxima: {data.sync.intervalMinutes === 0 ? 'desativada; apenas manual' : data.sync.nextSync ? formatDate(data.sync.nextSync) : 'após a primeira consulta'}</span></div>}</div></div>
       <section className="metrics-grid">{contextualMetrics.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} trend={metric.trend} trendPlain={'trendPlain' in metric ? metric.trendPlain : false} icon={metric.icon} tone={metric.tone} onClick={'filter' in metric && metric.filter ? () => navigate(`/painel?view=${view}&filter=${encodeURIComponent(metric.filter!)}`) : undefined} />)}</section>
       {view === 'analysis' && <section className="average-breakdown"><h2>Tempo médio em análise por tipo</h2><p>Tempo decorrido desde a movimentação mais recente de entrada em análise, conforme o histórico do Fênix.</p><div className="average-breakdown-grid">{analysisGroups.map((group) => <div key={group.label}><b>{group.label}</b><strong>{group.value}</strong><small>{group.coverage}</small></div>)}</div></section>}
       <section className="ai-alert-card"><span className="ai-alert-icon"><Sparkles size={19} /></span><div className="ai-alert-copy"><b>Sinalização automática <span className="ai-label">DADOS</span></b><p>{data.metrics.attention ? `Encontramos ${data.metrics.attention} processo${data.metrics.attention > 1 ? 's' : ''} com status que merece${data.metrics.attention > 1 ? 'm' : ''} atenção. Abra uma edificação para entender os dados e próximos passos.` : 'Não há processos com pendências sinalizadas nos dados sincronizados.'}</p><small>Resumo baseado no status recebido do Fênix · {data.sync.lastSync ? `atualizado ${formatDate(data.sync.lastSync)}` : 'aguardando primeira consulta'}</small></div><button className="button button-ghost" onClick={() => launchAi(null, 'Analise a situação geral das edificações e processos acompanhados, destacando as pendências e prioridades de atenção.')}>Perguntar à IA <ArrowRight size={15} /></button></section>
-      {view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={syncing}><RefreshCw size={15} className={syncing ? 'spin' : ''} /> {syncing ? 'Sincronizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
-        <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações acompanhadas.</p></div><div className="section-actions"><ExcelExportButton filename="fenix-edificacoes" sheetName="Edificações" columns={['Conta Fênix', 'Edificação', 'Município', 'Área total', 'Pavimentos', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Última atualização', 'Quantidade de processos']} rows={buildingExportRows} /><button className="text-link" onClick={() => { setQuery(''); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div></div>
-        <div className="table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="table-controls"><div className="process-date-filters building-date-filters"><label>De<input ref={buildingDateFromRef} type="date" aria-label="Data inicial da última atualização" value={buildingDateFrom} onChange={(event) => setBuildingDateFrom(event.target.value)} /></label><label>Até<input ref={buildingDateToRef} type="date" aria-label="Data final da última atualização" value={buildingDateTo} onChange={(event) => setBuildingDateTo(event.target.value)} /></label><button className="button button-outline date-apply-button" onClick={() => { setAppliedBuildingDateFrom(buildingDateFromRef.current?.value || ''); setAppliedBuildingDateTo(buildingDateToRef.current?.value || ''); }}>Aplicar</button></div>{(data.sourceAccounts?.length || 0) > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{data.sourceAccounts!.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}<label className="search-box"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar edificação, município ou protocolo..." /><kbd>⌘ K</kbd></label><button className="button button-outline filter-button" onClick={() => setFilter(filter === 'Todas' ? 'Aguardando ação' : 'Todas')}><Filter size={14} /> Filtros</button></div></div>
-        <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span><b>{item.reference}</b><small>{item.floors ? `${item.floors} pavimentos` : 'Edificação cadastrada'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small></td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
+      {view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
+        <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações acompanhadas.</p></div><div className="section-actions"><ExcelExportButton filename="fenix-edificacoes" sheetName="Edificações" columns={['Conta Fênix', 'Edificação', 'Município', 'Área total', 'Pavimentos', 'Protocolo', 'Tipo de processo', 'Status', 'Etapa atual', 'Última atualização', 'Quantidade de processos']} rows={buildingExportRows} /><button className="text-link" onClick={() => { setSearchFilters([]); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div></div>
+        <div className="table-toolbar building-table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="building-filter-row"><BuildingFilterSearch filters={searchFilters} sourceAccounts={data.sourceAccounts || []} inputRef={searchInputRef} onAdd={(nextFilter) => setSearchFilters((current) => [...current, nextFilter])} onRemove={(id) => setSearchFilters((current) => current.filter((item) => item.id !== id))} /><DateRangePicker from={appliedBuildingDateFrom} to={appliedBuildingDateTo} onApply={(from, to) => { setAppliedBuildingDateFrom(from); setAppliedBuildingDateTo(to); }} label="Última atualização" /></div></div>
+        <div className="table-wrap"><table className="building-list-table"><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span className="building-cell-copy"><b>{item.reference}</b><span className="building-details-line"><small className="building-floor-count">{item.floors ? `${item.floors} ${item.floors === 1 ? 'pavimento' : 'pavimentos'}` : 'Edificação cadastrada'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></span></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small></td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
         <div className="table-foot"><span>Exibindo <b>{visible.length ? (page - 1) * pageSize + 1 : 0}–{Math.min(page * pageSize, visible.length)}</b> de <b>{visible.length}</b> edificações · {visibleProcessCount} processos nas edificações exibidas</span><div className="table-foot-right"><label className="page-size-select">Por página<select value={buildingPageSize} onChange={(event) => { setBuildingPageSize(event.target.value === 'all' ? 'all' : Number(event.target.value)); setPage(1); }} aria-label="Quantidade de edificações por página"><option value={50}>50</option><option value={75}>75</option><option value={100}>100</option><option value={150}>150</option><option value="all">Todos</option></select></label><span className={`sync-state ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><span className="connection-dot" /> {data.sync.status === 'error' ? 'Falha na consulta' : `Última atualização: ${data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não sincronizado'}`}</span>{pageCount > 1 && <nav className="table-pagination" aria-label="Paginação da lista"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>Anterior</button><span>{page} / {pageCount}</span><button onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>Próxima</button></nav>}</div></div>
       </section>}
       <section className="bottom-insight"><span className="insight-icon"><Sparkles size={19} /></span><div className="insight-copy"><div className="insight-title"><b>Leitura contextual com IA</b><span className="ai-label">SOB DEMANDA</span></div><p>Selecione uma edificação para entender o status, as etapas e as informações disponíveis no Fênix.</p></div><button className="button button-ai-outline" onClick={() => visible[0] && launchAi(visible[0], `Explique a situação atual da edificação ${visible[0].reference}, considerando seus processos, etapas, documentos e próximos passos.`)} disabled={!visible.length}><Sparkles size={14} /> Explicar processo <ArrowRight size={14} /></button></section>
