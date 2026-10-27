@@ -7,6 +7,7 @@ export type ProcessRecord = {
   type: string;
   status: string;
   stage: string;
+  notified_by?: string;
   updated_at: string;
   payload: string;
   remote_id?: string | null;
@@ -24,6 +25,7 @@ export type DashboardProcess = {
   type: string;
   status: string;
   stage: string;
+  notifiedBy: string;
   updatedAt: string;
   documentCount: number;
   sourceAccountName?: string | null;
@@ -66,6 +68,7 @@ export function deduplicateProcesses(processes: ProcessRecord[]) {
       (project(process) === project(prior) && Date.parse(process.updated_at) > Date.parse(prior.updated_at)) ? process : prior;
     const newest = Date.parse(process.updated_at) > Date.parse(prior.updated_at) ? process : prior;
     grouped.set(key, { ...winner, status: newest.status, stage: newest.stage, updated_at: newest.updated_at,
+      notified_by: winner.notified_by || process.notified_by || prior.notified_by || '',
       payload: countProcessDocuments(process.payload) > countProcessDocuments(prior.payload) ? process.payload : prior.payload });
   }
   return [...grouped.values()].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
@@ -99,6 +102,7 @@ export function toDashboardProcess(process: ProcessRecord): DashboardProcess {
     type: process.type,
     status: process.status,
     stage: process.stage,
+    notifiedBy: process.notified_by || '',
     updatedAt: process.updated_at,
     documentCount: countProcessDocuments(process.payload),
     sourceAccountName: process.source_account_name || null,

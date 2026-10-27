@@ -841,11 +841,11 @@ export async function syncFenixUser(userId: string) {
       address=excluded.address, area=excluded.area, floors=excluded.floors, height=excluded.height,
       payload=excluded.payload, updated_at=excluded.updated_at, source_connection_id=excluded.source_connection_id, remote_id=excluded.remote_id`);
   const upsertProcess = db.prepare(`INSERT INTO processes
-    (id, user_id, source_connection_id, remote_id, building_id, protocol, type, status, stage, updated_at, payload)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, user_id, source_connection_id, remote_id, building_id, protocol, type, status, stage, notified_by, updated_at, payload)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET building_id=excluded.building_id, protocol=excluded.protocol,
       type=excluded.type, status=excluded.status, stage=excluded.stage, updated_at=excluded.updated_at,
-      payload=excluded.payload, source_connection_id=excluded.source_connection_id, remote_id=excluded.remote_id`);
+      notified_by=excluded.notified_by, payload=excluded.payload, source_connection_id=excluded.source_connection_id, remote_id=excluded.remote_id`);
   const sync = db.transaction(() => {
     if (connection) {
       if (selectedLocalBuildingIds.length) {
@@ -877,6 +877,7 @@ export async function syncFenixUser(userId: string) {
       upsertProcess.run(id, userId, connection?.id || null, connection ? remoteId : null, buildingId, processProtocol(process),
         `${process.__source === 'request' ? 'Solicitação' : 'Projeto técnico'}${first(process, ['tipo_solicitacao_display', 'tipo_solicitacao', 'sigla'], '') ? ` · ${first(process, ['tipo_solicitacao_display', 'tipo_solicitacao', 'sigla'], '')}` : ''}`,
         processStatus(process), String(first(process, ['etapa_atual', 'fase', 'stage'], processStatus(process))),
+        process.__source === 'request' ? cleanLabel(first(process, ['notificado_por', 'previous_request_notificado_por'], '')) : '',
         String(first(process, ['updated_at', 'data_atualizacao', 'created_at'], now)), JSON.stringify(safeProcessPayload(process)));
     }
     const insertNotification = db.prepare('INSERT OR IGNORE INTO notifications (user_id, building_id, process_id, dedupe_key, title, message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');

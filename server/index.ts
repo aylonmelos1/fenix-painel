@@ -357,7 +357,7 @@ async function dashboardPayload(user: NonNullable<ReturnType<typeof resolveSessi
         sourceAccountPaused: Boolean(building.source_account_paused),
         address: building.address, area: building.area, floors: building.floors, height: building.height,
         processCount: processesForBuilding.length, protocol: latest?.protocol || '—',
-        processType: latest?.type || 'Sem processo vinculado', status: latest?.status || 'Sem processo',
+        processType: latest?.type || 'Sem processo vinculado', notifiedBy: latest?.notified_by || '', status: latest?.status || 'Sem processo',
         requestCount, projectCount, documentsCount,
         hasRequest: requestCount > 0, hasProject: projectCount > 0, hasDocuments: documentsCount > 0,
         stage: latest?.stage || '—', lastUpdated: latest ? processActivityDates.get(latest.id) || null : null
@@ -780,7 +780,7 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
       date: item.updated_at, available: true, source: 'fenix', processId: item.id, kind: 'notification'
     });
     const timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
-    return { id: item.id, remoteId: item.remote_id || item.id.slice(item.id.indexOf(':') + 1), protocol: item.protocol, type: item.type, status: item.status, stage: item.stage, updatedAt: item.updated_at, documents, timeline, raw: payload };
+    return { id: item.id, remoteId: item.remote_id || item.id.slice(item.id.indexOf(':') + 1), protocol: item.protocol, type: item.type, status: item.status, stage: item.stage, notifiedBy: item.notified_by || '', updatedAt: item.updated_at, documents, timeline, raw: payload };
   });
   const enriched = await Promise.all(parsed.map(async (item) => {
     if (res.locals.user.demo || !item.id.startsWith('technicalproject:')) return item;

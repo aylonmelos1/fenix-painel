@@ -484,3 +484,5 @@
 .building-list-table td:nth-child(4) .table-subtext{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .building-list-table .row-actions{justify-content:flex-end}
 @media(max-width:760px){.building-list-table{min-width:890px}}
+.building-list-table td:nth-child(4) .table-notified-by,.process-workspace .table-notified-by{font-size:8px;line-height:1.3;color:#7d8d9c;margin-top:2px}
+.detail-notified-by{display:block!important;margin-top:5px;color:#607487;font-size:11px}

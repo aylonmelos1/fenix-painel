@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS processes (
   type TEXT NOT NULL DEFAULT 'Projeto técnico',
   status TEXT NOT NULL DEFAULT 'Em análise',
   stage TEXT NOT NULL DEFAULT '',
+  notified_by TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}'
 );
@@ -236,6 +237,11 @@ for (const [table, column] of [
   catch (error) {
     if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
   }
+}
+try {
+  db.exec("ALTER TABLE processes ADD COLUMN notified_by TEXT NOT NULL DEFAULT ''");
+} catch (error) {
+  if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
 }
 db.exec(`
 CREATE INDEX IF NOT EXISTS buildings_source ON buildings(source_connection_id, remote_id);

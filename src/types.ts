@@ -4,6 +4,7 @@ export type Building = {
   id: string; reference: string; municipality: string; address: string; area: number | null;
   floors: number | null; height: string; processCount: number; protocol: string;
   processType: string; status: string; stage: string; lastUpdated: string | null;
+  notifiedBy?: string | null;
   sourceAccountName?: string | null; sourceConnectionId?: string | null; sourceAccountPaused?: boolean;
   hasRequest?: boolean; hasProject?: boolean; hasDocuments?: boolean;
   requestCount?: number; projectCount?: number; documentsCount?: number;
@@ -12,6 +13,7 @@ export type Building = {
 export type DashboardProcess = {
   id: string; buildingId: string; buildingReference: string; municipality: string;
   protocol: string; type: string; status: string; stage: string; updatedAt: string; documentCount: number;
+  notifiedBy?: string | null;
   sourceAccountName?: string | null; sourceConnectionId?: string | null; sourceAccountPaused?: boolean;
   analysisEnteredAt?: string | null; notificationEnteredAt?: string | null; latestActivityAt?: string | null; notificationCount?: number | null; historyAvailable?: boolean;
   projectKind?: string | null;
@@ -36,6 +38,7 @@ export type DocumentItem = { id: string; name: string; type: string; date?: stri
 export type TimelineItem = { label: string; date?: string; done?: boolean; current?: boolean; pending?: boolean };
 export type ProcessDetail = {
   id: string; remoteId?: string; protocol: string; type: string; status: string; stage: string; updatedAt: string;
+  notifiedBy?: string | null;
   documents: DocumentItem[]; timeline: TimelineItem[]; raw: unknown;
 };
 export type BuildingDetail = { building: Building & { use?: string; totalArea?: number | null; buildingArea?: number | null; areaToBeBuilt?: number | null; validUntil?: string; technicalFacts?: Array<{ label: string; value: string }> }; processes: ProcessDetail[] };
