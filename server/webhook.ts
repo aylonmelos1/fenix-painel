@@ -287,7 +287,7 @@ export async function deliverWebhookLogged(
     const documents = webhookDocumentSummary(payload);
     const result = db.prepare(`INSERT INTO webhook_deliveries
       (user_id,source_connection_id,event_id,event,title,message,building_name,process_id,protocol,documents_json,payload_ciphertext,status,attempts,created_at,last_attempt_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'sending',0,?,?)`).run(
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,'sending',0,?,?)`).run(
       userId, sourceConnectionId, payload.changes.eventId, payload.changes.event, payload.changes.title, payload.changes.message,
       String(payload.after.building.reference || ''), String(payload.after.process.id || ''),
       String(payload.after.process.protocol || ''), JSON.stringify(documents), seal(JSON.stringify(payload)), now, now
