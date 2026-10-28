@@ -1718,6 +1718,78 @@ const SETTINGS_SECTIONS = [
   { id: 'contas-fenix', title: 'Contas Fênix', summary: 'Contas e acesso', description: 'Gerencie contas acompanhadas e o acesso principal ao Fênix.', icon: Building2 }
 ] as const;
 
+const SETTINGS_ANCHORS = {
+  preferencias: [
+    { id: 'settings-preferences-ai-sync', label: 'IA e atualização automática' },
+    { id: 'settings-preferences-filters', label: 'Filtros dos menus' },
+    { id: 'settings-preferences-renewals', label: 'Renovações' }
+  ],
+  assistente: [
+    { id: 'settings-ai-api-key', label: 'Chave da API' },
+    { id: 'settings-ai-model', label: 'Modelo' },
+    { id: 'settings-ai-privacy', label: 'Privacidade' }
+  ],
+  integracoes: [
+    { id: 'settings-integration-odoo', label: 'Integração Odoo' },
+    { id: 'settings-integration-webhook', label: 'Webhook' }
+  ],
+  'contas-fenix': [
+    { id: 'settings-fenix-accounts', label: 'Contas Fênix acompanhadas' },
+    { id: 'settings-fenix-primary', label: 'Acesso principal ao Fênix' }
+  ]
+} as const;
+
+function SettingsAnchorRail({ anchors }: { anchors: readonly { id: string; label: string }[] }) {
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setVisibleIds(new Set());
+    const targets = anchors
+      .map(({ id }) => document.getElementById(id))
+      .filter((target): target is HTMLElement => target instanceof HTMLElement);
+    if (!targets.length) return;
+    if (!('IntersectionObserver' in window)) {
+      setVisibleIds(new Set([targets[0].id]));
+      return;
+    }
+
+    const topbarHeight = document.querySelector('.topbar')?.getBoundingClientRect().height ?? 62;
+    const subnavHeight = document.querySelector('.settings-subnav')?.getBoundingClientRect().height ?? 68;
+    const visible = new Set<string>();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.add((entry.target as HTMLElement).id);
+        else visible.delete((entry.target as HTMLElement).id);
+      }
+      setVisibleIds((current) => {
+        if (current.size === visible.size && [...current].every((id) => visible.has(id))) return current;
+        return new Set(visible);
+      });
+    }, { rootMargin: `-${Math.ceil(topbarHeight + subnavHeight + 12)}px 0px -48px 0px`, threshold: 0 });
+
+    targets.forEach((target) => observer.observe(target));
+    return () => observer.disconnect();
+  }, [anchors]);
+
+  function scrollToAnchor(id: string) {
+    const target = document.getElementById(id);
+    if (!target) return;
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    target.scrollIntoView({ behavior, block: 'start' });
+  }
+
+  const currentAnchorId = anchors.find((anchor) => visibleIds.has(anchor.id))?.id;
+  return <nav className="settings-anchor-rail" aria-label="Atalhos para seções de configuração">
+    {anchors.map((anchor) => {
+      const isVisible = visibleIds.has(anchor.id);
+      return <button key={anchor.id} type="button" className={`settings-anchor-link ${isVisible ? 'is-current' : ''}`} onClick={() => scrollToAnchor(anchor.id)} aria-label={`Ir para ${anchor.label}`} aria-current={anchor.id === currentAnchorId ? 'location' : undefined}>
+        <span className="settings-anchor-mark" aria-hidden="true" />
+        <span className="settings-anchor-tooltip" aria-hidden="true">{anchor.label}</span>
+      </button>;
+    })}
+  </nav>;
+}
+
 function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1747,35 +1819,38 @@ function SettingsPage() {
   if (!user) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /></div>;
   const sectionHref = (id: typeof SETTINGS_SECTIONS[number]['id']) => id === 'preferencias' ? '/configuracoes' : `/configuracoes?secao=${id}`;
   return <Shell user={user} active="Configurações"><div className="page-content settings-page">
-    <div className="page-heading"><div><span className="section-kicker">PREFERÊNCIAS DO PAINEL</span><h1>Configurações</h1><p>Ajuste as opções do painel por área.</p></div></div>
-    <nav className="settings-subnav" aria-label="Áreas de configuração">
-      {SETTINGS_SECTIONS.map((section) => {
-        const Icon = section.icon;
-        const active = section.id === activeSection;
-        return <Link key={section.id} to={sectionHref(section.id)} aria-current={active ? 'page' : undefined}>
-          <span className="settings-subnav-icon"><Icon size={17} /></span>
-          <span className="settings-subnav-copy"><b>{section.title}</b><small>{section.summary}</small></span>
-        </Link>;
-      })}
-    </nav>
-    <div className="settings-section-intro"><h2 id="settings-section-title">{selectedSection.title}</h2><p>{selectedSection.description}</p></div>
-    <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'preferencias'}>
-      <UserPreferences />
-      <ProcessMenuSettings />
-      <RenewalSettings />
-    </section>
-    <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'assistente'}>
-      <section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label>Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label>Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section>
-    </section>
-    <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'integracoes'}>
-      <OdooIntegrationSettings />
-      <WebhookIntegration />
-    </section>
-    <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'contas-fenix'}>
-      <FenixConnectionsPanel user={user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => undefined} />
-      {connectionMessage && <div className="settings-message">{connectionMessage}</div>}
-      <section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso principal ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section>
-    </section>
+    <div className="settings-main-column">
+      <div className="page-heading"><div><span className="section-kicker">PREFERÊNCIAS DO PAINEL</span><h1>Configurações</h1><p>Ajuste as opções do painel por área.</p></div></div>
+      <nav className="settings-subnav" aria-label="Áreas de configuração">
+        {SETTINGS_SECTIONS.map((section) => {
+          const Icon = section.icon;
+          const active = section.id === activeSection;
+          return <Link key={section.id} to={sectionHref(section.id)} aria-current={active ? 'page' : undefined}>
+            <span className="settings-subnav-icon"><Icon size={17} /></span>
+            <span className="settings-subnav-copy"><b>{section.title}</b><small>{section.summary}</small></span>
+          </Link>;
+        })}
+      </nav>
+      <div className="settings-section-intro"><h2 id="settings-section-title">{selectedSection.title}</h2><p>{selectedSection.description}</p></div>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'preferencias'}>
+        <div className="settings-anchor-target" id="settings-preferences-ai-sync" data-settings-anchor="IA e atualização automática"><UserPreferences /></div>
+        <div className="settings-anchor-target" id="settings-preferences-filters" data-settings-anchor="Filtros dos menus"><ProcessMenuSettings /></div>
+        <div className="settings-anchor-target" id="settings-preferences-renewals" data-settings-anchor="Renovações"><RenewalSettings /></div>
+      </section>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'assistente'}>
+        <section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label id="settings-ai-api-key" data-settings-anchor="Chave da API">Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label id="settings-ai-model" data-settings-anchor="Modelo">Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note" id="settings-ai-privacy" data-settings-anchor="Privacidade"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section>
+      </section>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'integracoes'}>
+        <div className="settings-anchor-target" id="settings-integration-odoo" data-settings-anchor="Integração Odoo"><OdooIntegrationSettings /></div>
+        <div className="settings-anchor-target" id="settings-integration-webhook" data-settings-anchor="Webhook"><WebhookIntegration /></div>
+      </section>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'contas-fenix'}>
+        <div className="settings-anchor-target" id="settings-fenix-accounts" data-settings-anchor="Contas Fênix acompanhadas"><FenixConnectionsPanel user={user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => undefined} /></div>
+        {connectionMessage && <div className="settings-message">{connectionMessage}</div>}
+        <div className="settings-anchor-target" id="settings-fenix-primary" data-settings-anchor="Acesso principal ao Fênix"><section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso principal ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section></div>
+      </section>
+    </div>
+    <SettingsAnchorRail anchors={SETTINGS_ANCHORS[activeSection]} />
     {connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(savedMessage) => { setConnectionMessage(savedMessage); setConnectionRevision((revision) => revision + 1); setConnectionModal(null); }} />}
   </div></Shell>;
 }
