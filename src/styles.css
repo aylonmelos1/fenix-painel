@@ -689,3 +689,12 @@
 @media(max-width:980px){.settings-page{grid-template-columns:minmax(0,1fr)}.settings-anchor-rail{display:none}.settings-subnav{width:100%}}
 @media(prefers-reduced-motion:reduce){.settings-anchor-mark,.settings-anchor-tooltip{transition:none}}
 @media(max-width:640px){.odoo-stage-control{grid-column:2;grid-row:2;justify-self:start;max-width:100%}.odoo-stage-pill{max-width:100%}}
+
+/* Keep the global header visible while detail drawers lock document scrolling. */
+.main-area{padding-top:62px}
+.topbar{position:fixed;inset:0 0 auto 238px;height:62px;z-index:15}
+.drawer-backdrop{inset:62px 0 0 238px}
+.main-area{--settings-topbar-offset:62px}
+@media(min-width:901px){.app-shell.sidebar-collapsed .topbar{left:72px}.app-shell.sidebar-collapsed .drawer-backdrop{left:72px}}
+@media(max-width:900px){.main-area{padding-top:58px;--settings-topbar-offset:58px}.topbar{left:205px;height:58px}.drawer-backdrop{inset:58px 0 0 205px}}
+@media(max-width:640px){.main-area{padding-top:55px;--settings-topbar-offset:55px}.topbar{left:0;height:55px}.drawer-backdrop{inset:55px 0 0}}
