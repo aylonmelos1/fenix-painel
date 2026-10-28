@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Activity, AtSign, Building2, CalendarDays, Check, CircleAlert, FileText, LoaderCircle, MessageCircle, Paperclip, Plus, RefreshCw, Search, Send, UserRound, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api, formatDate, type DocumentItem } from './types';
 
 type Relation = false | number | [number, string] | number[];
@@ -274,7 +275,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
 
   return <div className="odoo-page">
     <header className="odoo-page-heading"><div><h3>Projeto no Odoo</h3><p>Dados do projeto e conversas do Chatter.</p></div><div className="odoo-heading-actions"><span className={`odoo-connection-state ${bootstrap?.configured && !demo ? 'ready' : ''}`}><i />{demo ? 'Demonstração' : bootstrap?.configured ? 'Configurado' : 'Não configurado'}</span>{bootstrap?.projectId && !demo && <button type="button" className="button button-outline odoo-change-link" onClick={() => linkEditorOpen ? setLinkEditorOpen(false) : void openLinkEditor()}><RefreshCw size={14} />{linkEditorOpen ? 'Fechar busca' : 'Alterar vínculo'}</button>}</div></header>
-    {(!demo && bootstrap && !bootstrap.configured) && <div className="odoo-notice"><CircleAlert size={16} /><span>Configure a conexão em <b>Configurações → Integração Odoo</b> para vincular um projeto.</span></div>}
+    {(!demo && bootstrap && !bootstrap.configured) && <div className="odoo-notice"><CircleAlert size={16} /><span>Configure a conexão para vincular um projeto. <Link to="/configuracoes?secao=integracoes">Abrir configurações Odoo <span aria-hidden="true">→</span></Link></span></div>}
     {demo && <div className="odoo-notice"><CircleAlert size={16} /><span>A integração Odoo está disponível em uma sessão conectada, não na demonstração.</span></div>}
     {(!bootstrap?.projectId || linkEditorOpen) && !demo && bootstrap?.configured && <section className="odoo-link-workbench">
       {bootstrap.projectId && <div className="odoo-current-link"><span>Vínculo atual</span><b>Projeto #{bootstrap.projectId}{snapshot ? ` · ${snapshot.project.name}` : ''}</b></div>}
