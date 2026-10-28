@@ -85,6 +85,23 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
   const noteEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const noteFileInputRef = useRef<HTMLInputElement | null>(null);
   const activityFileInputRef = useRef<HTMLInputElement | null>(null);
+  const stagePickerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!stageMenuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (event.target instanceof Node && !stagePickerRef.current?.contains(event.target)) setStageMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setStageMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [stageMenuOpen]);
 
   async function refreshProject() {
     setRefreshing(true); setError('');
@@ -101,7 +118,8 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
   async function changeProjectStage(value: string) {
     const stageId = Number(value);
     const stage = projectStages.find((item) => item.id === stageId);
-    if (!stage || relationId(snapshot?.project.stage ?? false) === value) return;
+    if (!stage) return;
+    if (relationId(snapshot?.project.stage ?? false) === value) { setStageMenuOpen(false); return; }
     setStageChanging(true); setError(''); setFeedback(null);
     try {
       const updated = await api<{ id: number; name: string }>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo/stage`, { method: 'PUT', body: JSON.stringify({ stageId }) });
@@ -356,7 +374,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     {!loading && snapshot && <div className="odoo-workspace">
       <main className="odoo-project-column">
         <section className="odoo-project-overview">
-          <header className="odoo-project-heading"><span className="odoo-project-icon"><Building2 size={20} /></span><div className="odoo-project-name"><small>PROJETO #{snapshot.project.id}</small><h4>{snapshot.project.name}</h4></div>{stageMenuOpen ? <label className="odoo-stage-pill" title="Selecione uma etapa"><select aria-label="Etapa do projeto. Selecione para alterar." value={relationId(snapshot.project.stage)} onBlur={() => setStageMenuOpen(false)} onChange={(event) => void changeProjectStage(event.target.value)} disabled={stageChanging || stageOptionsLoading || refreshing}><option value={relationId(snapshot.project.stage)}>{relationName(snapshot.project.stage)}</option>{projectStages.filter((stage) => String(stage.id) !== relationId(snapshot.project.stage)).map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select>{stageChanging || stageOptionsLoading ? <LoaderCircle size={13} className="spin" /> : <ChevronDown size={13} />}</label> : <button type="button" className="odoo-stage-pill" onClick={() => void openProjectStages()} disabled={stageOptionsLoading || refreshing || stageChanging} aria-label={`Etapa atual: ${relationName(snapshot.project.stage)}. Clique para alterar.`} title="Clique para alterar a etapa">{stageOptionsLoading ? <LoaderCircle size={13} className="spin" /> : null}{relationName(snapshot.project.stage)}<ChevronDown size={13} /></button>}<button className="button button-outline odoo-refresh" type="button" onClick={() => void refreshProject()} disabled={refreshing || stageChanging} aria-label="Atualizar dados do projeto" title="Atualizar dados do projeto">{refreshing ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}</button></header>
+          <header className="odoo-project-heading"><span className="odoo-project-icon"><Building2 size={20} /></span><div className="odoo-project-name"><small>PROJETO #{snapshot.project.id}</small><h4>{snapshot.project.name}</h4></div><div className="odoo-stage-control" ref={stagePickerRef}><button type="button" className="odoo-stage-pill" onClick={() => void openProjectStages()} disabled={refreshing || stageChanging} aria-label={`Etapa atual: ${relationName(snapshot.project.stage)}. Clique para alterar.`} aria-expanded={stageMenuOpen} aria-controls="odoo-project-stage-options" title="Clique para alterar a etapa">{stageOptionsLoading ? <LoaderCircle size={13} className="spin" /> : null}{relationName(snapshot.project.stage)}<ChevronDown size={13} /></button>{stageMenuOpen && <div className="odoo-stage-menu" id="odoo-project-stage-options" role="group" aria-label="Etapas disponíveis do projeto">{stageOptionsLoading ? <div className="odoo-stage-menu-state" role="status"><LoaderCircle size={14} className="spin" />Carregando etapas…</div> : projectStages.filter((stage) => String(stage.id) !== relationId(snapshot.project.stage)).length ? projectStages.filter((stage) => String(stage.id) !== relationId(snapshot.project.stage)).map((stage) => <button type="button" className="odoo-stage-option" key={stage.id} onClick={() => void changeProjectStage(String(stage.id))} disabled={stageChanging || refreshing}>{stageChanging ? <LoaderCircle size={13} className="spin" /> : null}{stage.name}</button>) : <div className="odoo-stage-menu-state">A Odoo não retornou outras etapas para este projeto.</div>}</div>}</div><button className="button button-outline odoo-refresh" type="button" onClick={() => void refreshProject()} disabled={refreshing || stageChanging} aria-label="Atualizar dados do projeto" title="Atualizar dados do projeto">{refreshing ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}</button></header>
           <div className="odoo-project-facts"><div><small>CLIENTE</small><b>{relationName(snapshot.project.customer)}</b></div><div><small>RESPONSÁVEL</small><b>{relationName(snapshot.project.manager)}</b></div><div><small>INÍCIO</small><b>{dateOnly(snapshot.project.startDate)}</b></div><div><small>ENCERRAMENTO</small><b>{dateOnly(snapshot.project.endDate)}</b></div></div>
           <div className="odoo-project-counts"><span><b>{snapshot.project.taskCount}</b> tarefas</span><span><b>{snapshot.project.openTaskCount}</b> em andamento</span><span>Atualizado em <b>{dateOnly(snapshot.project.updatedAt)}</b></span></div>
           {snapshot.project.description && <p className="odoo-project-description">{snapshot.project.description}</p>}

@@ -525,11 +525,16 @@
 .odoo-project-name{display:grid;gap:3px;min-width:0}
 .odoo-project-name>small{color:#81909d;font-size:9px;font-weight:800;letter-spacing:.55px}
 .odoo-project-name h4{margin:0;color:#243b50;font:800 18px 'Manrope';line-height:1.25;overflow-wrap:anywhere}
+.odoo-stage-control{position:relative;justify-self:start;min-width:0;max-width:100%}
 .odoo-stage-pill{max-width:190px;display:inline-flex;align-items:center;gap:5px;padding:7px 10px;border:1px solid #d8eeea;border-radius:6px;background:#f1faf8;color:#21816e;font-size:10px;font-weight:800;line-height:1.3;text-align:center}
 .odoo-stage-pill:disabled{cursor:wait;opacity:.7}
 .odoo-stage-pill:not(:disabled){cursor:pointer}
-.odoo-stage-pill select{max-width:165px;min-width:0;padding:0;border:0;outline:0;background:transparent;color:inherit;font:inherit;text-align:center;appearance:none;cursor:pointer}
-.odoo-stage-pill select:disabled{cursor:wait;opacity:.7}
+.odoo-stage-pill:focus-visible{outline:2px solid #0b9f9a;outline-offset:2px}
+.odoo-stage-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:30;display:grid;gap:2px;width:min(320px,calc(100vw - 40px));max-height:260px;overflow:auto;padding:5px;border:1px solid #dce6e9;border-radius:8px;background:#fff;box-shadow:0 10px 28px rgba(24,47,63,.16)}
+.odoo-stage-option{display:flex;align-items:center;gap:7px;width:100%;min-height:32px;padding:7px 9px;border:0;border-radius:5px;background:transparent;color:#344b5e;font:600 10px 'DM Sans';line-height:1.35;text-align:left;cursor:pointer}
+.odoo-stage-option:hover:not(:disabled),.odoo-stage-option:focus-visible{outline:none;background:#e9f7f5;color:#167c77}
+.odoo-stage-option:disabled{cursor:wait;opacity:.65}
+.odoo-stage-menu-state{display:flex;align-items:center;gap:8px;min-height:34px;padding:8px 9px;color:#718191;font-size:10px;line-height:1.4}
 .odoo-refresh{width:34px;min-height:34px;display:grid;place-items:center;padding:0}
 .odoo-project-facts{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:12px}
 .odoo-project-facts>div{min-height:49px;padding:8px 9px}
@@ -665,3 +670,4 @@
 @media(max-width:900px){.main-area{--settings-topbar-offset:55px}}
 @media(max-width:980px){.settings-page{grid-template-columns:minmax(0,1fr)}.settings-anchor-rail{display:none}.settings-subnav{width:100%}}
 @media(prefers-reduced-motion:reduce){.settings-anchor-mark,.settings-anchor-tooltip{transition:none}}
+@media(max-width:640px){.odoo-stage-control{grid-column:2;grid-row:2;justify-self:start;max-width:100%}.odoo-stage-pill{max-width:100%}}
