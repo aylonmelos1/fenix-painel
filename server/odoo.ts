@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getSetting, setSetting } from './store.js';
 import { buildOdooDocumentNote, type OdooDocumentNoteContext } from './odoo-document-note.js';
+import { buildOdooInternalNoteBody, isDisplayableOdooMessage, odooHtmlToPlainText } from './odoo-message.js';
 
 type OdooRelation = false | number | [number, string] | number[];
 type OdooRecord = Record<string, unknown> & { id: number };
@@ -173,20 +174,6 @@ async function createOdooRecord(model: string, values: Record<string, unknown>) 
   return firstRecordId(result);
 }
 
-function plainText(value: unknown) {
-  if (typeof value !== 'string') return '';
-  return value
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
-    .replace(/<\s*br\s*\/?>/gi, '\n')
-    .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;|&#160;/gi, ' ')
-    .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
-    .replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
-}
-
 async function searchRead(model: string, domain: unknown[], fields: string[], limit: number, order?: string) {
   return callOdoo<OdooRecord[]>(model, 'search_read', { domain, fields, limit, ...(order ? { order } : {}) });
 }
@@ -252,12 +239,12 @@ export async function searchOdooMentionPeople(query: string) {
 }
 
 export async function getOdooActivityAssignees() {
-  const users = await searchRead('res.users', [['active', '=', true]], ['id', 'name', 'partner_id'], 100, 'name asc');
+  const users = await searchRead('res.users', [['active', '=', true], ['share', '=', false]], ['id', 'name', 'partner_id'], 100, 'name asc');
   return users.map((user) => ({
     id: user.id,
     name: String(user.name || ''),
     partnerId: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0
-  })).filter((user) => user.name);
+  })).filter((user) => user.name && user.partnerId > 0);
 }
 
 export async function getOdooProject(projectId: number): Promise<OdooProjectSnapshot | null> {
@@ -277,7 +264,7 @@ export async function getOdooProject(projectId: number): Promise<OdooProjectSnap
     project: {
       id: project.id,
       name: String(project.name || project.display_name || `Projeto ${projectId}`),
-      description: plainText(project.description),
+      description: odooHtmlToPlainText(project.description),
       customer: relation(project.partner_id),
       manager: relation(project.user_id),
       stage: relation(project.stage_id),
@@ -289,19 +276,50 @@ export async function getOdooProject(projectId: number): Promise<OdooProjectSnap
       updatedAt: typeof project.write_date === 'string' ? project.write_date : false
     },
     tasks: tasks.map((task) => ({ id: task.id, name: String(task.name || ''), stage: relation(task.stage_id), assignees: relation(task.user_ids), deadline: typeof task.date_deadline === 'string' ? task.date_deadline : false, priority: String(task.priority || '0') })),
-    messages: messages.map((message) => ({ id: message.id, date: typeof message.date === 'string' ? message.date : false, author: relation(message.author_id), body: plainText(message.body), type: String(message.message_type || ''), subtype: relation(message.subtype_id), subject: typeof message.subject === 'string' ? message.subject : false, attachmentIds: Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : [] })),
-    activities: activities.filter((activity) => activity.state !== 'done').map((activity) => ({ id: activity.id, type: relation(activity.activity_type_id), summary: String(activity.summary || ''), note: plainText(activity.note), deadline: typeof activity.date_deadline === 'string' ? activity.date_deadline : false, assignee: relation(activity.user_id), state: String(activity.state || '') })),
+    messages: messages.map((message) => ({ id: message.id, date: typeof message.date === 'string' ? message.date : false as const, author: relation(message.author_id), body: odooHtmlToPlainText(message.body), type: String(message.message_type || ''), subtype: relation(message.subtype_id), subject: typeof message.subject === 'string' ? message.subject : false as const, attachmentIds: Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : [] })).filter((message) => isDisplayableOdooMessage(message.body, message.attachmentIds)),
+    activities: activities.filter((activity) => activity.state !== 'done').map((activity) => ({ id: activity.id, type: relation(activity.activity_type_id), summary: String(activity.summary || ''), note: odooHtmlToPlainText(activity.note), deadline: typeof activity.date_deadline === 'string' ? activity.date_deadline : false, assignee: relation(activity.user_id), state: String(activity.state || '') })),
     activityTypes: activityTypes.map((type) => ({ id: type.id, name: String(type.name || ''), category: String(type.category || '') }))
   };
+}
+
+async function getActiveProjectStages(companyId: number) {
+  const domain: unknown[] = [['active', '=', true], ['company_id', 'in', companyId > 0 ? [false, companyId] : [false]]];
+  return searchRead('project.project.stage', domain, ['id', 'name'], 100, 'sequence asc, id asc');
+}
+
+export async function getOdooProjectStages(projectId: number) {
+  const projects = await callOdoo<OdooRecord[]>('project.project', 'read', {
+    ids: [projectId], fields: ['id', 'company_id', 'stage_id']
+  });
+  const project = projects?.[0];
+  if (!project) throw new OdooApiError(`O projeto ${projectId} não foi encontrado ou não está acessível para a integração.`, 404);
+  const companyId = Array.isArray(project.company_id) ? Number(project.company_id[0]) : 0;
+  const stages = await getActiveProjectStages(companyId);
+  const options = stages.map((stage) => ({ id: stage.id, name: String(stage.name || '') })).filter((stage) => stage.name);
+  const currentStage = relation(project.stage_id);
+  if (Array.isArray(currentStage) && !options.some((stage) => stage.id === Number(currentStage[0]))) {
+    options.unshift({ id: Number(currentStage[0]), name: String(currentStage[1] || '') });
+  }
+  return options;
+}
+
+export async function setOdooProjectStage(projectId: number, stageId: number) {
+  const projects = await callOdoo<OdooRecord[]>('project.project', 'read', {
+    ids: [projectId], fields: ['id', 'company_id']
+  });
+  const project = projects?.[0];
+  if (!project) throw new OdooApiError(`O projeto ${projectId} não foi encontrado ou não está acessível para a integração.`, 404);
+  const companyId = Array.isArray(project.company_id) ? Number(project.company_id[0]) : 0;
+  const stages = await getActiveProjectStages(companyId);
+  const stage = stages.find((item) => item.id === stageId);
+  if (!stage) throw new OdooApiError('Esta etapa não está disponível para o projeto selecionado.', 400);
+  await callOdoo<boolean>('project.project', 'write', { ids: [projectId], vals: { stage_id: stageId } });
+  return { id: stage.id, name: String(stage.name || '') };
 }
 
 export async function odooProjectExists(projectId: number) {
   const projects = await callOdoo<Array<{ id: number }>>('project.project', 'read', { ids: [projectId], fields: ['id'] });
   return projects?.some((project) => project.id === projectId) || false;
-}
-
-function escapeOdooHtml(value: string) {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function createOdooAttachments(projectId: number, files: OdooUploadFile[]) {
@@ -321,28 +339,28 @@ async function createOdooAttachments(projectId: number, files: OdooUploadFile[])
   return ids;
 }
 
-export async function createOdooInternalNote(projectId: number, body: string, requestId: string, requestedPartnerIds: number[] = [], files: OdooUploadFile[] = []) {
+export async function createOdooInternalNote(projectId: number, body: string, requestId: string, authorPartnerId: number, requestedPartnerIds: number[] = [], files: OdooUploadFile[] = []) {
   const messageId = `<fenix-note-${requestId}@fenix-painel>`;
   const previous = await searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['message_id', '=', messageId]], ['id'], 1);
   if (previous[0]) return { id: previous[0].id, alreadyExists: true };
   const uniquePartnerIds = [...new Set(requestedPartnerIds)];
-  const mentionedUsers = uniquePartnerIds.length
-    ? await searchRead('res.users', [['active', '=', true], ['partner_id', 'in', uniquePartnerIds]], ['name', 'partner_id'], uniquePartnerIds.length)
-    : [];
+  const [authorUsers, mentionedUsers] = await Promise.all([
+    searchRead('res.users', [['active', '=', true], ['share', '=', false], ['partner_id', '=', authorPartnerId]], ['partner_id'], 1),
+    uniquePartnerIds.length
+      ? searchRead('res.users', [['active', '=', true], ['partner_id', 'in', uniquePartnerIds]], ['name', 'partner_id'], uniquePartnerIds.length)
+      : Promise.resolve([])
+  ]);
+  if (!Number.isSafeInteger(authorPartnerId) || authorPartnerId < 1 || !authorUsers[0]) throw new OdooApiError('Selecione um usuário interno ativo para assinar a nota.', 400);
   const mentions = mentionedUsers.map((user) => ({
-    id: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0,
+    partnerId: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0,
     name: String(user.name || '')
-  })).filter((person) => person.id > 0 && person.name);
-  let htmlBody = escapeOdooHtml(body).replace(/\r?\n/g, '<br/>');
-  for (const mention of mentions) {
-    const token = escapeOdooHtml(`@${mention.name}`);
-    const anchor = `<a href=\"#\" class=\"o_mail_redirect\" data-oe-model=\"res.partner\" data-oe-id=\"${mention.id}\">${token}</a>`;
-    htmlBody = htmlBody.split(token).join(anchor);
-  }
+  })).filter((person) => person.partnerId > 0 && person.name);
+  const note = buildOdooInternalNoteBody(body, mentions);
   const attachmentIds = await createOdooAttachments(projectId, files);
   const id = await callOdoo<unknown>('project.project', 'message_post', {
-    ids: [projectId], body: htmlBody, message_type: 'comment', subtype_xmlid: 'mail.mt_note', message_id: messageId,
-    ...(mentions.length ? { partner_ids: mentions.map((person) => person.id) } : {}),
+    ids: [projectId], body: note.body, body_is_html: true, message_type: 'comment', subtype_xmlid: 'mail.mt_note', message_id: messageId,
+    author_id: authorPartnerId,
+    ...(note.partnerIds.length ? { partner_ids: note.partnerIds } : {}),
     ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {})
   });
   return { id: firstRecordId(id), alreadyExists: false };

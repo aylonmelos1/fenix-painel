@@ -525,7 +525,11 @@
 .odoo-project-name{display:grid;gap:3px;min-width:0}
 .odoo-project-name>small{color:#81909d;font-size:9px;font-weight:800;letter-spacing:.55px}
 .odoo-project-name h4{margin:0;color:#243b50;font:800 18px 'Manrope';line-height:1.25;overflow-wrap:anywhere}
-.odoo-stage-pill{max-width:190px;padding:7px 10px;border:1px solid #d8eeea;border-radius:6px;background:#f1faf8;color:#21816e;font-size:10px;font-weight:800;line-height:1.3;text-align:center}
+.odoo-stage-pill{max-width:190px;display:inline-flex;align-items:center;gap:5px;padding:7px 10px;border:1px solid #d8eeea;border-radius:6px;background:#f1faf8;color:#21816e;font-size:10px;font-weight:800;line-height:1.3;text-align:center}
+.odoo-stage-pill:disabled{cursor:wait;opacity:.7}
+.odoo-stage-pill:not(:disabled){cursor:pointer}
+.odoo-stage-pill select{max-width:165px;min-width:0;padding:0;border:0;outline:0;background:transparent;color:inherit;font:inherit;text-align:center;appearance:none;cursor:pointer}
+.odoo-stage-pill select:disabled{cursor:wait;opacity:.7}
 .odoo-refresh{width:34px;min-height:34px;display:grid;place-items:center;padding:0}
 .odoo-project-facts{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:12px}
 .odoo-project-facts>div{min-height:49px;padding:8px 9px}
@@ -558,6 +562,9 @@
 .odoo-chatter-action{min-height:34px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 10px;border:1px solid #e1e7eb;border-radius:6px;background:#f9fbfc;color:#485d70;font:700 10px 'DM Sans';cursor:pointer;transition:background .15s,border-color .15s,color .15s}
 .odoo-chatter-action:hover,.odoo-chatter-action.selected{border-color:#b9dfda;background:#edf8f6;color:#087f7a}
 .odoo-note-composer{position:relative;display:grid;gap:8px;padding:11px 12px;border-bottom:1px solid #edf0f2;background:#fbfcfd}
+.odoo-note-author{display:grid;gap:4px;color:#506579;font-size:10px;font-weight:800}
+.odoo-note-author select{width:100%;min-width:0;min-height:34px;padding:7px 9px;border:1px solid #dfe6eb;border-radius:6px;background:#fff;color:#354b5f;font:400 11px 'DM Sans';outline:0}
+.odoo-note-author small{color:#8794a0;font-size:9px;font-weight:400}
 .odoo-note-composer>textarea,.odoo-note-field textarea{width:100%;min-height:78px;resize:vertical;border:1px solid #dfe6eb;border-radius:7px;padding:10px 11px;background:white;color:#31485c;font:400 12px/1.5 'DM Sans';outline:0}
 .odoo-note-composer>textarea:focus,.odoo-note-field textarea:focus,.odoo-activity-field-grid input:focus,.odoo-activity-field-grid select:focus,.odoo-mention-picker input:focus{border-color:#36aaa5;box-shadow:0 0 0 3px rgba(17,167,163,.1)}
 .odoo-composer-footer{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -592,15 +599,15 @@
 .odoo-chat-activity b{color:#3a5064;font-size:10px;line-height:1.4;overflow-wrap:anywhere}
 .odoo-chat-activity small,.odoo-chat-activity time{color:#83909c;font-size:9px}
 .odoo-chat-activity p{margin:2px 0;color:#5b7082;font-size:10px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
-.odoo-chat-message{display:grid;grid-template-columns:26px minmax(0,1fr);gap:8px;padding:10px 0;border-top:1px solid #edf0f2}
+.odoo-chat-message{display:grid;grid-template-columns:26px minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid #edf0f2}
 .odoo-chat-avatar{width:25px;height:25px;display:grid;place-items:center;border-radius:50%;background:#e9f4f3;color:#20847c;font-size:10px;font-weight:800}
-.odoo-chat-message-body{display:grid;gap:4px;min-width:0}
+.odoo-chat-message-body{display:grid;gap:3px;min-width:0}
 .odoo-message-meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px}
 .odoo-message-meta b{color:#53687a;font-size:9px}
 .odoo-message-meta b.internal{color:#087f7a}
 .odoo-message-meta span{color:#8b97a1;font-size:8px}
+.odoo-message-meta time{margin-left:auto;color:#929da6;font-size:8px;white-space:nowrap}
 .odoo-chat-message-body>p{margin:0;color:#526779;font-size:10px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
-.odoo-chat-message-body>time{color:#929da6;font-size:8px}
 .odoo-attachment-count{display:flex;align-items:center;gap:4px;color:#728796;font-size:9px}
 .odoo-empty.compact{min-height:48px;font-size:10px}
 .odoo-activity-modal{display:flex;flex-direction:column;width:min(760px,100%);max-height:min(88dvh,820px);overflow:hidden;border:1px solid #e2e8ec;border-radius:10px;background:#fff;box-shadow:0 24px 70px rgba(7,23,37,.28)}

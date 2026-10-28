@@ -11,7 +11,7 @@ import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSessio
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, newSessionId, saveCookieJar, syncFenixUser, type FenixBuildingOption } from './fenix.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
-import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
+import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
 import { resolveLatestFenixSituation } from './odoo-document-note.js';
 
 const app = express();
@@ -920,6 +920,28 @@ app.put('/api/buildings/:buildingId/odoo/project', requireSession, async (req, r
     return res.json({ projectId });
   } catch (error) { return sendOdooError(res, error); }
 });
+app.get('/api/buildings/:buildingId/odoo/stages', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de consultar as etapas.' });
+  try { return res.json({ stages: await getOdooProjectStages(linked.odoo_project_id) }); }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.put('/api/buildings/:buildingId/odoo/stage', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de alterar a etapa.' });
+  const stageId = validOdooProjectId(req.body?.stageId);
+  if (!stageId) return res.status(400).json({ error: 'Informe uma etapa Odoo válida.' });
+  try { return res.json(await setOdooProjectStage(linked.odoo_project_id, stageId)); }
+  catch (error) { return sendOdooError(res, error); }
+});
 app.post('/api/buildings/:buildingId/odoo/notes', requireSession, express.raw({ type: 'multipart/form-data', limit: '15mb' }), async (req, res) => {
   const user = res.locals.user;
   const buildingId = String(req.params.buildingId || '');
@@ -931,14 +953,16 @@ app.post('/api/buildings/:buildingId/odoo/notes', requireSession, express.raw({ 
     const payload = parseOdooUploadPayload(req);
     const body = typeof payload.fields.body === 'string' ? payload.fields.body.trim() : '';
     const requestId = typeof payload.fields.requestId === 'string' ? payload.fields.requestId : '';
+    const authorPartnerId = Number(payload.fields.authorPartnerId);
     validateOdooUploadFiles(payload.files);
     if ((body.length < 2 && payload.files.length === 0) || body.length > 5000) return res.status(400).json({ error: 'A nota precisa de um texto ou anexo e pode ter até 5.000 caracteres.' });
     if (!/^[A-Za-z0-9_-]{20,80}$/.test(requestId)) return res.status(400).json({ error: 'Identificador da nota inválido. Recarregue e tente novamente.' });
+    if (!Number.isSafeInteger(authorPartnerId) || authorPartnerId < 1) return res.status(400).json({ error: 'Selecione quem aparecerá como autor da nota.' });
     let partnerIds: unknown = [];
     try { partnerIds = typeof payload.fields.partnerIds === 'string' ? JSON.parse(payload.fields.partnerIds) : payload.fields.partnerIds || []; }
     catch { return res.status(400).json({ error: 'A lista de pessoas mencionadas está inválida.' }); }
     if (!Array.isArray(partnerIds) || partnerIds.length > 20 || partnerIds.some((id) => !Number.isSafeInteger(Number(id)) || Number(id) < 1)) return res.status(400).json({ error: 'A lista de pessoas mencionadas está inválida.' });
-    return res.json(await createOdooInternalNote(linked.odoo_project_id, body, requestId, partnerIds.map(Number), payload.files));
+    return res.json(await createOdooInternalNote(linked.odoo_project_id, body, requestId, authorPartnerId, partnerIds.map(Number), payload.files));
   }
   catch (error) { return sendOdooError(res, error); }
 });
