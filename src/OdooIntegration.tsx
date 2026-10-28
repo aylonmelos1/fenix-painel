@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, AtSign, Building2, CalendarDays, Check, ChevronDown, CircleAlert, FileText, LoaderCircle, MessageCircle, Paperclip, Plus, RefreshCw, Search, Send, UserRound, X } from 'lucide-react';
+import { Activity, AtSign, Building2, CalendarDays, Check, ChevronDown, CircleAlert, FileText, LoaderCircle, MessageCircle, Paperclip, Pencil, Plus, RefreshCw, Search, Send, UserRound, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, formatDate, type DocumentItem } from './types';
 
@@ -10,6 +10,7 @@ type OdooSnapshot = {
   project: { id: number; name: string; description: string; customer: Relation; manager: Relation; stage: Relation; startDate: string | false; endDate: string | false; taskCount: number; openTaskCount: number; createdAt: string | false; updatedAt: string | false };
   tasks: Array<{ id: number; name: string; stage: Relation; assignees: Relation; deadline: string | false; priority: string }>;
   messages: Array<{ id: number; date: string | false; author: Relation; body: string; type: string; subtype: Relation; subject: string | false; attachmentIds: number[] }>;
+  attachments: OdooProjectAttachment[];
   activities: Array<{ id: number; type: Relation; summary: string; note: string; deadline: string | false; assignee: Relation; state: string }>;
   activityTypes: Array<{ id: number; name: string; category: string }>;
 };
@@ -17,6 +18,7 @@ type OdooSuggestion = { id: number; name: string; customer: Relation; stage: Rel
 type OdooPreview = { projectId: number; snapshot?: OdooSnapshot; loading: boolean; error?: string };
 type OdooPerson = { userId: number; partnerId: number; name: string };
 type OdooAssignee = { id: number; name: string; partnerId: number };
+type OdooProjectAttachment = { id: number; name: string; mimetype: string; fileSize: number; createdAt: string | false };
 
 function relationName(value: Relation) {
   if (Array.isArray(value)) return typeof value[1] === 'string' ? value[1] : `${value.length} responsável(is)`;
@@ -76,7 +78,11 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
   const [activityDeadline, setActivityDeadline] = useState(localDate);
   const [activitySending, setActivitySending] = useState(false);
   const [activityModalOpen, setActivityModalOpen] = useState(false);
+  const [editingActivityId, setEditingActivityId] = useState<number | null>(null);
   const [activityFiles, setActivityFiles] = useState<File[]>([]);
+  const [chatterFilesOpen, setChatterFilesOpen] = useState(false);
+  const [chatterPreviewsLoading, setChatterPreviewsLoading] = useState(false);
+  const [chatterPreviews, setChatterPreviews] = useState<Record<number, string>>({});
   const [assignees, setAssignees] = useState<OdooAssignee[]>([]);
   const [assigneesLoading, setAssigneesLoading] = useState(false);
   const [sendingDocumentId, setSendingDocumentId] = useState<string | null>(null);
@@ -108,6 +114,8 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     try {
       const result = await api<OdooSnapshot>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo/project`);
       setSnapshot(result);
+      setChatterFilesOpen(false);
+      setChatterPreviews({});
       setActivityTypeId((current) => result.activityTypes.some((item) => String(item.id) === current) ? current : String(result.activityTypes[0]?.id || ''));
     } catch (loadError) {
       setSnapshot(null);
@@ -256,13 +264,35 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     }
   }
 
-  async function openActivityModal() {
+  async function openActivityModal(activity?: OdooSnapshot['activities'][number]) {
     setActivityModalOpen(true); setError(''); setFeedback(null);
+    setEditingActivityId(activity?.id ?? null);
+    setActivityTypeId(activity ? relationId(activity.type) : String(snapshot?.activityTypes[0]?.id || ''));
+    setActivityAssigneeId(activity ? relationId(activity.assignee) : '');
+    setActivitySummary(activity?.summary || '');
+    setActivityNote(activity?.note || '');
+    setActivityDeadline(activity?.deadline || localDate());
+    setActivityFiles([]);
     try {
       const users = assignees.length ? assignees : await loadOdooAssignees();
       const managerId = Array.isArray(snapshot?.project.manager) ? String(snapshot.project.manager[0]) : '';
-      setActivityAssigneeId((current) => users.some((item) => String(item.id) === current) ? current : users.some((item) => String(item.id) === managerId) ? managerId : String(users[0]?.id || ''));
+      const preferredId = activity ? relationId(activity.assignee) : managerId;
+      setActivityAssigneeId((current) => users.some((item) => String(item.id) === current) ? current : users.some((item) => String(item.id) === preferredId) ? preferredId : String(users[0]?.id || ''));
     } catch { /* The error is shown in the integration panel. */ }
+  }
+
+  async function toggleChatterFiles() {
+    if (chatterFilesOpen) { setChatterFilesOpen(false); return; }
+    setChatterFilesOpen(true);
+    if (!snapshot || Object.keys(chatterPreviews).length || chatterPreviewsLoading) return;
+    const imageIds = snapshot.attachments.filter((file) => ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'].includes(file.mimetype.toLowerCase()) && file.fileSize > 0 && file.fileSize <= 2 * 1024 * 1024).slice(0, 24).map((file) => file.id);
+    if (!imageIds.length) return;
+    setChatterPreviewsLoading(true);
+    try {
+      const result = await api<{ previews: Record<string, string> }>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo/attachment-previews`, { method: 'POST', body: JSON.stringify({ attachmentIds: imageIds }) });
+      setChatterPreviews(Object.fromEntries(Object.entries(result.previews || {}).map(([id, url]) => [Number(id), url])));
+    } catch (previewError) { setError(previewError instanceof Error ? previewError.message : 'Não foi possível carregar as prévias dos arquivos.'); }
+    finally { setChatterPreviewsLoading(false); }
   }
 
   function addFiles(target: 'note' | 'activity', incoming: File[]) {
@@ -323,9 +353,12 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
       const form = new FormData();
       form.set('activityTypeId', activityTypeId); form.set('assigneeId', activityAssigneeId); form.set('summary', activitySummary.trim()); form.set('note', activityNote.trim()); form.set('deadline', activityDeadline);
       activityFiles.forEach((file) => form.append('attachments', file, file.name));
-      await api(`/api/buildings/${encodeURIComponent(buildingId)}/odoo/activities`, { method: 'POST', body: form });
-      setActivitySummary(''); setActivityNote(''); setActivityDeadline(localDate()); setActivityFiles([]); setActivityModalOpen(false);
-      setFeedback({ tone: 'success', text: 'Atividade planejada no projeto Odoo.' });
+      const editMode = editingActivityId !== null;
+      await api(editMode
+        ? `/api/buildings/${encodeURIComponent(buildingId)}/odoo/activities/${editingActivityId}`
+        : `/api/buildings/${encodeURIComponent(buildingId)}/odoo/activities`, { method: editMode ? 'PUT' : 'POST', body: form });
+      setActivitySummary(''); setActivityNote(''); setActivityDeadline(localDate()); setActivityFiles([]); setEditingActivityId(null); setActivityModalOpen(false);
+      setFeedback({ tone: 'success', text: editMode ? 'Atividade atualizada no projeto Odoo.' : 'Atividade planejada no projeto Odoo.' });
       await refreshProject();
     } catch (sendError) { setError(sendError instanceof Error ? sendError.message : 'Não foi possível criar a atividade.'); }
     finally { setActivitySending(false); }
@@ -387,7 +420,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
         </section>
       </main>
       <aside className="odoo-chatter-panel">
-        <header className="odoo-chatter-heading"><div><h4>Chatter</h4><small>{snapshot.messages.length} mensagens recentes</small></div><button type="button" className="icon-button" onClick={() => void refreshProject()} disabled={refreshing} aria-label="Atualizar Chatter" title="Atualizar Chatter">{refreshing ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}</button></header>
+        <header className="odoo-chatter-heading"><div><h4>Chatter</h4><small>{snapshot.messages.length} mensagens recentes</small></div><div className="odoo-chatter-heading-actions">{snapshot.attachments.length > 0 && <button type="button" className={`odoo-attachment-toggle ${chatterFilesOpen ? 'selected' : ''}`} onClick={() => void toggleChatterFiles()} aria-label={`Arquivos do Chatter: ${snapshot.attachments.length} anexos`} aria-expanded={chatterFilesOpen} title="Exibir arquivos anexados"><Paperclip size={15} /><span>{snapshot.attachments.length}</span></button>}<button type="button" className="icon-button" onClick={() => void refreshProject()} disabled={refreshing} aria-label="Atualizar Chatter" title="Atualizar Chatter">{refreshing ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}</button></div></header>
         <div className="odoo-chatter-actions"><button type="button" className={`odoo-chatter-action ${noteComposerOpen ? 'selected' : ''}`} onClick={() => void openNoteComposer()}><MessageCircle size={15} />Notas Internas</button><button type="button" className="odoo-chatter-action" onClick={() => void openActivityModal()}><Activity size={15} />Atividade</button></div>
         {noteComposerOpen && <form className="odoo-note-composer" onSubmit={sendNote}>
           <label className="odoo-note-author" htmlFor="odoo-note-author"><span>Autor da nota</span><select id="odoo-note-author" value={noteAuthorPartnerId} onChange={(event) => { setNoteAuthorPartnerId(event.target.value); noteRequestId.current = null; }} disabled={noteSending || assigneesLoading || !assignees.length} required><option value="">{assigneesLoading ? 'Carregando pessoas…' : assignees.length ? 'Selecione quem aparecerá como autor' : 'Nenhum usuário disponível'}</option>{assignees.map((person) => <option key={person.partnerId} value={person.partnerId}>{person.name}</option>)}</select><small>A nota aparecerá no Chatter como esta pessoa.</small></label>
@@ -399,7 +432,8 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
           <div className="odoo-composer-footer"><span>{noteBody.length}/5.000 · Ctrl+V cola imagens</span><div><button type="button" className={`odoo-tool-button ${mentionOpen ? 'selected' : ''}`} onClick={() => setMentionOpen((open) => !open)} aria-expanded={mentionOpen}><AtSign size={15} />Mencionar</button><button type="button" className="odoo-tool-button" onClick={() => noteFileInputRef.current?.click()}><Paperclip size={15} />Anexar</button><button type="submit" className="button button-teal" disabled={noteSending || assigneesLoading || !noteAuthorPartnerId || (!noteBody.trim() && noteFiles.length === 0)}>{noteSending ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}{noteSending ? 'Publicando…' : 'Registrar'}</button></div></div>
         </form>}
         <div className="odoo-chatter-feed">
-          <section className="odoo-chat-activities"><header><h5>Atividades planejadas</h5><span>{snapshot.activities.length}</span></header>{snapshot.activities.length ? snapshot.activities.map((activity) => <article className="odoo-chat-activity" key={activity.id}><span className="odoo-activity-mark"><Activity size={14} /></span><div><b>{activity.summary || relationName(activity.type)}</b><small>{relationName(activity.type)} · {relationName(activity.assignee)}</small>{activity.note && <p>{activity.note}</p>}<time>{dateOnly(activity.deadline)}</time></div></article>) : <div className="odoo-empty compact">Nenhuma atividade em aberto.</div>}</section>
+          {chatterFilesOpen && <section className="odoo-chat-files"><header><h5>Arquivos</h5><span>{snapshot.attachments.length}</span></header>{snapshot.attachments.length ? <div className="odoo-file-grid">{snapshot.attachments.map((file) => { const url = `/api/buildings/${encodeURIComponent(buildingId)}/odoo/attachments/${file.id}`; const previewImage = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'].includes(file.mimetype.toLowerCase()); return <a className="odoo-file-card" href={url} target="_blank" rel="noopener noreferrer" key={file.id} title={file.name}><span className="odoo-file-preview">{previewImage && chatterPreviews[file.id] ? <img src={chatterPreviews[file.id]} alt={file.name} loading="lazy" /> : previewImage && chatterPreviewsLoading ? <LoaderCircle size={18} className="spin" /> : <FileText size={24} />}</span><span className="odoo-file-name">{file.name}</span><small>{file.mimetype === 'application/pdf' ? 'PDF' : file.mimetype.startsWith('image/') ? 'Imagem' : 'Arquivo'}</small></a>; })}</div> : <div className="odoo-empty compact">Nenhum arquivo anexado.</div>}</section>}
+          <section className="odoo-chat-activities"><header><h5>Atividades planejadas</h5><span>{snapshot.activities.length}</span></header>{snapshot.activities.length ? snapshot.activities.map((activity) => <article className="odoo-chat-activity" key={activity.id}><span className="odoo-activity-mark"><Activity size={14} /></span><div><b>{activity.summary || relationName(activity.type)}</b><small>{relationName(activity.type)} · {relationName(activity.assignee)}</small>{activity.note && <p>{activity.note}</p>}<time>{dateOnly(activity.deadline)}</time></div><button type="button" className="odoo-activity-edit" onClick={() => void openActivityModal(activity)} aria-label={`Editar atividade ${activity.summary || relationName(activity.type)}`} title="Editar atividade"><Pencil size={13} />Editar</button></article>) : <div className="odoo-empty compact">Nenhuma atividade em aberto.</div>}</section>
           <section className="odoo-chat-messages"><header><h5>Mensagens e notas</h5></header>{snapshot.messages.length ? snapshot.messages.map((message) => <article className="odoo-chat-message" key={message.id}><span className="odoo-chat-avatar">{relationName(message.author).slice(0, 1).toUpperCase()}</span><div className="odoo-chat-message-body"><div className="odoo-message-meta"><b className={isInternalNote(message) ? 'internal' : ''}>{isInternalNote(message) ? 'Nota interna' : message.subject || 'Mensagem'}</b><span>{relationName(message.author)}</span><time>{messageDate(message.date)}</time></div>{message.body && <p>{message.body}</p>}{message.attachmentIds.length > 0 && <small className="odoo-attachment-count"><Paperclip size={12} />{message.attachmentIds.length} anexo(s)</small>}</div></article>) : <div className="odoo-empty compact">O projeto ainda não tem mensagens no Chatter.</div>}</section>
         </div>
       </aside>
@@ -420,7 +454,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
       <footer><button type="button" className="button button-outline" onClick={() => setPreview(null)} disabled={linking}>Cancelar</button><button type="button" className="button button-teal" onClick={() => void confirmLink()} disabled={!preview.snapshot || preview.loading || linking}>{linking ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{linking ? 'Vinculando…' : 'Vincular'}</button></footer>
     </section></div>, document.body)}
     {activityModalOpen && createPortal(<div className="odoo-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !activitySending) setActivityModalOpen(false); }}><form className="odoo-activity-modal" role="dialog" aria-modal="true" aria-labelledby="odoo-activity-title" onSubmit={scheduleActivity}>
-      <header><div><h3 id="odoo-activity-title">Agendar atividade</h3><p>Defina o responsável, o prazo e as informações que aparecerão no projeto.</p></div><button type="button" className="icon-button" aria-label="Fechar" onClick={() => { if (!activitySending) setActivityModalOpen(false); }} disabled={activitySending}><X size={18} /></button></header>
+      <header><div><h3 id="odoo-activity-title">{editingActivityId ? 'Editar atividade' : 'Agendar atividade'}</h3><p>Defina o responsável, o prazo e as informações que aparecerão no projeto.</p></div><button type="button" className="icon-button" aria-label="Fechar" onClick={() => { if (!activitySending) setActivityModalOpen(false); }} disabled={activitySending}><X size={18} /></button></header>
       <div className="odoo-activity-modal-body">
         <div className="odoo-activity-field-grid"><label>Tipo<select id="odoo-activity-type" value={activityTypeId} onChange={(event) => setActivityTypeId(event.target.value)} required disabled={!snapshot?.activityTypes.length}><option value="">{snapshot?.activityTypes.length ? 'Selecione o tipo' : 'Nenhum tipo disponível'}</option>{snapshot?.activityTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label><label>Para<select id="odoo-activity-assignee" value={activityAssigneeId} onChange={(event) => setActivityAssigneeId(event.target.value)} required disabled={assigneesLoading || !assignees.length}><option value="">{assigneesLoading ? 'Carregando pessoas…' : 'Selecione quem receberá'}</option>{assignees.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label></div>
         <div className="odoo-activity-field-grid"><label>Resumo<input id="odoo-activity-summary" value={activitySummary} onChange={(event) => setActivitySummary(event.target.value.slice(0, 120))} maxLength={120} placeholder="Ex.: Conferir documentação recebida" required /></label><label>Vencimento<span className="odoo-date-field"><CalendarDays size={15} /><input type="date" value={activityDeadline} onChange={(event) => setActivityDeadline(event.target.value)} required /></span></label></div>
@@ -429,7 +463,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
         <input ref={activityFileInputRef} className="odoo-hidden-input" type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={addActivityFiles} />
         <div className="odoo-activity-attachments"><button type="button" className="odoo-tool-button" onClick={() => activityFileInputRef.current?.click()}><Paperclip size={15} />Anexar documentos ou imagens</button><span>{activityNote.length}/5.000 · Ctrl+V cola imagens</span></div>
       </div>
-      <footer><button type="button" className="button button-outline" onClick={() => setActivityModalOpen(false)} disabled={activitySending}>Cancelar</button><button type="submit" className="button button-teal" disabled={activitySending || assigneesLoading || !activityTypeId || !activityAssigneeId || activitySummary.trim().length < 2}>{activitySending ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{activitySending ? 'Salvando…' : 'Salvar'}</button></footer>
+      <footer><button type="button" className="button button-outline" onClick={() => setActivityModalOpen(false)} disabled={activitySending}>Cancelar</button><button type="submit" className="button button-teal" disabled={activitySending || assigneesLoading || !activityTypeId || !activityAssigneeId || activitySummary.trim().length < 2}>{activitySending ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />}{activitySending ? 'Salvando…' : editingActivityId ? 'Salvar alterações' : 'Salvar'}</button></footer>
     </form></div>, document.body)}
   </div>;
 }

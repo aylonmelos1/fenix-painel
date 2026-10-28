@@ -34,6 +34,7 @@ export type OdooProjectSnapshot = {
   };
   tasks: Array<{ id: number; name: string; stage: OdooRelation; assignees: OdooRelation; deadline: string | false; priority: string }>;
   messages: Array<{ id: number; date: string | false; author: OdooRelation; body: string; type: string; subtype: OdooRelation; subject: string | false; attachmentIds: number[] }>;
+  attachments: Array<{ id: number; name: string; mimetype: string; fileSize: number; createdAt: string | false }>;
   activities: Array<{ id: number; type: OdooRelation; summary: string; note: string; deadline: string | false; assignee: OdooRelation; state: string }>;
   activityTypes: Array<{ id: number; name: string; category: string }>;
 };
@@ -254,12 +255,20 @@ export async function getOdooProject(projectId: number): Promise<OdooProjectSnap
   });
   const project = projects?.[0];
   if (!project) return null;
-  const [tasks, messages, activities, activityTypes] = await Promise.all([
+  const [tasks, messages, activities, activityTypes, projectAttachments] = await Promise.all([
     searchRead('project.task', [['project_id', '=', projectId]], ['id', 'name', 'stage_id', 'user_ids', 'date_deadline', 'priority'], 30, 'write_date desc, id desc'),
     searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'date', 'author_id', 'body', 'message_type', 'subtype_id', 'subject', 'attachment_ids'], 30, 'date desc, id desc'),
     searchRead('mail.activity', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'activity_type_id', 'summary', 'note', 'date_deadline', 'user_id', 'state'], 30, 'date_deadline asc, id asc'),
-    searchRead('mail.activity.type', [['active', '=', true], '|', ['res_model', '=', false], ['res_model', '=', 'project.project']], ['id', 'name', 'category'], 100, 'sequence asc, id asc')
+    searchRead('mail.activity.type', [['active', '=', true], '|', ['res_model', '=', false], ['res_model', '=', 'project.project']], ['id', 'name', 'category'], 100, 'sequence asc, id asc'),
+    searchRead('ir.attachment', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], 500, 'create_date desc, id desc')
   ]);
+  const projectAttachmentIds = new Set(projectAttachments.map((attachment) => attachment.id));
+  const messageAttachmentIds = [...new Set(messages.flatMap((message) => Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : []))];
+  const messageOnlyAttachmentIds = messageAttachmentIds.filter((id) => !projectAttachmentIds.has(id));
+  const messageAttachments = messageOnlyAttachmentIds.length
+    ? await searchRead('ir.attachment', [['id', 'in', messageOnlyAttachmentIds]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], messageOnlyAttachmentIds.length, 'create_date desc, id desc')
+    : [];
+  const attachmentsById = new Map([...projectAttachments, ...messageAttachments].map((attachment) => [attachment.id, attachment]));
   return {
     project: {
       id: project.id,
@@ -277,6 +286,7 @@ export async function getOdooProject(projectId: number): Promise<OdooProjectSnap
     },
     tasks: tasks.map((task) => ({ id: task.id, name: String(task.name || ''), stage: relation(task.stage_id), assignees: relation(task.user_ids), deadline: typeof task.date_deadline === 'string' ? task.date_deadline : false, priority: String(task.priority || '0') })),
     messages: messages.map((message) => ({ id: message.id, date: typeof message.date === 'string' ? message.date : false as const, author: relation(message.author_id), body: odooHtmlToPlainText(message.body), type: String(message.message_type || ''), subtype: relation(message.subtype_id), subject: typeof message.subject === 'string' ? message.subject : false as const, attachmentIds: Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : [] })).filter((message) => isDisplayableOdooMessage(message.body, message.attachmentIds)),
+    attachments: [...attachmentsById.values()].map((attachment) => ({ id: attachment.id, name: String(attachment.name || `Arquivo ${attachment.id}`), mimetype: String(attachment.mimetype || 'application/octet-stream'), fileSize: Number(attachment.file_size) || 0, createdAt: typeof attachment.create_date === 'string' ? attachment.create_date : false })),
     activities: activities.filter((activity) => activity.state !== 'done').map((activity) => ({ id: activity.id, type: relation(activity.activity_type_id), summary: String(activity.summary || ''), note: odooHtmlToPlainText(activity.note), deadline: typeof activity.date_deadline === 'string' ? activity.date_deadline : false, assignee: relation(activity.user_id), state: String(activity.state || '') })),
     activityTypes: activityTypes.map((type) => ({ id: type.id, name: String(type.name || ''), category: String(type.category || '') }))
   };
@@ -386,6 +396,72 @@ export async function createOdooActivity(projectId: number, activityTypeId: numb
     ...(attachmentIds.length ? { attachment_ids: [[6, 0, attachmentIds]] } : {})
   });
   return { id };
+}
+
+export async function updateOdooActivity(projectId: number, activityId: number, activityTypeId: number, assigneeId: number, summary: string, note: string, deadline: string, files: OdooUploadFile[] = []) {
+  const activity = await searchRead('mail.activity', [['id', '=', activityId], ['res_model', '=', 'project.project'], ['res_id', '=', projectId], ['active', '=', true]], ['id'], 1);
+  if (!activity[0]) throw new OdooApiError('A atividade não está mais planejada neste projeto.', 404);
+  const [activityTypes, assignees] = await Promise.all([
+    searchRead('mail.activity.type', [['id', '=', activityTypeId], ['active', '=', true], '|', ['res_model', '=', false], ['res_model', '=', 'project.project']], ['id'], 1),
+    searchRead('res.users', [['id', '=', assigneeId], ['active', '=', true], ['share', '=', false]], ['id'], 1)
+  ]);
+  if (!activityTypes[0]) throw new OdooApiError('Selecione um tipo de atividade disponível para projetos.', 400);
+  if (!assignees[0]) throw new OdooApiError('Selecione um usuário interno ativo para receber a atividade.', 400);
+  const attachmentIds = await createOdooAttachments(projectId, files);
+  const vals: Record<string, unknown> = { activity_type_id: activityTypeId, user_id: assigneeId, summary, note, date_deadline: deadline };
+  if (attachmentIds.length) vals.attachment_ids = attachmentIds.map((id) => [4, id]);
+  await callOdoo<boolean>('mail.activity', 'write', { ids: [activityId], vals });
+  return { id: activityId };
+}
+
+export async function getOdooProjectAttachment(projectId: number, attachmentId: number) {
+  const direct = await searchRead('ir.attachment', [['id', '=', attachmentId], ['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'name', 'mimetype', 'file_size'], 1);
+  let attachment = direct[0];
+  if (!attachment) {
+    const messages = await searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['attachment_ids', 'in', [attachmentId]]], ['id'], 1);
+    if (!messages[0]) throw new OdooApiError('O arquivo não pertence ao projeto Odoo vinculado.', 404);
+    const linked = await searchRead('ir.attachment', [['id', '=', attachmentId]], ['id', 'name', 'mimetype', 'file_size'], 1);
+    attachment = linked[0];
+  }
+  if (!attachment) throw new OdooApiError('Arquivo não encontrado na Odoo.', 404);
+  const fileSize = Number(attachment.file_size) || 0;
+  if (fileSize > 25 * 1024 * 1024) throw new OdooApiError('O arquivo excede o limite de 25 MB para visualização no Fênix.', 413);
+  const records = await callOdoo<OdooRecord[]>('ir.attachment', 'read', { ids: [attachmentId], fields: ['id', 'name', 'mimetype', 'file_size', 'datas'] });
+  const record = records?.[0];
+  const encoded = typeof record?.datas === 'string' ? record.datas : '';
+  if (!record || !encoded) throw new OdooApiError('A Odoo não retornou o conteúdo deste arquivo.', 404);
+  const content = Buffer.from(encoded, 'base64');
+  if (!content.length || content.length > 25 * 1024 * 1024) throw new OdooApiError('Não foi possível carregar o arquivo dentro do limite de 25 MB.', 413);
+  return { id: attachmentId, name: String(record.name || attachment.name || `Arquivo ${attachmentId}`), mimetype: String(record.mimetype || attachment.mimetype || 'application/octet-stream'), content };
+}
+
+export async function getOdooProjectAttachmentPreviews(projectId: number, requestedIds: number[]) {
+  const ids = [...new Set(requestedIds)].filter((id) => Number.isSafeInteger(id) && id > 0).slice(0, 24);
+  if (!ids.length) return {};
+  const imageTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif']);
+  const [candidates, messages] = await Promise.all([
+    searchRead('ir.attachment', [['id', 'in', ids]], ['id', 'mimetype', 'file_size', 'res_model', 'res_id'], ids.length),
+    searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['attachment_ids', 'in', ids]], ['attachment_ids'], 100)
+  ]);
+  const messageAttachmentIds = new Set(messages.flatMap((message) => Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : []));
+  let totalBytes = 0;
+  const allowed = candidates.filter((attachment) => {
+    const direct = attachment.res_model === 'project.project' && Number(attachment.res_id) === projectId;
+    const inProjectChatter = messageAttachmentIds.has(attachment.id);
+    const mimetype = String(attachment.mimetype || '').toLowerCase();
+    const fileSize = Number(attachment.file_size) || 0;
+    if ((!direct && !inProjectChatter) || !imageTypes.has(mimetype) || fileSize < 1 || fileSize > 2 * 1024 * 1024 || totalBytes + fileSize > 8 * 1024 * 1024) return false;
+    totalBytes += fileSize;
+    return true;
+  });
+  if (!allowed.length) return {};
+  const records = await callOdoo<OdooRecord[]>('ir.attachment', 'read', { ids: allowed.map((attachment) => attachment.id), fields: ['id', 'mimetype', 'datas'] });
+  return Object.fromEntries((records || []).flatMap((record) => {
+    const id = Number(record.id);
+    const mimetype = String(record.mimetype || '').toLowerCase();
+    const datas = typeof record.datas === 'string' ? record.datas : '';
+    return allowed.some((attachment) => attachment.id === id) && imageTypes.has(mimetype) && datas ? [[id, `data:${mimetype};base64,${datas}`]] : [];
+  }));
 }
 
 export async function attachOdooDocument(projectId: number, file: { name: string; content: Buffer }, reference: string, context: OdooDocumentNoteContext) {

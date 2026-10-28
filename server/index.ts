@@ -11,7 +11,7 @@ import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSessio
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, newSessionId, saveCookieJar, syncFenixUser, type FenixBuildingOption } from './fenix.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
-import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
+import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
 import { resolveLatestFenixSituation } from './odoo-document-note.js';
 
 const app = express();
@@ -989,6 +989,70 @@ app.post('/api/buildings/:buildingId/odoo/activities', requireSession, express.r
     if (!parsedDeadline || parsedDeadline.toISOString().slice(0, 10) !== deadline) return res.status(400).json({ error: 'Informe uma data limite válida.' });
     return res.json(await createOdooActivity(linked.odoo_project_id, activityTypeId, assigneeId, summary, note, deadline, payload.files));
   }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.put('/api/buildings/:buildingId/odoo/activities/:activityId', requireSession, express.raw({ type: 'multipart/form-data', limit: '15mb' }), async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de editar uma atividade.' });
+  const activityId = validOdooProjectId(req.params.activityId);
+  if (!activityId) return res.status(400).json({ error: 'Atividade Odoo inválida.' });
+  try {
+    const payload = parseOdooUploadPayload(req);
+    const activityTypeId = validOdooProjectId(payload.fields.activityTypeId);
+    const assigneeId = validOdooProjectId(payload.fields.assigneeId);
+    const summary = typeof payload.fields.summary === 'string' ? payload.fields.summary.trim() : '';
+    const note = typeof payload.fields.note === 'string' ? payload.fields.note.trim() : '';
+    const deadline = typeof payload.fields.deadline === 'string' ? payload.fields.deadline : '';
+    const parsedDeadline = /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? new Date(`${deadline}T00:00:00.000Z`) : null;
+    validateOdooUploadFiles(payload.files);
+    if (!activityTypeId) return res.status(400).json({ error: 'Selecione um tipo de atividade disponível na Odoo.' });
+    if (!assigneeId) return res.status(400).json({ error: 'Selecione quem receberá a atividade.' });
+    if (summary.length < 2 || summary.length > 120) return res.status(400).json({ error: 'O resumo precisa ter entre 2 e 120 caracteres.' });
+    if (note.length > 5000) return res.status(400).json({ error: 'A observação pode ter até 5.000 caracteres.' });
+    if (!parsedDeadline || parsedDeadline.toISOString().slice(0, 10) !== deadline) return res.status(400).json({ error: 'Informe uma data limite válida.' });
+    return res.json(await updateOdooActivity(linked.odoo_project_id, activityId, activityTypeId, assigneeId, summary, note, deadline, payload.files));
+  }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.get('/api/buildings/:buildingId/odoo/attachments/:attachmentId', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de consultar anexos.' });
+  const attachmentId = validOdooProjectId(req.params.attachmentId);
+  if (!attachmentId) return res.status(400).json({ error: 'Arquivo Odoo inválido.' });
+  try {
+    const file = await getOdooProjectAttachment(linked.odoo_project_id, attachmentId);
+    const mimeType = file.mimetype.toLowerCase().split(';')[0]?.trim() || 'application/octet-stream';
+    const inlineTypes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'application/pdf']);
+    const servedMimeType = inlineTypes.has(mimeType) ? mimeType : 'application/octet-stream';
+    const asciiName = file.name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_').slice(0, 180) || `arquivo-${attachmentId}`;
+    res.setHeader('Content-Type', servedMimeType);
+    res.setHeader('Content-Disposition', `${inlineTypes.has(mimeType) ? 'inline' : 'attachment'}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+    res.setHeader('Content-Length', file.content.length);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(file.content);
+  } catch (error) { return sendOdooError(res, error); }
+});
+app.post('/api/buildings/:buildingId/odoo/attachment-previews', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de consultar anexos.' });
+  const rawIds = req.body?.attachmentIds;
+  if (!Array.isArray(rawIds) || rawIds.length > 24) return res.status(400).json({ error: 'A lista de arquivos para prévia é inválida.' });
+  const ids = [...new Set(rawIds.map(validOdooProjectId).filter((id): id is number => id !== null))];
+  if (ids.length !== rawIds.length) return res.status(400).json({ error: 'A lista de arquivos para prévia é inválida.' });
+  try { return res.json({ previews: await getOdooProjectAttachmentPreviews(linked.odoo_project_id, ids) }); }
   catch (error) { return sendOdooError(res, error); }
 });
 app.post('/api/buildings/:buildingId/odoo/documents', requireSession, async (req, res) => {
