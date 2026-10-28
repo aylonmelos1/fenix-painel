@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getSetting, setSetting } from './store.js';
 import { buildOdooDocumentNote, type OdooDocumentNoteContext } from './odoo-document-note.js';
 import { buildOdooInternalNoteBody, isDisplayableOdooMessage, odooHtmlToPlainText } from './odoo-message.js';
+import { OdooRequestQueue, OdooRequestQueueFullError } from './odoo-request-queue.js';
 
 type OdooRelation = false | number | [number, string] | number[];
 type OdooRecord = Record<string, unknown> & { id: number };
@@ -16,6 +17,8 @@ export class OdooApiError extends Error {
 export type OdooConfiguration = { url: string; database: string; apiKey: string };
 export type OdooUploadFile = { name: string; mimetype: string; content: Buffer };
 const ODOO_CONFIGURATION_SETTING = 'odoo_integration';
+// Shared across all users in this server process: max one outbound request per second, no overlap.
+const odooRequestQueue = new OdooRequestQueue({ minIntervalMs: 1000, maxPending: 32 });
 
 export type OdooProjectSnapshot = {
   project: {
@@ -129,22 +132,48 @@ async function callOdoo<T>(model: string, method: string, payload: Record<string
   const database = config?.database.trim() ?? '';
   if (database) headers['X-Odoo-Database'] = database;
 
-  let response: Response;
   try {
-    response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(25_000) });
+    return await odooRequestQueue.enqueue(async () => {
+      let response: Response;
+      try {
+        response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(25_000) });
+      } catch (error) {
+        const timeout = error instanceof Error && error.name === 'TimeoutError';
+        throw new OdooApiError(timeout ? 'A Odoo demorou para responder. Tente novamente.' : 'Não foi possível conectar à Odoo.', 502);
+      }
+      if (!response.ok) {
+        const status = response.status;
+        if (status === 429) {
+          const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
+          odooRequestQueue.deferFor(retryAfter ?? 60_000);
+          throw new OdooApiError('A Odoo limitou as consultas. Aguarde um pouco e tente novamente.', 503);
+        }
+        if (status === 503) {
+          const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
+          if (retryAfter !== null) odooRequestQueue.deferFor(retryAfter);
+          throw new OdooApiError('A Odoo está temporariamente indisponível. Tente novamente em instantes.', 503);
+        }
+        if (status === 401 || status === 403) throw new OdooApiError('A Odoo recusou o acesso. Verifique as permissões da chave de integração.', 502);
+        if (status === 404) throw new OdooApiError('O recurso solicitado não foi encontrado na Odoo.', 404);
+        throw new OdooApiError('A Odoo não concluiu a operação. Verifique a configuração e tente novamente.', 502);
+      }
+      try { return await response.json() as T; }
+      catch { throw new OdooApiError('A Odoo retornou uma resposta inválida.', 502); }
+    });
   } catch (error) {
-    const timeout = error instanceof Error && error.name === 'TimeoutError';
-    throw new OdooApiError(timeout ? 'A Odoo demorou para responder. Tente novamente.' : 'Não foi possível conectar à Odoo.', 502);
+    if (error instanceof OdooRequestQueueFullError) {
+      throw new OdooApiError('A integração Odoo está ocupada. Aguarde alguns segundos e tente novamente.', 503);
+    }
+    throw error;
   }
-  if (!response.ok) {
-    const status = response.status;
-    if (status === 401 || status === 403) throw new OdooApiError('A Odoo recusou o acesso. Verifique as permissões da chave de integração.', 502);
-    if (status === 429) throw new OdooApiError('A Odoo limitou as consultas. Aguarde um pouco e tente novamente.', 503);
-    if (status === 404) throw new OdooApiError('O recurso solicitado não foi encontrado na Odoo.', 404);
-    throw new OdooApiError('A Odoo não concluiu a operação. Verifique a configuração e tente novamente.', 502);
-  }
-  try { return await response.json() as T; }
-  catch { throw new OdooApiError('A Odoo retornou uma resposta inválida.', 502); }
+}
+
+function parseRetryAfter(value: string | null) {
+  if (!value || value.length > 128) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null;
 }
 
 export async function verifyOdooConfiguration(config: OdooConfiguration) {
@@ -255,16 +284,16 @@ export async function getOdooProject(projectId: number): Promise<OdooProjectSnap
   });
   const project = projects?.[0];
   if (!project) return null;
-  const [tasks, messages, activities, activityTypes, projectAttachments, chatterAttachmentMessages] = await Promise.all([
+  // JSON-2 has one model/method per HTTP request; callOdoo serializes these reads through the shared queue.
+  const [tasks, messages, activities, activityTypes, projectAttachments] = await Promise.all([
     searchRead('project.task', [['project_id', '=', projectId]], ['id', 'name', 'stage_id', 'user_ids', 'date_deadline', 'priority'], 30, 'write_date desc, id desc'),
     searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'date', 'author_id', 'body', 'message_type', 'subtype_id', 'subject', 'attachment_ids'], 30, 'date desc, id desc'),
     searchRead('mail.activity', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'activity_type_id', 'summary', 'note', 'date_deadline', 'user_id', 'state'], 30, 'date_deadline asc, id asc'),
     searchRead('mail.activity.type', [['active', '=', true], '|', ['res_model', '=', false], ['res_model', '=', 'project.project']], ['id', 'name', 'category'], 100, 'sequence asc, id asc'),
-    searchRead('ir.attachment', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], 1000, 'create_date desc, id desc'),
-    searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['attachment_ids', '!=', false]], ['attachment_ids'], 1000, 'date desc, id desc')
+    searchRead('ir.attachment', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], 1000, 'create_date desc, id desc')
   ]);
   const projectAttachmentIds = new Set(projectAttachments.map((attachment) => attachment.id));
-  const messageAttachmentIds = [...new Set(chatterAttachmentMessages.flatMap((message) => Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : []))];
+  const messageAttachmentIds = [...new Set(messages.flatMap((message) => Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : []))];
   const messageOnlyAttachmentIds = messageAttachmentIds.filter((id) => !projectAttachmentIds.has(id));
   const messageAttachments = messageOnlyAttachmentIds.length
     ? await searchRead('ir.attachment', [['id', 'in', messageOnlyAttachmentIds]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], messageOnlyAttachmentIds.length, 'create_date desc, id desc')
@@ -334,19 +363,22 @@ export async function odooProjectExists(projectId: number) {
 }
 
 async function createOdooAttachments(projectId: number, files: OdooUploadFile[]) {
-  const ids: number[] = [];
-  for (const file of files) {
+  if (!files.length) return [];
+  const valsList = files.map((file) => {
     const name = file.name.replace(/[\\/\x00-\x1f\x7f]/g, '_').trim().slice(0, 180) || 'Anexo';
     const mimetype = file.mimetype.trim().slice(0, 160) || 'application/octet-stream';
-    ids.push(await createOdooRecord('ir.attachment', {
+    return {
       name,
       type: 'binary',
       mimetype,
       datas: file.content.toString('base64'),
       res_model: 'project.project',
       res_id: projectId
-    }));
-  }
+    };
+  });
+  const created = await callOdoo<unknown>('ir.attachment', 'create', { vals_list: valsList });
+  const ids = (Array.isArray(created) ? created : [created]).map(firstRecordId);
+  if (ids.length !== files.length) throw new OdooApiError('A Odoo não confirmou todos os anexos enviados.', 502);
   return ids;
 }
 
@@ -354,14 +386,13 @@ export async function createOdooInternalNote(projectId: number, body: string, re
   const messageId = `<fenix-note-${requestId}@fenix-painel>`;
   const previous = await searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['message_id', '=', messageId]], ['id'], 1);
   if (previous[0]) return { id: previous[0].id, alreadyExists: true };
-  const uniquePartnerIds = [...new Set(requestedPartnerIds)];
-  const [authorUsers, mentionedUsers] = await Promise.all([
-    searchRead('res.users', [['active', '=', true], ['share', '=', false], ['partner_id', '=', authorPartnerId]], ['partner_id'], 1),
-    uniquePartnerIds.length
-      ? searchRead('res.users', [['active', '=', true], ['partner_id', 'in', uniquePartnerIds]], ['name', 'partner_id'], uniquePartnerIds.length)
-      : Promise.resolve([])
-  ]);
-  if (!Number.isSafeInteger(authorPartnerId) || authorPartnerId < 1 || !authorUsers[0]) throw new OdooApiError('Selecione um usuário interno ativo para assinar a nota.', 400);
+  if (!Number.isSafeInteger(authorPartnerId) || authorPartnerId < 1) throw new OdooApiError('Selecione um usuário interno ativo para assinar a nota.', 400);
+  const uniquePartnerIds = [...new Set(requestedPartnerIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  const partnerIdsToLoad = [...new Set([authorPartnerId, ...uniquePartnerIds])];
+  const users = await searchRead('res.users', [['active', '=', true], ['partner_id', 'in', partnerIdsToLoad]], ['name', 'partner_id', 'share'], Math.min(200, Math.max(10, partnerIdsToLoad.length * 5)));
+  const authorUser = users.find((user) => Array.isArray(user.partner_id) && Number(user.partner_id[0]) === authorPartnerId && user.share === false);
+  if (!authorUser) throw new OdooApiError('Selecione um usuário interno ativo para assinar a nota.', 400);
+  const mentionedUsers = users.filter((user) => Array.isArray(user.partner_id) && uniquePartnerIds.includes(Number(user.partner_id[0])));
   const mentions = mentionedUsers.map((user) => ({
     partnerId: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0,
     name: String(user.name || '')

@@ -198,7 +198,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
         .then((result) => { if (active) setMentionPeople(result.people); })
         .catch(() => { if (active) setMentionPeople([]); })
         .finally(() => { if (active) setMentionsLoading(false); });
-    }, 220);
+    }, 500);
     return () => { active = false; window.clearTimeout(timer); };
   }, [buildingId, mentionOpen, mentionQuery]);
 
