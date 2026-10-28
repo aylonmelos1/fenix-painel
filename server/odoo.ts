@@ -255,15 +255,16 @@ export async function getOdooProject(projectId: number): Promise<OdooProjectSnap
   });
   const project = projects?.[0];
   if (!project) return null;
-  const [tasks, messages, activities, activityTypes, projectAttachments] = await Promise.all([
+  const [tasks, messages, activities, activityTypes, projectAttachments, chatterAttachmentMessages] = await Promise.all([
     searchRead('project.task', [['project_id', '=', projectId]], ['id', 'name', 'stage_id', 'user_ids', 'date_deadline', 'priority'], 30, 'write_date desc, id desc'),
     searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'date', 'author_id', 'body', 'message_type', 'subtype_id', 'subject', 'attachment_ids'], 30, 'date desc, id desc'),
     searchRead('mail.activity', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'activity_type_id', 'summary', 'note', 'date_deadline', 'user_id', 'state'], 30, 'date_deadline asc, id asc'),
     searchRead('mail.activity.type', [['active', '=', true], '|', ['res_model', '=', false], ['res_model', '=', 'project.project']], ['id', 'name', 'category'], 100, 'sequence asc, id asc'),
-    searchRead('ir.attachment', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], 500, 'create_date desc, id desc')
+    searchRead('ir.attachment', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], 1000, 'create_date desc, id desc'),
+    searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['attachment_ids', '!=', false]], ['attachment_ids'], 1000, 'date desc, id desc')
   ]);
   const projectAttachmentIds = new Set(projectAttachments.map((attachment) => attachment.id));
-  const messageAttachmentIds = [...new Set(messages.flatMap((message) => Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : []))];
+  const messageAttachmentIds = [...new Set(chatterAttachmentMessages.flatMap((message) => Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : []))];
   const messageOnlyAttachmentIds = messageAttachmentIds.filter((id) => !projectAttachmentIds.has(id));
   const messageAttachments = messageOnlyAttachmentIds.length
     ? await searchRead('ir.attachment', [['id', 'in', messageOnlyAttachmentIds]], ['id', 'name', 'mimetype', 'file_size', 'create_date'], messageOnlyAttachmentIds.length, 'create_date desc, id desc')
