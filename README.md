@@ -43,9 +43,13 @@ O código do Worker está em `/home/aylons1/fenix-mcp/cloudflare/fenix-upstream-
 
 ## Dados, credenciais e integrações
 
-O SQLite, sessões do Fênix e chave OpenAI ficam em `data/`. A chave OpenAI e a sessão Fênix são criptografadas com AES-256-GCM usando `data/.local-key`; as permissões são restritas ao usuário local. Não copie a chave para o frontend, logs, capturas de tela ou repositórios.
+O SQLite, as sessões do Fênix e as configurações e chaves OpenAI/Odoo ficam em `data/`. As chaves OpenAI e Odoo e a sessão Fênix são criptografadas com AES-256-GCM usando `data/.local-key`; as permissões são restritas ao usuário local. Não copie as chaves para o frontend, logs, capturas de tela ou repositórios.
 
 A sincronização consulta as rotas GET mapeadas no `fenix-mcp`. O painel não envia alterações ao Fênix. Certificados e comprovantes são baixados quando o Fênix oferece o arquivo. A emissão do DAE pode exigir etapa manual na SEFAZ-BA. Alguns anexos de retificação podem não ser autorizados pela sessão atual; a interface identifica essa limitação.
+
+### Integração Odoo
+
+Configure a URL da instância, o banco (quando necessário) e a chave da API JSON-2 em **Configurações → Integração Odoo**. A chave é criptografada no armazenamento local e nunca é devolvida ao navegador. Na aba Odoo, sugestões de projetos são ordenadas pela semelhança entre o cliente e o nome da edificação; tanto uma sugestão quanto a consulta por ID abrem uma prévia e só são vinculadas após confirmação. O painel lê o projeto, tarefas, atividades e Chatter; notas internas, atividades e documentos do Fênix são enviados somente após ação do usuário. Use uma chave de usuário técnico com acesso mínimo aos projetos que a equipe deve consultar e faça a rotação conforme a política do Odoo.
 
 As respostas da OpenAI só são solicitadas quando o usuário pergunta. Cada envio inclui os dados selecionados e até seis trocas recentes da conversa. O contexto de processo remove CPF, CNPJ, endereço completo e contatos; o texto digitado pelo usuário é enviado para responder à pergunta.
 
@@ -57,7 +61,7 @@ Crie um backup SQLite consistente, incluindo a chave local:
 npm run data:backup -- /caminho-protegido/fenix-painel-AAAA-MM-DD
 ```
 
-Guarde a pasta do backup em local protegido: ela contém o banco e a chave que descriptografa sessões e configuração OpenAI.
+Guarde a pasta do backup em local protegido: ela contém o banco e a chave que descriptografa sessões e configurações OpenAI e Odoo.
 
 Para restaurar, pare o painel e rode:
 

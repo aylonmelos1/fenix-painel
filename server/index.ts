@@ -7,10 +7,12 @@ import { CookieJar } from 'tough-cookie';
 import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
-import { addSession, db, deleteSession, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
+import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, newSessionId, saveCookieJar, syncFenixUser, type FenixBuildingOption } from './fenix.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
+import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
+import { resolveLatestFenixSituation } from './odoo-document-note.js';
 
 const app = express();
 const logger = new Logger({ name: 'fenix-painel', minLevel: 3 });
@@ -93,6 +95,123 @@ function ownedProcess(ownerUserId: string, processId: string, buildingId: string
     LEFT JOIN fenix_connections fc ON fc.id=p.source_connection_id
     WHERE p.id=? AND p.building_id=? AND (p.user_id=? OR fc.owner_user_id=?) AND ${ACTIVE_BUILDING_SQL}`)
     .get(processId, buildingId, ownerUserId, ownerUserId) as any;
+}
+function linkedOdooProject(ownerUserId: string, buildingId: string) {
+  return db.prepare('SELECT odoo_project_id FROM odoo_project_links WHERE owner_user_id=? AND building_id=?').get(ownerUserId, buildingId) as { odoo_project_id: number } | undefined;
+}
+function sendOdooError(res: Response, error: unknown) {
+  if (error instanceof OdooApiError) return res.status(error.httpStatus).json({ error: error.message });
+  if (error instanceof FenixError) return res.status(error.status === 404 ? 404 : error.status === 413 ? 413 : 502).json({ error: error.message });
+  logger.warn('Falha na integração Odoo', { errorName: error instanceof Error ? error.name : 'unknown' });
+  return res.status(502).json({ error: 'Não foi possível concluir a operação na Odoo. Tente novamente.' });
+}
+function parseOdooUploadPayload(req: Request): { fields: Record<string, unknown>; files: OdooUploadFile[] } {
+  if (!Buffer.isBuffer(req.body)) return { fields: req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {}, files: [] };
+  const contentType = String(req.headers['content-type'] || '');
+  const boundary = contentType.match(/\bboundary=(?:"([^"]+)"|([^;\s]+))/i)?.slice(1).find(Boolean);
+  if (!boundary || boundary.length > 200) throw new OdooApiError('O formulário de anexos está inválido. Recarregue e tente novamente.', 400);
+  const body = req.body as Buffer;
+  const delimiter = Buffer.from(`--${boundary}`);
+  const fields: Record<string, unknown> = {};
+  const files: OdooUploadFile[] = [];
+  let cursor = 0;
+  while (cursor < body.length) {
+    const partStart = body.indexOf(delimiter, cursor);
+    if (partStart < 0) break;
+    let start = partStart + delimiter.length;
+    if (body.subarray(start, start + 2).toString() === '--') break;
+    if (body.subarray(start, start + 2).toString() === '\r\n') start += 2;
+    const nextBoundary = body.indexOf(delimiter, start);
+    if (nextBoundary < 0) break;
+    let end = nextBoundary;
+    if (body.subarray(end - 2, end).toString() === '\r\n') end -= 2;
+    const part = body.subarray(start, end);
+    const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'));
+    if (headerEnd < 0) { cursor = nextBoundary; continue; }
+    const headers = part.subarray(0, headerEnd).toString('latin1');
+    const disposition = headers.match(/^Content-Disposition:\s*form-data;([^\r\n]+)/im)?.[1] || '';
+    const name = disposition.match(/\bname="([^"]*)"/i)?.[1];
+    if (!name) { cursor = nextBoundary; continue; }
+    const filename = disposition.match(/\bfilename="([^"]*)"/i)?.[1];
+    const content = part.subarray(headerEnd + 4);
+    if (filename !== undefined) {
+      const mimetype = headers.match(/^Content-Type:\s*([^\r\n]+)/im)?.[1]?.trim() || 'application/octet-stream';
+      files.push({ name: filename, mimetype, content: Buffer.from(content) });
+    } else fields[name] = content.toString('utf8');
+    cursor = nextBoundary;
+  }
+  return { fields, files };
+}
+function validateOdooUploadFiles(files: OdooUploadFile[]) {
+  if (files.length > 8) throw new OdooApiError('Anexe no máximo 8 arquivos por envio.', 400);
+  const totalBytes = files.reduce((total, file) => total + file.content.length, 0);
+  if (totalBytes > 12 * 1024 * 1024) throw new OdooApiError('Os anexos podem somar até 12 MB por envio.', 413);
+  if (files.some((file) => file.content.length === 0)) throw new OdooApiError('Um dos arquivos está vazio.', 400);
+}
+function validOdooProjectId(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,12}$/.test(value.trim()) ? Number(value) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function getFenixDocumentForOdoo(userId: string, buildingId: string, processId: string, kind: string, daeId = '') {
+  const process = ownedProcess(userId, processId, buildingId);
+  if (!process) throw new FenixError('Processo não encontrado nesta edificação.', 404);
+  const remoteId = process.remote_id || process.id.slice(process.id.indexOf(':') + 1);
+  const situation = latestFenixSituation(process);
+  let daeUrl: string | undefined;
+  let file: { filename: string; content: Buffer };
+  if (kind === 'certificate') {
+    if (!process.id.startsWith('technicalproject:')) throw new FenixError('O certificado não corresponde a um projeto técnico.', 404);
+    const requestApproved = Boolean(db.prepare(`SELECT 1 FROM processes WHERE building_id = ? AND user_id = ? AND id LIKE 'request:%' AND protocol = ? AND (lower(status) LIKE '%homolog%' OR lower(status) LIKE '%aprov%' OR lower(status) LIKE '%conclu%') LIMIT 1`)
+      .get(process.building_id, process.data_user_id, process.protocol));
+    if (!isApprovedProcess(process) && !requestApproved) throw new FenixError('O Fênix não indica um certificado disponível para este processo.', 404);
+    file = await getTechnicalProjectCertificate(process.data_user_id, remoteId);
+  } else if (kind === 'protocol') {
+    if (!process.id.startsWith('technicalproject:')) throw new FenixError('O comprovante não corresponde a um projeto técnico.', 404);
+    file = await getTechnicalProjectProtocolReceipt(process.data_user_id, remoteId);
+  } else if (kind === 'notification') {
+    const notified = /notificad/i.test(`${process.status} ${process.stage}`) || Boolean(db.prepare(`SELECT 1 FROM processes WHERE building_id = ? AND user_id = ? AND protocol = ? AND id LIKE 'request:%' AND (lower(status) LIKE '%notificad%' OR lower(stage) LIKE '%notificad%') LIMIT 1`)
+      .get(process.building_id, process.data_user_id, process.protocol));
+    if (!notified) throw new FenixError('O Fênix não indica uma notificação disponível para este processo.', 404);
+    file = process.id.startsWith('technicalproject:')
+      ? await getTechnicalProjectNotification(process.data_user_id, remoteId)
+      : process.id.startsWith('request:')
+        ? await getFenixRequestNotification(process.data_user_id, remoteId)
+        : (() => { throw new FenixError('Tipo de processo não compatível com notificações.', 404); })();
+  } else if (kind === 'dae') {
+    if (!process.id.startsWith('technicalproject:') || !daeId || daeId.length > 100) throw new FenixError('DAE inválido para este processo.', 404);
+    const daes = await getTechnicalProjectDaes(process.data_user_id, remoteId);
+    if (!daes.some((dae) => dae.id === daeId && dae.available)) throw new FenixError('O Fênix não disponibilizou este DAE para download.', 404);
+    daeUrl = await getTechnicalProjectDaeUrl(process.data_user_id, remoteId, daeId);
+    file = await getTechnicalProjectDaePdf(process.data_user_id, remoteId, daeId);
+  } else {
+    throw new FenixError('Tipo de documento inválido.', 400);
+  }
+  if (file.content.length > 12_000_000) throw new FenixError('O arquivo excede o limite de 12 MB para envio à Odoo.', 413);
+  return {
+    ...file,
+    reference: `${buildingId}:${process.id}:${kind}:${daeId}`,
+    documentContext: {
+      kind,
+      processProtocol: String(process.protocol || ''),
+      latestSituation: situation.label,
+      latestSituationDate: situation.date,
+      ...(daeUrl ? { daeUrl } : {})
+    }
+  };
+}
+function latestFenixSituation(process: { data_user_id: string; id: string; payload?: string; stage?: string; status?: string; updated_at?: string }) {
+  let payloadTimeline: Array<{ label?: unknown; date?: unknown }> = [];
+  try {
+    const payload = JSON.parse(process.payload || '{}');
+    if (Array.isArray(payload?.timeline)) payloadTimeline = payload.timeline;
+  } catch { /* use the separately stored history when the process payload is incomplete */ }
+  const storedTimeline = storedTechnicalTimeline(process.data_user_id, process.id);
+  return resolveLatestFenixSituation(
+    [...payloadTimeline, ...storedTimeline],
+    String(process.stage || process.status || ''),
+    String(process.updated_at || '')
+  );
 }
 function saveConnectionCatalog(connectionId: string, catalog: FenixBuildingOption[]) {
   const upsert = db.prepare(`INSERT INTO fenix_connection_buildings (connection_id,remote_building_id,reference,municipality,selected,updated_at)
@@ -722,6 +841,148 @@ app.delete('/api/fenix-connections/:id', requireSession, (req, res) => {
 
 app.get('/api/dashboard', requireSession, async (_req, res) => res.json(await dashboardPayload(res.locals.user)));
 app.get('/api/buildings', requireSession, async (_req, res) => res.json({ buildings: (await dashboardPayload(res.locals.user)).buildings }));
+app.get('/api/buildings/:buildingId/odoo', requireSession, (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  const building = ownedBuilding(user.id, buildingId);
+  if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.json({ configured: false, projectId: null, buildingReference: building.reference, reason: 'demo' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  return res.json({ configured: isOdooConfigured(), projectId: linked?.odoo_project_id || null, buildingReference: building.reference, reason: isOdooConfigured() ? null : 'not_configured' });
+});
+app.get('/api/buildings/:buildingId/odoo/suggestions', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const building = ownedBuilding(user.id, String(req.params.buildingId || ''));
+  if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  try { return res.json({ queryName: building.reference, projects: await findOdooProjectSuggestions(building.reference) }); }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.get('/api/buildings/:buildingId/odoo/assignees', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  if (!linkedOdooProject(user.id, buildingId)) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de carregar os responsáveis.' });
+  try { return res.json({ users: await getOdooActivityAssignees() }); }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.get('/api/buildings/:buildingId/odoo/people', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  if (!linkedOdooProject(user.id, buildingId)) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de buscar pessoas.' });
+  const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (query.length < 2) return res.json({ people: [] });
+  try { return res.json({ people: await searchOdooMentionPeople(query) }); }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.get('/api/buildings/:buildingId/odoo/preview/:projectId', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const projectId = validOdooProjectId(req.params.projectId);
+  if (!projectId) return res.status(400).json({ error: 'Informe um ID numérico válido de projeto Odoo.' });
+  try {
+    const snapshot = await getOdooProject(projectId);
+    if (!snapshot) return res.status(404).json({ error: `O projeto ${projectId} não foi encontrado ou não está acessível para a integração.` });
+    return res.json(snapshot);
+  } catch (error) { return sendOdooError(res, error); }
+});
+app.get('/api/buildings/:buildingId/odoo/project', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(404).json({ error: 'Vincule um ID de projeto Odoo para carregar os dados.' });
+  try {
+    const snapshot = await getOdooProject(linked.odoo_project_id);
+    if (!snapshot) return res.status(404).json({ error: `O projeto ${linked.odoo_project_id} não foi encontrado ou não está acessível para a integração.` });
+    return res.json(snapshot);
+  } catch (error) { return sendOdooError(res, error); }
+});
+app.put('/api/buildings/:buildingId/odoo/project', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const projectId = validOdooProjectId(req.body?.projectId);
+  if (!projectId) return res.status(400).json({ error: 'Informe um ID numérico válido de projeto Odoo.' });
+  try {
+    if (!await odooProjectExists(projectId)) return res.status(404).json({ error: `O projeto ${projectId} não foi encontrado ou não está acessível para a integração.` });
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO odoo_project_links (owner_user_id,building_id,odoo_project_id,created_at,updated_at) VALUES (?,?,?,?,?)
+      ON CONFLICT(owner_user_id,building_id) DO UPDATE SET odoo_project_id=excluded.odoo_project_id,updated_at=excluded.updated_at`)
+      .run(user.id, buildingId, projectId, now, now);
+    return res.json({ projectId });
+  } catch (error) { return sendOdooError(res, error); }
+});
+app.post('/api/buildings/:buildingId/odoo/notes', requireSession, express.raw({ type: 'multipart/form-data', limit: '15mb' }), async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de publicar uma nota.' });
+  try {
+    const payload = parseOdooUploadPayload(req);
+    const body = typeof payload.fields.body === 'string' ? payload.fields.body.trim() : '';
+    const requestId = typeof payload.fields.requestId === 'string' ? payload.fields.requestId : '';
+    validateOdooUploadFiles(payload.files);
+    if ((body.length < 2 && payload.files.length === 0) || body.length > 5000) return res.status(400).json({ error: 'A nota precisa de um texto ou anexo e pode ter até 5.000 caracteres.' });
+    if (!/^[A-Za-z0-9_-]{20,80}$/.test(requestId)) return res.status(400).json({ error: 'Identificador da nota inválido. Recarregue e tente novamente.' });
+    let partnerIds: unknown = [];
+    try { partnerIds = typeof payload.fields.partnerIds === 'string' ? JSON.parse(payload.fields.partnerIds) : payload.fields.partnerIds || []; }
+    catch { return res.status(400).json({ error: 'A lista de pessoas mencionadas está inválida.' }); }
+    if (!Array.isArray(partnerIds) || partnerIds.length > 20 || partnerIds.some((id) => !Number.isSafeInteger(Number(id)) || Number(id) < 1)) return res.status(400).json({ error: 'A lista de pessoas mencionadas está inválida.' });
+    return res.json(await createOdooInternalNote(linked.odoo_project_id, body, requestId, partnerIds.map(Number), payload.files));
+  }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.post('/api/buildings/:buildingId/odoo/activities', requireSession, express.raw({ type: 'multipart/form-data', limit: '15mb' }), async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de planejar uma atividade.' });
+  try {
+    const payload = parseOdooUploadPayload(req);
+    const activityTypeId = validOdooProjectId(payload.fields.activityTypeId);
+    const assigneeId = validOdooProjectId(payload.fields.assigneeId);
+    const summary = typeof payload.fields.summary === 'string' ? payload.fields.summary.trim() : '';
+    const note = typeof payload.fields.note === 'string' ? payload.fields.note.trim() : '';
+    const deadline = typeof payload.fields.deadline === 'string' ? payload.fields.deadline : '';
+    const parsedDeadline = /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? new Date(`${deadline}T00:00:00.000Z`) : null;
+    validateOdooUploadFiles(payload.files);
+    if (!activityTypeId) return res.status(400).json({ error: 'Selecione um tipo de atividade disponível na Odoo.' });
+    if (!assigneeId) return res.status(400).json({ error: 'Selecione quem receberá a atividade.' });
+    if (summary.length < 2 || summary.length > 120) return res.status(400).json({ error: 'O resumo precisa ter entre 2 e 120 caracteres.' });
+    if (note.length > 5000) return res.status(400).json({ error: 'A observação pode ter até 5.000 caracteres.' });
+    if (!parsedDeadline || parsedDeadline.toISOString().slice(0, 10) !== deadline) return res.status(400).json({ error: 'Informe uma data limite válida.' });
+    return res.json(await createOdooActivity(linked.odoo_project_id, activityTypeId, assigneeId, summary, note, deadline, payload.files));
+  }
+  catch (error) { return sendOdooError(res, error); }
+});
+app.post('/api/buildings/:buildingId/odoo/documents', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A integração Odoo está disponível nas contas conectadas.' });
+  const linked = linkedOdooProject(user.id, buildingId);
+  if (!linked) return res.status(409).json({ error: 'Vincule um projeto Odoo antes de anexar documentos.' });
+  const processId = typeof req.body?.processId === 'string' ? req.body.processId : '';
+  const kind = typeof req.body?.kind === 'string' ? req.body.kind : '';
+  const daeId = typeof req.body?.daeId === 'string' ? req.body.daeId : '';
+  if (!processId || processId.length > 180) return res.status(400).json({ error: 'Processo inválido.' });
+  try {
+    const file = await getFenixDocumentForOdoo(user.id, buildingId, processId, kind, daeId);
+    return res.json(await attachOdooDocument(linked.odoo_project_id, { name: file.filename, content: file.content }, file.reference, file.documentContext));
+  } catch (error) { return sendOdooError(res, error); }
+});
 app.get('/api/sync/status', requireSession, (_req, res) => {
   const userId = res.locals.user.id;
   const requestQueue = getFenixRequestQueueState();
@@ -1267,6 +1528,32 @@ app.delete('/api/settings/webhook', requireSession, (req, res) => {
   if (res.locals.user.demo) return res.status(403).json({ error: 'A integração só pode ser alterada na conta Fênix da empresa.' });
   db.prepare('DELETE FROM settings WHERE key=?').run(WEBHOOK_SETTING);
   return res.json({ configured: false });
+});
+
+app.get('/api/settings/odoo', requireSession, (_req, res) => {
+  if (res.locals.user.demo) return res.json({ configured: false, apiKeyConfigured: false, url: '', database: '', reason: 'demo' });
+  return res.json(getOdooSettingsStatus());
+});
+app.post('/api/settings/odoo/test', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'Configure a integração Odoo na conta Fênix da empresa.' });
+  try {
+    const config = prepareOdooConfiguration({ url: req.body?.url, database: req.body?.database, apiKey: req.body?.apiKey });
+    await verifyOdooConfiguration(config);
+    return res.json({ ok: true, message: 'Conexão com a Odoo validada.' });
+  } catch (error) { return sendOdooError(res, error); }
+});
+app.put('/api/settings/odoo', requireSession, (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'Configure a integração Odoo na conta Fênix da empresa.' });
+  try {
+    const config = prepareOdooConfiguration({ url: req.body?.url, database: req.body?.database, apiKey: req.body?.apiKey });
+    saveOdooConfiguration(config);
+    return res.json(getOdooSettingsStatus());
+  } catch (error) { return sendOdooError(res, error); }
+});
+app.delete('/api/settings/odoo', requireSession, (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A integração Odoo só pode ser removida na conta Fênix da empresa.' });
+  deleteSetting('odoo_integration');
+  return res.json({ configured: false, apiKeyConfigured: false, url: '', database: '' });
 });
 
 app.get('/api/settings/preferences', requireSession, (_req, res) => {

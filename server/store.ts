@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS buildings (
   payload TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS odoo_project_links (
+  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  building_id TEXT NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+  odoo_project_id INTEGER NOT NULL CHECK(odoo_project_id > 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(owner_user_id, building_id)
+);
 CREATE TABLE IF NOT EXISTS processes (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -375,4 +383,8 @@ export function setSetting(key: string, value: string) {
   db.prepare(`INSERT INTO settings(key, value_ciphertext, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value_ciphertext = excluded.value_ciphertext, updated_at = excluded.updated_at`)
     .run(key, seal(value), new Date().toISOString());
+}
+
+export function deleteSetting(key: string) {
+  db.prepare('DELETE FROM settings WHERE key = ?').run(key);
 }

@@ -1,0 +1,393 @@
+import { createHash } from 'node:crypto';
+import { getSetting, setSetting } from './store.js';
+import { buildOdooDocumentNote, type OdooDocumentNoteContext } from './odoo-document-note.js';
+
+type OdooRelation = false | number | [number, string] | number[];
+type OdooRecord = Record<string, unknown> & { id: number };
+
+export class OdooApiError extends Error {
+  constructor(message: string, readonly httpStatus = 502) {
+    super(message);
+    this.name = 'OdooApiError';
+  }
+}
+
+export type OdooConfiguration = { url: string; database: string; apiKey: string };
+export type OdooUploadFile = { name: string; mimetype: string; content: Buffer };
+const ODOO_CONFIGURATION_SETTING = 'odoo_integration';
+
+export type OdooProjectSnapshot = {
+  project: {
+    id: number;
+    name: string;
+    description: string;
+    customer: OdooRelation;
+    manager: OdooRelation;
+    stage: OdooRelation;
+    startDate: string | false;
+    endDate: string | false;
+    taskCount: number;
+    openTaskCount: number;
+    createdAt: string | false;
+    updatedAt: string | false;
+  };
+  tasks: Array<{ id: number; name: string; stage: OdooRelation; assignees: OdooRelation; deadline: string | false; priority: string }>;
+  messages: Array<{ id: number; date: string | false; author: OdooRelation; body: string; type: string; subtype: OdooRelation; subject: string | false; attachmentIds: number[] }>;
+  activities: Array<{ id: number; type: OdooRelation; summary: string; note: string; deadline: string | false; assignee: OdooRelation; state: string }>;
+  activityTypes: Array<{ id: number; name: string; category: string }>;
+};
+
+export type OdooProjectSuggestion = {
+  id: number;
+  name: string;
+  customer: OdooRelation;
+  stage: OdooRelation;
+  taskCount: number;
+  openTaskCount: number;
+  matchScore: number;
+};
+
+function storedOdooConfiguration(): OdooConfiguration | null {
+  try {
+    const raw = getSetting(ODOO_CONFIGURATION_SETTING);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.url !== 'string' || typeof parsed?.apiKey !== 'string') return null;
+    return { url: parsed.url, database: typeof parsed.database === 'string' ? parsed.database : '', apiKey: parsed.apiKey };
+  } catch { return null; }
+}
+
+function odooBaseUrl(config = storedOdooConfiguration()) {
+  const raw = (config?.url || '').trim();
+  if (!raw || !config?.apiKey.trim()) return null;
+  let base: URL;
+  try { base = new URL(raw); }
+  catch { return null; }
+  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(base.hostname);
+  if ((!local && base.protocol !== 'https:') || (local && !['https:', 'http:'].includes(base.protocol)) || base.username || base.password || base.search || base.hash) return null;
+  let path = base.pathname.replace(/\/+$/, '').replace(/\/json\/2$/i, '');
+  return `${base.origin}${path}/json/2`;
+}
+
+export function isOdooConfigured() {
+  return Boolean(odooBaseUrl());
+}
+
+export function getOdooSettingsStatus() {
+  const config = storedOdooConfiguration();
+  return {
+    configured: Boolean(odooBaseUrl(config)),
+    apiKeyConfigured: Boolean(config?.apiKey.trim()),
+    url: config?.url || '',
+    database: config?.database || ''
+  };
+}
+
+export function normalizeOdooUrl(value: unknown) {
+  if (typeof value !== 'string' || value.trim().length > 2048) throw new OdooApiError('Informe uma URL base válida para a Odoo.', 400);
+  const raw = value.trim().replace(/\/+$/, '');
+  let url: URL;
+  try { url = new URL(raw); }
+  catch { throw new OdooApiError('Informe uma URL base válida para a Odoo.', 400); }
+  const local = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
+  if ((!local && url.protocol !== 'https:') || (local && !['https:', 'http:'].includes(url.protocol)) || url.username || url.password || url.search || url.hash) {
+    throw new OdooApiError('Use uma URL HTTPS da Odoo, sem usuário, senha, consulta ou fragmento.', 400);
+  }
+  let pathname = url.pathname.replace(/\/+$/, '').replace(/\/json\/2$/i, '');
+  return `${url.origin}${pathname}`;
+}
+
+export function saveOdooConfiguration(config: OdooConfiguration) {
+  setSetting(ODOO_CONFIGURATION_SETTING, JSON.stringify(config));
+}
+
+export function prepareOdooConfiguration(input: { url: unknown; database?: unknown; apiKey?: unknown }): OdooConfiguration {
+  const existing = storedOdooConfiguration();
+  const url = normalizeOdooUrl(input.url);
+  const database = typeof input.database === 'string' ? input.database.trim() : '';
+  const suppliedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
+  if (database.length > 150 || /[\r\n]/.test(database)) throw new OdooApiError('O nome do banco Odoo é inválido.', 400);
+  if (suppliedKey.length > 4096 || /[\r\n]/.test(suppliedKey)) throw new OdooApiError('A chave da API Odoo é inválida.', 400);
+  const apiKey = suppliedKey || existing?.apiKey || '';
+  if (!apiKey) throw new OdooApiError('Informe a chave da API JSON-2 da Odoo.', 400);
+  return { url, database, apiKey };
+}
+
+async function callOdoo<T>(model: string, method: string, payload: Record<string, unknown> = {}, override?: OdooConfiguration): Promise<T> {
+  const config = override || storedOdooConfiguration();
+  const baseUrl = odooBaseUrl(config);
+  const apiKey = config?.apiKey.trim();
+  if (!baseUrl || !apiKey) throw new OdooApiError('Configure a URL e a chave da API Odoo em Configurações.', 503);
+  const endpoint = `${baseUrl}/${encodeURIComponent(model)}/${encodeURIComponent(method)}`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json; charset=utf-8',
+    'User-Agent': 'Fenix-Painel/1.0'
+  };
+  const database = config?.database.trim() ?? '';
+  if (database) headers['X-Odoo-Database'] = database;
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(25_000) });
+  } catch (error) {
+    const timeout = error instanceof Error && error.name === 'TimeoutError';
+    throw new OdooApiError(timeout ? 'A Odoo demorou para responder. Tente novamente.' : 'Não foi possível conectar à Odoo.', 502);
+  }
+  if (!response.ok) {
+    const status = response.status;
+    if (status === 401 || status === 403) throw new OdooApiError('A Odoo recusou o acesso. Verifique as permissões da chave de integração.', 502);
+    if (status === 429) throw new OdooApiError('A Odoo limitou as consultas. Aguarde um pouco e tente novamente.', 503);
+    if (status === 404) throw new OdooApiError('O recurso solicitado não foi encontrado na Odoo.', 404);
+    throw new OdooApiError('A Odoo não concluiu a operação. Verifique a configuração e tente novamente.', 502);
+  }
+  try { return await response.json() as T; }
+  catch { throw new OdooApiError('A Odoo retornou uma resposta inválida.', 502); }
+}
+
+export async function verifyOdooConfiguration(config: OdooConfiguration) {
+  if (!odooBaseUrl(config)) throw new OdooApiError('Confira a URL HTTPS e a chave da API Odoo.', 400);
+  const context = await callOdoo<{ uid?: unknown }>('res.users', 'context_get', {}, config);
+  const uid = Number(context?.uid);
+  if (!Number.isSafeInteger(uid) || uid < 1) throw new OdooApiError('A Odoo não identificou o usuário desta chave de integração.', 502);
+  return { ok: true };
+}
+
+function relation(value: unknown): OdooRelation {
+  if (value === false || value === null || value === undefined) return false;
+  if (typeof value === 'number') return value;
+  if (Array.isArray(value)) return value as OdooRelation;
+  return false;
+}
+
+function firstRecordId(value: unknown) {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const rawId = candidate && typeof candidate === 'object' ? (candidate as { id?: unknown }).id : candidate;
+  const id = typeof rawId === 'number' ? rawId : Number(rawId);
+  if (!Number.isSafeInteger(id) || id < 1) throw new OdooApiError('A Odoo não retornou o identificador do registro criado.', 502);
+  return id;
+}
+
+async function createOdooRecord(model: string, values: Record<string, unknown>) {
+  const result = await callOdoo<unknown>(model, 'create', { vals_list: [values] });
+  return firstRecordId(result);
+}
+
+function plainText(value: unknown) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+    .replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+}
+
+async function searchRead(model: string, domain: unknown[], fields: string[], limit: number, order?: string) {
+  return callOdoo<OdooRecord[]>(model, 'search_read', { domain, fields, limit, ...(order ? { order } : {}) });
+}
+
+function matchTokens(value: string) {
+  const legalSuffixes = new Set(['ltda', 'limitada', 'eireli', 'mei', 'me', 'epp', 'sa', 's', 'cia']);
+  return [...new Set(value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR')
+    .split(/[^a-z0-9]+/).filter((token) => token.length >= 3 && !legalSuffixes.has(token)))];
+}
+
+function nameSimilarity(target: string[], candidate: string) {
+  const candidateTokens = matchTokens(candidate);
+  if (!target.length || !candidateTokens.length) return 0;
+  const shared = target.filter((token) => candidateTokens.includes(token)).length;
+  const coverage = shared / target.length;
+  const precision = shared / candidateTokens.length;
+  return Math.round((coverage * 0.72 + precision * 0.28) * 100);
+}
+
+export async function findOdooProjectSuggestions(clientName: string): Promise<OdooProjectSuggestion[]> {
+  const targetTokens = matchTokens(clientName);
+  if (!targetTokens.length) return [];
+  const queryTokens = [...targetTokens].sort((a, b) => b.length - a.length).slice(0, 6);
+  const leaves = queryTokens.flatMap((token) => [
+    ['partner_id.name', 'ilike', token],
+    ['name', 'ilike', token]
+  ]);
+  const domain = [
+    ['active', '=', true],
+    ...(leaves.length > 1 ? Array(leaves.length - 1).fill('|') : []),
+    ...leaves
+  ];
+  const rows = await searchRead('project.project', domain, ['id', 'name', 'partner_id', 'stage_id', 'task_count', 'open_task_count', 'write_date'], 200, 'write_date desc, id desc');
+  return rows.map((row) => {
+    const customer = relation(row.partner_id);
+    const customerName = Array.isArray(customer) ? String(customer[1] || '') : '';
+    const customerScore = nameSimilarity(targetTokens, customerName);
+    const projectScore = nameSimilarity(targetTokens, String(row.name || ''));
+    const matchScore = Math.max(customerScore, Math.round(customerScore * 0.85 + projectScore * 0.15), Math.round(projectScore * 0.75));
+    return {
+      id: row.id,
+      name: String(row.name || row.display_name || `Projeto ${row.id}`),
+      customer,
+      stage: relation(row.stage_id),
+      taskCount: Number(row.task_count) || 0,
+      openTaskCount: Number(row.open_task_count) || 0,
+      matchScore
+    };
+  }).filter((project) => project.matchScore >= 20)
+    .sort((a, b) => b.matchScore - a.matchScore || a.name.localeCompare(b.name, 'pt-BR'))
+    .slice(0, 30);
+}
+
+export async function searchOdooMentionPeople(query: string) {
+  const term = query.trim().slice(0, 80);
+  if (term.length < 2) return [];
+  const users = await searchRead('res.users', [['active', '=', true], ['name', 'ilike', term]], ['id', 'name', 'partner_id'], 15, 'name asc');
+  return users.map((user) => ({
+    userId: user.id,
+    partnerId: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0,
+    name: String(user.name || '')
+  })).filter((person) => person.partnerId > 0 && person.name);
+}
+
+export async function getOdooActivityAssignees() {
+  const users = await searchRead('res.users', [['active', '=', true]], ['id', 'name', 'partner_id'], 100, 'name asc');
+  return users.map((user) => ({
+    id: user.id,
+    name: String(user.name || ''),
+    partnerId: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0
+  })).filter((user) => user.name);
+}
+
+export async function getOdooProject(projectId: number): Promise<OdooProjectSnapshot | null> {
+  const projects = await callOdoo<OdooRecord[]>('project.project', 'read', {
+    ids: [projectId],
+    fields: ['id', 'name', 'description', 'partner_id', 'user_id', 'stage_id', 'date_start', 'date', 'task_count', 'open_task_count', 'create_date', 'write_date']
+  });
+  const project = projects?.[0];
+  if (!project) return null;
+  const [tasks, messages, activities, activityTypes] = await Promise.all([
+    searchRead('project.task', [['project_id', '=', projectId]], ['id', 'name', 'stage_id', 'user_ids', 'date_deadline', 'priority'], 30, 'write_date desc, id desc'),
+    searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'date', 'author_id', 'body', 'message_type', 'subtype_id', 'subject', 'attachment_ids'], 30, 'date desc, id desc'),
+    searchRead('mail.activity', [['res_model', '=', 'project.project'], ['res_id', '=', projectId]], ['id', 'activity_type_id', 'summary', 'note', 'date_deadline', 'user_id', 'state'], 30, 'date_deadline asc, id asc'),
+    searchRead('mail.activity.type', [['active', '=', true], '|', ['res_model', '=', false], ['res_model', '=', 'project.project']], ['id', 'name', 'category'], 100, 'sequence asc, id asc')
+  ]);
+  return {
+    project: {
+      id: project.id,
+      name: String(project.name || project.display_name || `Projeto ${projectId}`),
+      description: plainText(project.description),
+      customer: relation(project.partner_id),
+      manager: relation(project.user_id),
+      stage: relation(project.stage_id),
+      startDate: typeof project.date_start === 'string' ? project.date_start : false,
+      endDate: typeof project.date === 'string' ? project.date : false,
+      taskCount: Number(project.task_count) || 0,
+      openTaskCount: Number(project.open_task_count) || 0,
+      createdAt: typeof project.create_date === 'string' ? project.create_date : false,
+      updatedAt: typeof project.write_date === 'string' ? project.write_date : false
+    },
+    tasks: tasks.map((task) => ({ id: task.id, name: String(task.name || ''), stage: relation(task.stage_id), assignees: relation(task.user_ids), deadline: typeof task.date_deadline === 'string' ? task.date_deadline : false, priority: String(task.priority || '0') })),
+    messages: messages.map((message) => ({ id: message.id, date: typeof message.date === 'string' ? message.date : false, author: relation(message.author_id), body: plainText(message.body), type: String(message.message_type || ''), subtype: relation(message.subtype_id), subject: typeof message.subject === 'string' ? message.subject : false, attachmentIds: Array.isArray(message.attachment_ids) ? message.attachment_ids.filter((id): id is number => typeof id === 'number') : [] })),
+    activities: activities.filter((activity) => activity.state !== 'done').map((activity) => ({ id: activity.id, type: relation(activity.activity_type_id), summary: String(activity.summary || ''), note: plainText(activity.note), deadline: typeof activity.date_deadline === 'string' ? activity.date_deadline : false, assignee: relation(activity.user_id), state: String(activity.state || '') })),
+    activityTypes: activityTypes.map((type) => ({ id: type.id, name: String(type.name || ''), category: String(type.category || '') }))
+  };
+}
+
+export async function odooProjectExists(projectId: number) {
+  const projects = await callOdoo<Array<{ id: number }>>('project.project', 'read', { ids: [projectId], fields: ['id'] });
+  return projects?.some((project) => project.id === projectId) || false;
+}
+
+function escapeOdooHtml(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function createOdooAttachments(projectId: number, files: OdooUploadFile[]) {
+  const ids: number[] = [];
+  for (const file of files) {
+    const name = file.name.replace(/[\\/\x00-\x1f\x7f]/g, '_').trim().slice(0, 180) || 'Anexo';
+    const mimetype = file.mimetype.trim().slice(0, 160) || 'application/octet-stream';
+    ids.push(await createOdooRecord('ir.attachment', {
+      name,
+      type: 'binary',
+      mimetype,
+      datas: file.content.toString('base64'),
+      res_model: 'project.project',
+      res_id: projectId
+    }));
+  }
+  return ids;
+}
+
+export async function createOdooInternalNote(projectId: number, body: string, requestId: string, requestedPartnerIds: number[] = [], files: OdooUploadFile[] = []) {
+  const messageId = `<fenix-note-${requestId}@fenix-painel>`;
+  const previous = await searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['message_id', '=', messageId]], ['id'], 1);
+  if (previous[0]) return { id: previous[0].id, alreadyExists: true };
+  const uniquePartnerIds = [...new Set(requestedPartnerIds)];
+  const mentionedUsers = uniquePartnerIds.length
+    ? await searchRead('res.users', [['active', '=', true], ['partner_id', 'in', uniquePartnerIds]], ['name', 'partner_id'], uniquePartnerIds.length)
+    : [];
+  const mentions = mentionedUsers.map((user) => ({
+    id: Array.isArray(user.partner_id) ? Number(user.partner_id[0]) : 0,
+    name: String(user.name || '')
+  })).filter((person) => person.id > 0 && person.name);
+  let htmlBody = escapeOdooHtml(body).replace(/\r?\n/g, '<br/>');
+  for (const mention of mentions) {
+    const token = escapeOdooHtml(`@${mention.name}`);
+    const anchor = `<a href=\"#\" class=\"o_mail_redirect\" data-oe-model=\"res.partner\" data-oe-id=\"${mention.id}\">${token}</a>`;
+    htmlBody = htmlBody.split(token).join(anchor);
+  }
+  const attachmentIds = await createOdooAttachments(projectId, files);
+  const id = await callOdoo<unknown>('project.project', 'message_post', {
+    ids: [projectId], body: htmlBody, message_type: 'comment', subtype_xmlid: 'mail.mt_note', message_id: messageId,
+    ...(mentions.length ? { partner_ids: mentions.map((person) => person.id) } : {}),
+    ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {})
+  });
+  return { id: firstRecordId(id), alreadyExists: false };
+}
+
+export async function createOdooActivity(projectId: number, activityTypeId: number, assigneeId: number, summary: string, note: string, deadline: string, files: OdooUploadFile[] = []) {
+  const [models, assignees] = await Promise.all([
+    searchRead('ir.model', [['model', '=', 'project.project']], ['id'], 1),
+    searchRead('res.users', [['id', '=', assigneeId], ['active', '=', true]], ['id'], 1)
+  ]);
+  const modelId = models[0]?.id;
+  if (!modelId) throw new OdooApiError('O tipo de atividade não está disponível para este projeto na Odoo.', 502);
+  if (!Number.isSafeInteger(assigneeId) || assigneeId < 1 || !assignees[0]) throw new OdooApiError('Selecione um usuário ativo para receber a atividade.', 400);
+  const attachmentIds = await createOdooAttachments(projectId, files);
+  const id = await createOdooRecord('mail.activity', {
+    activity_type_id: activityTypeId,
+    res_model_id: modelId,
+    res_id: projectId,
+    user_id: assigneeId,
+    summary,
+    ...(note ? { note } : {}),
+    date_deadline: deadline,
+    ...(attachmentIds.length ? { attachment_ids: [[6, 0, attachmentIds]] } : {})
+  });
+  return { id };
+}
+
+export async function attachOdooDocument(projectId: number, file: { name: string; content: Buffer }, reference: string, context: OdooDocumentNoteContext) {
+  if (!file.content.length || file.content.length > 12_000_000 || file.content.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new OdooApiError('O documento precisa ser um PDF válido de até 12 MB.', 400);
+  }
+  const checksum = createHash('sha1').update(file.content).digest('hex');
+  const messageKey = createHash('sha256').update(`${projectId}:${reference}:${checksum}`).digest('hex').slice(0, 32);
+  const messageId = `<fenix-doc-${messageKey}@fenix-painel>`;
+  const previousMessage = await searchRead('mail.message', [['model', '=', 'project.project'], ['res_id', '=', projectId], ['message_id', '=', messageId]], ['id'], 1);
+  if (previousMessage[0]) return { id: previousMessage[0].id, alreadyExists: true };
+
+  const existingAttachments = await searchRead('ir.attachment', [['res_model', '=', 'project.project'], ['res_id', '=', projectId], ['checksum', '=', checksum]], ['id', 'name'], 1);
+  const numericAttachmentId = existingAttachments[0]?.id || await createOdooRecord('ir.attachment', {
+    name: file.name.slice(0, 180), type: 'binary', datas: file.content.toString('base64'), res_model: 'project.project', res_id: projectId
+  });
+  const note = buildOdooDocumentNote(context, file.name);
+  const posted = await callOdoo<unknown>('project.project', 'message_post', {
+    ids: [projectId], body: note, message_type: 'comment', subtype_xmlid: 'mail.mt_note',
+    attachment_ids: [numericAttachmentId], message_id: messageId
+  });
+  return { id: firstRecordId(posted), alreadyExists: false };
+}
