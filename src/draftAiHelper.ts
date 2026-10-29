@@ -185,13 +185,97 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
   }
 };
 
+export interface ActiveBuildingContext {
+  id: string;
+  reference: string;
+  municipality?: string;
+  area?: string;
+  floors?: string;
+  height?: string;
+  processes?: Array<{
+    protocol: string;
+    type: string;
+    status: string;
+    stage?: string;
+    updatedAt?: string;
+  }>;
+}
+
 export function generateLocalAiAssistantFallback(
   prompt: string,
   draft: ProjectDraftInput,
   totalArea: number,
-  enq: { sigla: string; nome: string; motivo: string; isPts: boolean }
+  enq: { sigla: string; nome: string; motivo: string; isPts: boolean },
+  activeBuilding?: ActiveBuildingContext | null
 ): DraftAiAssistantResponse {
   const norm = prompt.toLowerCase();
+
+  if (activeBuilding) {
+    const refLower = (activeBuilding.reference || '').toLowerCase();
+    const isAboutBuilding = norm.includes(refLower) || norm.includes('edifica') || norm.includes('desta') || norm.includes('este processo') || norm.includes('geral') || norm.includes('situa') || norm.includes('process') || norm.includes('etapa') || norm.includes('pend') || norm.includes('explic') || norm.includes('histor') || norm.includes('analis');
+
+    // Caso 1: Preencher novo cadastro com dados da edificação
+    if (norm.includes('preencher') || (norm.includes('cadastro') && norm.includes('dados'))) {
+      const parsedArea = parseFloat(activeBuilding.area || '500') || 500;
+      const parsedFloors = parseInt(activeBuilding.floors || '1', 10) || 1;
+      return {
+        reply: `Preenchi o novo rascunho de projeto com base nos dados da edificação "${activeBuilding.reference}". Área de ${parsedArea} m² (${parsedFloors} pavimento${parsedFloors > 1 ? 's' : ''}) configurada com sucesso.`,
+        thinkingSteps: [
+          `Lendo parâmetros da edificação em foco: ${activeBuilding.reference}`,
+          `Definindo área construída (${parsedArea} m²) e pavimentos (${parsedFloors})`,
+          `Configurando município: ${activeBuilding.municipality || 'SALVADOR'}`
+        ],
+        appliedChangesSummary: [
+          `Referência → ${activeBuilding.reference}`,
+          `Área construída → ${parsedArea} m²`,
+          `Pavimentos → ${parsedFloors}`,
+          ...(activeBuilding.municipality ? [`Município → ${activeBuilding.municipality}`] : [])
+        ],
+        formPatch: {
+          step: 1,
+          name: `Projeto - ${activeBuilding.reference}`,
+          edification: {
+            reference_name: activeBuilding.reference,
+            building_area: parsedArea,
+            number_floors: parsedFloors,
+            height: parsedFloors > 1 ? `${parsedFloors} pavimentos` : 'Térrea = Um pavimento'
+          },
+          address: {
+            county: activeBuilding.municipality || 'SALVADOR',
+            state: 'BA'
+          }
+        },
+        suggestions: ['✦ Auto-revisar pendências', '✦ Sugerir medidas IT-14', '✦ Explicar enquadramento']
+      };
+    }
+
+    // Caso 2: Explicar situação / processos da edificação
+    if (isAboutBuilding) {
+      const procs = activeBuilding.processes || [];
+      const procCount = procs.length;
+      let processSummary = '';
+      if (procCount === 0) {
+        processSummary = 'Não constam processos ou vistorias vinculados a esta edificação na sincronização atual.';
+      } else {
+        processSummary = procs.map(p => `• Protocolo ${p.protocol} (${p.type}): Etapa atual "${p.stage || p.status}".`).join('\n');
+      }
+
+      return {
+        reply: `Edificação "${activeBuilding.reference}" (${activeBuilding.municipality || 'BA'}):\nÁrea: ${activeBuilding.area || 'Não informada'} m² | Pavimentos: ${activeBuilding.floors || '1'}.\n\nProcessos sincronizados:\n${processSummary}\n\nRecomendo verificar as pendências documentais e notificações no portal Fênix caso necessite de renovação ou emissão de AVCB/CLCB.`,
+        thinkingSteps: [
+          `Consulta aos dados sincronizados de ${activeBuilding.reference}`,
+          `Verificação de ${procCount} processo(s) vinculado(s)`,
+          'Análise de etapas e orientações de próximos passos CBMBA'
+        ],
+        appliedChangesSummary: [],
+        suggestions: [
+          `✦ Preencher novo cadastro com dados de ${activeBuilding.reference}`,
+          '✦ Sugerir e marcar medidas da IT-14',
+          '✦ Auto-revisar pendências'
+        ]
+      };
+    }
+  }
 
   if (norm.includes('exemplo') || norm.includes('galpao') || norm.includes('galpão')) {
     return {

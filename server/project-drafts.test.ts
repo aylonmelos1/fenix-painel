@@ -630,3 +630,88 @@ test('Persistência SQLite: criptografia AES-256-GCM do payload_json e compatibi
   }
 });
 
+test('runDraftAiAssistant responde sobre a situação da edificação e processos com systemContext.activeBuilding', async () => {
+  const req = {
+    message: 'Explicar a situação atual da edificação...',
+    currentDraft: {},
+    systemContext: {
+      activeBuilding: {
+        id: 'b-101',
+        reference: 'Galpão Principal Feira',
+        municipality: 'FEIRA DE SANTANA',
+        area: '450.00',
+        floors: '2',
+        height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
+        processes: [
+          {
+            protocol: '020863/45355000/2026',
+            type: 'Projeto Técnico Simplificado (PTS)',
+            status: 'Em análise',
+            stage: 'Análise Técnica de Projeto',
+            updatedAt: '2026-10-25T10:00:00.000Z'
+          }
+        ]
+      }
+    }
+  };
+
+  const res = await runDraftAiAssistant(req);
+
+  assert.ok(res.reply.includes('Galpão Principal Feira'));
+  assert.ok(res.reply.includes('020863/45355000/2026'));
+  assert.ok(res.reply.includes('Em análise'));
+  assert.ok(res.thinkingSteps.includes('Consultando base sincronizada de edificações e processos no Fênix...'));
+  assert.ok(res.thinkingSteps.includes('Verificando etapas, notificações e status de tramitação...'));
+  assert.ok(res.suggestions.includes('✦ Iniciar novo cadastro para esta edificação'));
+});
+
+test('runDraftAiAssistant responde sobre o panorama geral da carteira com systemContext.metricsSummary', async () => {
+  const req = {
+    message: 'Analise a situação geral das edificações e processos acompanhados',
+    currentDraft: {},
+    systemContext: {
+      metricsSummary: {
+        totalBuildings: 12,
+        inAnalysis: 3,
+        notified: 2,
+        stopped: 1
+      }
+    }
+  };
+
+  const res = await runDraftAiAssistant(req);
+
+  assert.ok(res.reply.includes('Total de Edificações'));
+  assert.ok(res.reply.includes('12'));
+  assert.ok(res.reply.includes('Processos Notificados'));
+  assert.ok(res.reply.includes('2'));
+  assert.ok(res.thinkingSteps.includes('Consultando base sincronizada de edificações e processos no Fênix...'));
+  assert.ok(res.thinkingSteps.includes('Verificando etapas, notificações e status de tramitação...'));
+  assert.ok(res.suggestions.includes('✦ Iniciar novo cadastro para esta edificação'));
+});
+
+test('runDraftAiAssistant preenche formPatch ao solicitar "✦ Iniciar novo cadastro para esta edificação"', async () => {
+  const req = {
+    message: '✦ Iniciar novo cadastro para esta edificação',
+    currentDraft: {},
+    systemContext: {
+      activeBuilding: {
+        id: 'b-202',
+        reference: 'Centro Comercial Apuarema',
+        municipality: 'APUAREMA',
+        area: '220.00',
+        floors: '2',
+        height: 'Baixa = H <= 6,00 m'
+      }
+    }
+  };
+
+  const res = await runDraftAiAssistant(req);
+
+  assert.ok(res.formPatch);
+  assert.equal(res.formPatch.name, 'Centro Comercial Apuarema');
+  assert.equal(res.formPatch.edification?.building_area, 220);
+  assert.equal(res.formPatch.address?.county, 'APUAREMA');
+  assert.equal(res.formPatch.address?.municipio_id, 22);
+});
+

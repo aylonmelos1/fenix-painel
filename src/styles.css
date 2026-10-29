@@ -2288,52 +2288,29 @@
   border-color: #94a3b8;
 }
 
-.copilot-mode-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 3px;
-  border-radius: 8px;
-  border: 1px solid #ccebe8;
-}
-
-.copilot-tab-btn {
+.copilot-active-building-badge {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  padding: 7px 10px;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
   border-radius: 6px;
-  border: 0;
-  background: transparent;
-  color: #64748b;
+  padding: 6px 10px;
   font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.copilot-tab-btn:hover {
   color: #0f766e;
+  line-height: 1.35;
 }
 
-.copilot-tab-btn.active {
-  background: #0d9488;
-  color: #ffffff;
-  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.25);
+.copilot-active-building-badge strong {
+  color: #115e59;
+  font-weight: 700;
 }
 
-.copilot-tab-btn.active svg {
-  color: #ffffff;
-}
-
-.copilot-tab-badge-new {
-  font-size: 9px;
-  font-weight: 800;
-  background: rgba(255, 255, 255, 0.3);
-  padding: 1px 5px;
-  border-radius: 4px;
+.copilot-chip-highlight {
+  border-color: #0d9488 !important;
+  color: #0f766e !important;
+  background: #f0fdfa !important;
+  font-weight: 700;
 }
 
 .copilot-sidebar-body {

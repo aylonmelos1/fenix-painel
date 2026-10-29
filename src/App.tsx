@@ -1007,6 +1007,7 @@ function DashboardPage() {
       isOpen={aiOpen}
       onClose={() => setAiOpen(false)}
       building={aiBuilding}
+      processes={data.processes}
       initialPrompt={aiPrompt}
       draftContext={draftContext}
       isRegisterView={view === 'register'}
@@ -1230,12 +1231,11 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   </section></div>;
 }
 
-type AiTurn = { id: string; question: string; answer?: string; reasoningSummary?: string; sources?: Array<{ protocol: string; type: string; status: string; updatedAt: string; movements: number; documents: string[] }>; error?: string; loading?: boolean };
-
 function UnifiedCopilotSidebar({
   isOpen,
   onClose,
   building,
+  processes,
   initialPrompt,
   draftContext,
   isRegisterView,
@@ -1244,22 +1244,12 @@ function UnifiedCopilotSidebar({
   isOpen: boolean;
   onClose: () => void;
   building: Building | null;
+  processes?: DashboardProcess[];
   initialPrompt: string;
   draftContext: { currentDraft: any; applyPatch: (patch: any) => void; isEditor: boolean } | null;
   isRegisterView: boolean;
   onNavigateToRegister: (initialDraftPatch?: any) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<'draft' | 'processes'>('draft');
-
-  // Sincroniza a aba ativa quando o usuário clica em um processo específico ou navega para cadastro
-  useEffect(() => {
-    if (isRegisterView) {
-      setActiveTab('draft');
-    } else if (building || initialPrompt) {
-      setActiveTab('processes');
-    }
-  }, [isRegisterView, building, initialPrompt]);
-
   // Fechar com a tecla Escape se a barra estiver aberta
   useEffect(() => {
     if (!isOpen) return;
@@ -1273,7 +1263,7 @@ function UnifiedCopilotSidebar({
     return () => window.removeEventListener('keydown', handleKey);
   }, [isOpen, onClose]);
 
-  // ================= ESTADOS DO MODO CADASTRO & IT-14 =================
+  // ================= ESTADOS DO COPILOTO IA =================
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotThinking, setCopilotThinking] = useState('');
   const [copilotPrompt, setCopilotPrompt] = useState('');
@@ -1288,7 +1278,7 @@ function UnifiedCopilotSidebar({
   }>>([
     {
       role: 'assistant',
-      content: 'Olá! Sou o Copiloto IA do Fênix Painel, especialista no Decreto Estadual 16.302/BA e IT-14 do CBMBA. Posso preencher campos na tela em tempo real, sugerir medidas, revisar pendências e calcular o enquadramento do seu projeto.',
+      content: 'Olá! Sou o Copiloto IA do Fênix Painel, especialista no Decreto Estadual 16.302/BA, IT-14 do CBMBA e na gestão inteligente dos seus processos. Como posso ajudar?',
       suggestions: [
         '✦ Auto-revisar e corrigir pendências da tela',
         '✦ Sugerir e marcar medidas da IT-14',
@@ -1310,11 +1300,39 @@ function UnifiedCopilotSidebar({
     if (!userMessage || copilotLoading) return;
 
     setCopilotLoading(true);
-    setCopilotThinking('Analisando diretrizes do Decreto 16.302/BA e IT-14...');
+    setCopilotThinking('Analisando diretrizes do Decreto 16.302/BA e dados do Fênix...');
     setCopilotPrompt('');
     setAppliedNotice('');
 
     setCopilotMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+
+    const buildingProcesses = building ? (
+      processes && processes.length > 0
+        ? processes.filter((p) => p.buildingId === building.id)
+        : (building.protocol ? [{
+            protocol: building.protocol,
+            type: building.processType,
+            status: building.status,
+            stage: building.stage,
+            updatedAt: building.lastUpdated || ''
+          }] : [])
+    ) : [];
+
+    const buildingPayload = building ? {
+      id: building.id,
+      reference: building.reference,
+      municipality: building.municipality,
+      area: String(building.area || ''),
+      floors: String(building.floors || ''),
+      height: building.height || '',
+      processes: buildingProcesses.map((p) => ({
+        protocol: p.protocol,
+        type: p.type,
+        status: p.status,
+        stage: p.stage,
+        updatedAt: p.updatedAt
+      }))
+    } : null;
 
     try {
       let aiResult: DraftAiAssistantResponse;
@@ -1325,16 +1343,21 @@ function UnifiedCopilotSidebar({
           body: JSON.stringify({
             message: userMessage,
             currentDraft: draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
-            history: copilotMessages.slice(-6).map((m) => ({ role: m.role, content: m.content }))
+            history: copilotMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+            buildingId: building?.id || null,
+            systemContext: {
+              activeBuilding: buildingPayload
+            }
           })
         });
       } catch {
-        // Fallback local robusto
+        // Fallback local robusto e contextual
         aiResult = generateLocalAiAssistantFallback(
           userMessage,
           draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
-          Number(draftContext?.currentDraft?.edification?.building_area) || 500,
-          { sigla: 'PTS', nome: 'Processo Técnico Simplificado', motivo: 'Área calculada dentro dos limites', isPts: true }
+          Number(draftContext?.currentDraft?.edification?.building_area) || Number(building?.area) || 500,
+          { sigla: 'PTS', nome: 'Processo Técnico Simplificado', motivo: 'Área calculada dentro dos limites', isPts: true },
+          buildingPayload
         );
       }
 
@@ -1370,87 +1393,14 @@ function UnifiedCopilotSidebar({
     }
   };
 
-  // ================= ESTADOS DO MODO PROCESSOS & FÊNIX =================
-  const [question, setQuestion] = useState('');
-  const [turns, setTurns] = useState<AiTurn[]>([]);
-  const [sessions, setSessions] = useState<Array<{ id: string; buildingId: string | null; title: string; updatedAt: string }>>([]);
-  const [sessionId, setSessionId] = useState('');
-  const [loadingProcessAi, setLoadingProcessAi] = useState(false);
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  const [sourceVisibility, setSourceVisibility] = useState<Record<string, boolean>>({});
-  const processContentRef = useRef<HTMLDivElement>(null);
-  const initializedProcessAi = useRef(false);
-
+  // Se initialPrompt for passado e a barra abrir, dispara automaticamente!
+  const lastPromptRef = useRef<string>('');
   useEffect(() => {
-    if (!isOpen) return;
-    if (initializedProcessAi.current) return;
-    initializedProcessAi.current = true;
-    api<{ configured: boolean }>('/api/settings/ai').then((result) => setConfigured(result.configured)).catch(() => setConfigured(false));
-    void (async () => {
-      try {
-        const result = await api<{ sessions: typeof sessions }>('/api/ai/sessions');
-        setSessions(result.sessions);
-        const prior = result.sessions.find((item) => item.buildingId === (building?.id || null));
-        if (prior) { await restoreSession(prior.id); if (initialPrompt) await askProcess(initialPrompt, prior.id); }
-        else {
-          const created = await api<{ id: string; buildingId: string | null; title: string; updatedAt: string }>('/api/ai/sessions', { method: 'POST', body: JSON.stringify({ buildingId: building?.id || null }) });
-          setSessions((current) => [created, ...current]); setSessionId(created.id);
-          if (initialPrompt) await askProcess(initialPrompt, created.id);
-        }
-      } catch { setConfigured(false); }
-    })();
-  }, [isOpen, building, initialPrompt]);
-
-  useEffect(() => {
-    if (processContentRef.current) processContentRef.current.scrollTop = processContentRef.current.scrollHeight;
-  }, [turns, loadingProcessAi]);
-
-  async function restoreSession(id: string) {
-    const data = await api<{ messages: Array<{ id: string; role: string; content: string; reasoningSummary?: string; sources?: AiTurn['sources'] }> }>(`/api/ai/sessions/${id}`);
-    setSessionId(id);
-    const restored: AiTurn[] = [];
-    for (const message of data.messages) {
-      if (message.role === 'user') restored.push({ id: message.id, question: message.content });
-      else { const previous = restored[restored.length - 1]; if (previous) { previous.answer = message.content; previous.reasoningSummary = message.reasoningSummary; previous.sources = message.sources || []; } }
+    if (isOpen && initialPrompt && initialPrompt !== lastPromptRef.current) {
+      lastPromptRef.current = initialPrompt;
+      void handleSendDraftPrompt(initialPrompt);
     }
-    setTurns(restored);
-  }
-
-  async function newSession() {
-    const created = await api<{ id: string; buildingId: string | null; title: string; updatedAt: string }>('/api/ai/sessions', { method: 'POST', body: JSON.stringify({ buildingId: building?.id || null }) });
-    setSessions((current) => [created, ...current]); setSessionId(created.id); setTurns([]); setQuestion('');
-  }
-
-  async function askProcess(text = question, targetSessionId = sessionId) {
-    const submitted = text.trim();
-    if (!submitted || loadingProcessAi || !targetSessionId) return;
-    const turnId = crypto.randomUUID();
-    setLoadingProcessAi(true); setQuestion('');
-    setTurns((current) => [...current, { id: turnId, question: submitted, answer: '', loading: true }]);
-    try {
-      const response = await fetch('/api/ai/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: targetSessionId, question: submitted }) });
-      if (!response.ok) { const problem = await response.json().catch(() => ({})); throw new Error(problem.error || `Erro HTTP ${response.status}`); }
-      const reader = response.body?.getReader(); if (!reader) throw new Error('Streaming indisponível nesta conexão.');
-      const decoder = new TextDecoder(); let buffer = ''; let complete: any = null;
-      while (true) {
-        const chunk = await reader.read(); if (chunk.done) break; buffer += decoder.decode(chunk.value, { stream: true });
-        const blocks = buffer.split('\n\n'); buffer = blocks.pop() || '';
-        for (const block of blocks) {
-          const eventName = block.match(/^event: (.+)$/m)?.[1]; const dataLine = block.match(/^data: (.+)$/m)?.[1]; if (!eventName || !dataLine) continue;
-          if (eventName === 'delta') { const delta = JSON.parse(dataLine) as string; setTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, answer: `${turn.answer || ''}${delta}` } : turn)); }
-          if (eventName === 'sources') { const sources = JSON.parse(dataLine); setTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, sources } : turn)); }
-          if (eventName === 'complete') complete = JSON.parse(dataLine);
-          if (eventName === 'failure') throw new Error(JSON.parse(dataLine).error);
-        }
-      }
-      if (!complete) throw new Error('A resposta foi interrompida antes de terminar.');
-      setTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, id: complete.id, answer: complete.answer, reasoningSummary: complete.reasoningSummary, sources: complete.sources || [], loading: false } : turn));
-      setSessions((current) => current.map((item) => item.id === targetSessionId ? { ...item, title: item.title === 'Nova conversa' ? submitted.slice(0, 72) : item.title, updatedAt: complete.createdAt } : item).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'Não foi possível obter uma resposta.';
-      setTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, error: message, loading: false } : turn));
-    } finally { setLoadingProcessAi(false); }
-  }
+  }, [isOpen, initialPrompt]);
 
   return (
     <aside
@@ -1465,7 +1415,7 @@ function UnifiedCopilotSidebar({
             </span>
             <div className="copilot-brand-info">
               <h3>✦ Copiloto IA</h3>
-              <p>{activeTab === 'draft' ? 'Especialista CBMBA · IT-14 & Cadastro' : 'Assistente de Processos & Fênix'}</p>
+              <p>{building ? `Edificação: ${building.reference}` : 'Especialista CBMBA · IT-14 & Gestão Fênix'}</p>
             </div>
           </div>
           <button
@@ -1473,35 +1423,18 @@ function UnifiedCopilotSidebar({
             className="icon-button copilot-close-btn"
             onClick={onClose}
             aria-label="Recolher Copiloto IA"
-            title="Recolher Copiloto (ou clique no botão no topo)"
+            title="Recolher Copiloto"
           >
             <PanelRightClose size={18} />
           </button>
         </div>
 
-        <div className="copilot-mode-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'draft'}
-            className={`copilot-tab-btn ${activeTab === 'draft' ? 'active' : ''}`}
-            onClick={() => setActiveTab('draft')}
-          >
-            <Flame size={14} />
-            <span>Cadastro & IT-14</span>
-            {isRegisterView && <span className="copilot-tab-badge-new">TELA</span>}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'processes'}
-            className={`copilot-tab-btn ${activeTab === 'processes' ? 'active' : ''}`}
-            onClick={() => setActiveTab('processes')}
-          >
-            <Building2 size={14} />
-            <span>Processos & Fênix</span>
-          </button>
-        </div>
+        {building && (
+          <div className="copilot-active-building-badge">
+            <Building2 size={13} />
+            <span>Edificação em foco: <strong>{building.reference}</strong>{building.municipality ? ` (${building.municipality})` : ''}</span>
+          </div>
+        )}
       </header>
 
       {appliedNotice && (
@@ -1510,256 +1443,158 @@ function UnifiedCopilotSidebar({
         </div>
       )}
 
-      {/* CONTEÚDO DA ABA 1: CADASTRO & IT-14 */}
-      {activeTab === 'draft' && (
-        <>
-          <div className="copilot-sidebar-body" ref={draftContentRef}>
-            <div className="copilot-chips-row">
-              <button
-                type="button"
-                className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Auto-revisar e corrigir pendências da tela')}
-                disabled={copilotLoading}
-              >
-                <Sparkles size={13} /> Auto-revisar pendências
-              </button>
-              <button
-                type="button"
-                className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Sugerir e marcar medidas da IT-14')}
-                disabled={copilotLoading}
-              >
-                <ShieldCheck size={13} /> Sugerir medidas IT-14
-              </button>
-              <button
-                type="button"
-                className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Exemplo: Galpão 620 m² em Feira de Santana')}
-                disabled={copilotLoading}
-              >
-                <Building2 size={13} /> Galpão 620 m² (FSA)
-              </button>
-              <button
-                type="button"
-                className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Explicar meu enquadramento atual')}
-                disabled={copilotLoading}
-              >
-                <Info size={13} /> Explicar enquadramento
-              </button>
-            </div>
+      <div className="copilot-sidebar-body" ref={draftContentRef}>
+        <div className="copilot-chips-row">
+          {building && (
+            <button
+              type="button"
+              className="copilot-chip-action copilot-chip-highlight"
+              onClick={() => void handleSendDraftPrompt(`Preencher novo cadastro com os dados da edificação ${building.reference}`)}
+              disabled={copilotLoading}
+            >
+              <Sparkles size={13} /> Preencher cadastro com dados de {building.reference}
+            </button>
+          )}
+          {building && (
+            <button
+              type="button"
+              className="copilot-chip-action"
+              onClick={() => void handleSendDraftPrompt(`Explique a situação dos processos da edificação ${building.reference}`)}
+              disabled={copilotLoading}
+            >
+              <Building2 size={13} /> Explicar situação de {building.reference}
+            </button>
+          )}
+          <button
+            type="button"
+            className="copilot-chip-action"
+            onClick={() => void handleSendDraftPrompt('Auto-revisar e corrigir pendências da tela')}
+            disabled={copilotLoading}
+          >
+            <Sparkles size={13} /> Auto-revisar pendências
+          </button>
+          <button
+            type="button"
+            className="copilot-chip-action"
+            onClick={() => void handleSendDraftPrompt('Sugerir e marcar medidas da IT-14')}
+            disabled={copilotLoading}
+          >
+            <ShieldCheck size={13} /> Sugerir medidas IT-14
+          </button>
+          <button
+            type="button"
+            className="copilot-chip-action"
+            onClick={() => void handleSendDraftPrompt('Exemplo: Galpão 620 m² em Feira de Santana')}
+            disabled={copilotLoading}
+          >
+            <Building2 size={13} /> Galpão 620 m² (FSA)
+          </button>
+          <button
+            type="button"
+            className="copilot-chip-action"
+            onClick={() => void handleSendDraftPrompt('Explicar meu enquadramento atual')}
+            disabled={copilotLoading}
+          >
+            <Info size={13} /> Explicar enquadramento
+          </button>
+        </div>
 
-            <div className="copilot-chat-history">
-              {copilotMessages.map((msg, idx) => (
-                <div key={idx} className={`copilot-message message-${msg.role}`}>
-                  <div className="message-text">{msg.content}</div>
+        <div className="copilot-chat-history">
+          {copilotMessages.map((msg, idx) => (
+            <div key={idx} className={`copilot-message message-${msg.role}`}>
+              <div className="message-text">{msg.content}</div>
 
-                  {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
-                    <div className="copilot-thinking-box">
-                      <strong>Linha de Raciocínio CBMBA:</strong>
-                      {msg.thinkingSteps.map((stepItem, sIdx) => (
-                        <span key={sIdx}>• {stepItem}</span>
-                      ))}
-                    </div>
-                  )}
-
-                  {msg.appliedChangesSummary && msg.appliedChangesSummary.length > 0 && (
-                    <div className="copilot-applied-badges">
-                      {msg.appliedChangesSummary.map((item, bIdx) => (
-                        <span key={bIdx} className="copilot-applied-badge">
-                          <CheckCircle2 size={12} /> {item}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {msg.pendingPatch && !isRegisterView && (
-                    <button
-                      type="button"
-                      className="button button-horizon-ai button-xs mt-2"
-                      onClick={() => onNavigateToRegister(msg.pendingPatch)}
-                    >
-                      <Plus size={13} /> Abrir Cadastro no Fênix e Aplicar
-                    </button>
-                  )}
-
-                  {msg.suggestions && msg.suggestions.length > 0 && (
-                    <div className="copilot-chips-row mt-1">
-                      {msg.suggestions.map((sug, sgIdx) => (
-                        <button
-                          key={sgIdx}
-                          type="button"
-                          className="copilot-chip-action"
-                          onClick={() => void handleSendDraftPrompt(sug)}
-                          disabled={copilotLoading}
-                        >
-                          {sug}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+              {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                <div className="copilot-thinking-box">
+                  <strong>Linha de Raciocínio CBMBA:</strong>
+                  {msg.thinkingSteps.map((stepItem, sIdx) => (
+                    <span key={sIdx}>• {stepItem}</span>
+                  ))}
                 </div>
-              ))}
+              )}
 
-              {copilotLoading && (
-                <div className="copilot-message message-assistant">
-                  <div className="ai-thinking-pill">
-                    <LoaderCircle size={15} className="spin text-teal" />
-                    <span className="text-rainbow-shimmer">{copilotThinking || 'Processando raciocínio com IA...'}</span>
-                  </div>
+              {msg.appliedChangesSummary && msg.appliedChangesSummary.length > 0 && (
+                <div className="copilot-applied-badges">
+                  {msg.appliedChangesSummary.map((item, bIdx) => (
+                    <span key={bIdx} className="copilot-applied-badge">
+                      <CheckCircle2 size={12} /> {item}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {msg.pendingPatch && !isRegisterView && (
+                <button
+                  type="button"
+                  className="button button-horizon-ai button-xs mt-2"
+                  onClick={() => onNavigateToRegister(msg.pendingPatch)}
+                >
+                  <Plus size={13} /> Abrir Cadastro no Fênix e Aplicar
+                </button>
+              )}
+
+              {msg.suggestions && msg.suggestions.length > 0 && (
+                <div className="copilot-chips-row mt-1">
+                  {msg.suggestions.map((sug, sgIdx) => (
+                    <button
+                      key={sgIdx}
+                      type="button"
+                      className="copilot-chip-action"
+                      onClick={() => void handleSendDraftPrompt(sug)}
+                      disabled={copilotLoading}
+                    >
+                      {sug}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-          </div>
+          ))}
 
-          <form
-            className="copilot-sidebar-footer"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (copilotPrompt.trim()) {
-                void handleSendDraftPrompt(copilotPrompt);
-              }
-            }}
+          {copilotLoading && (
+            <div className="copilot-message message-assistant">
+              <div className="ai-thinking-pill">
+                <LoaderCircle size={15} className="spin text-teal" />
+                <span className="text-rainbow-shimmer">{copilotThinking || 'Processando raciocínio com IA...'}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <form
+        className="copilot-sidebar-footer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (copilotPrompt.trim()) {
+            void handleSendDraftPrompt(copilotPrompt);
+          }
+        }}
+      >
+        <div className="copilot-input-row">
+          <input
+            type="text"
+            placeholder={
+              isRegisterView
+                ? "Ex: 'Muda a área para 520m² e marca hidrantes'..."
+                : building
+                ? `Pergunte sobre ${building.reference} ou consulte a IT-14...`
+                : "Diga o que deseja cadastrar ou consulte a IT-14..."
+            }
+            value={copilotPrompt}
+            onChange={(e) => setCopilotPrompt(e.target.value)}
+            disabled={copilotLoading}
+          />
+          <button
+            type="submit"
+            className="button button-horizon-ai"
+            disabled={copilotLoading || !copilotPrompt.trim()}
           >
-            <div className="copilot-input-row">
-              <input
-                type="text"
-                placeholder={isRegisterView ? "Ex: 'Muda a área para 520m² e marca hidrantes'..." : "Diga o que deseja cadastrar ou consulte a IT-14..."}
-                value={copilotPrompt}
-                onChange={(e) => setCopilotPrompt(e.target.value)}
-                disabled={copilotLoading}
-              />
-              <button
-                type="submit"
-                className="button button-horizon-ai"
-                disabled={copilotLoading || !copilotPrompt.trim()}
-              >
-                {copilotLoading ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
-                <span>Enviar</span>
-              </button>
-            </div>
-          </form>
-        </>
-      )}
-
-      {/* CONTEÚDO DA ABA 2: PROCESSOS & FÊNIX */}
-      {activeTab === 'processes' && (
-        <>
-          <div className="copilot-session-bar">
-            <button className="button button-ai-min" onClick={() => void newSession()} disabled={loadingProcessAi}>
-              <MessageCircle size={13} /> Nova sessão
-            </button>
-            <select
-              className="copilot-session-select"
-              value={sessionId}
-              onChange={(event) => void restoreSession(event.target.value)}
-            >
-              {sessions.filter((item) => item.buildingId === (building?.id || null)).map((item) => (
-                <option key={item.id} value={item.id}>{item.title}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="ai-context copilot-context-bar">
-            <span className="context-label">CONTEXTO ATUAL</span>
-            {building ? (
-              <>
-                <span><Building2 size={13} /> {building.reference}</span>
-                <span><ClipboardList size={13} /> {building.protocol} · {building.stage}</span>
-              </>
-            ) : (
-              <span><Building2 size={13} /> Edificações e processos sincronizados da conta</span>
-            )}
-          </div>
-
-          <div className="copilot-sidebar-body" ref={processContentRef}>
-            <div className="assistant-message">
-              <span className="ai-avatar"><Sparkles size={15} /></span>
-              <div>
-                <b>Olá! Posso ajudar a entender {building ? 'este processo' : 'suas edificações e processos'}.</b>
-                <p>{building ? 'Pergunte sobre a etapa atual, o histórico ou os documentos vinculados.' : 'Consulte situações, prioridades ou peça um panorama geral.'}</p>
-              </div>
-            </div>
-
-            {turns.map((turn) => (
-              <div className="ai-turn" key={turn.id}>
-                <div className="user-ai-question">
-                  <span>Você</span>
-                  <p>{turn.question}</p>
-                </div>
-                {turn.answer && (
-                  <div className="user-ai-answer">
-                    <span className="ai-answer-label"><Sparkles size={12} /> RESPOSTA DA IA</span>
-                    <p>{turn.answer}</p>
-                    <small>Consulte as fontes do processo no Fênix antes de tomar qualquer decisão.</small>
-                  </div>
-                )}
-                {turn.sources?.length ? (
-                  <details className="ai-citations" open={sourceVisibility[turn.id] ?? false} onToggle={(event) => { const isDetailsOpen = event.currentTarget.open; setSourceVisibility((curr) => ({ ...curr, [turn.id]: isDetailsOpen })); }}>
-                    <summary>FONTES CONSULTADAS <span>· {turn.sources.length}</span></summary>
-                    {turn.sources.map((source, index) => (
-                      <div key={`${source.protocol}-${source.type}-${index}`}>
-                        <b>{source.protocol || 'Processo vinculado'} · {source.type}</b>
-                        <span>{source.status} · {source.movements} movimentações{source.documents?.length ? ` · ${source.documents.join(' · ')}` : ''} · {formatDate(source.updatedAt)}</span>
-                      </div>
-                    ))}
-                  </details>
-                ) : null}
-                {turn.loading && <div className="assistant-loading"><LoaderCircle size={16} className="spin" /> Consultando dados...</div>}
-                {turn.error && <div className="ai-error"><CircleAlert size={14} />{turn.error}</div>}
-              </div>
-            ))}
-
-            {turns.map((turn) => turn.reasoningSummary && (
-              <details key={`${turn.id}-reasoning`} className="ai-reasoning-summary" open>
-                <summary>Resumo da análise · {turn.question}</summary>
-                <p>{turn.reasoningSummary}</p>
-              </details>
-            ))}
-
-            {turns.length === 0 && (
-              <div className="suggested-prompts">
-                <small>SUGESTÕES DE PERGUNTA</small>
-                <button onClick={() => void askProcess(building ? `Explique a situação do processo ${building.protocol}.` : 'Quais processos precisam de mais atenção agora e por quê?')}>
-                  {building ? 'O que significa a etapa atual?' : 'Quais processos precisam de atenção?'}
-                </button>
-                <button onClick={() => void askProcess(building ? 'O que devo conferir nos documentos deste processo?' : 'Quais edificações têm documentação pendente?')}>
-                  {building ? 'O que devo conferir nos documentos?' : 'Onde há documentação pendente?'}
-                </button>
-                <button onClick={() => void askProcess(building ? 'Resuma o histórico deste processo.' : 'Resuma as mudanças mais relevantes.')}>
-                  {building ? 'Resuma o histórico do processo' : 'Resuma as situações acompanhadas'}
-                </button>
-              </div>
-            )}
-          </div>
-
-          <form
-            className="copilot-sidebar-footer"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void askProcess();
-            }}
-          >
-            <div className="copilot-input-row">
-              <input
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                placeholder={building ? 'Pergunte sobre esta edificação...' : 'Pergunte sobre seus processos...'}
-                maxLength={1200}
-                disabled={loadingProcessAi}
-              />
-              <button
-                type="submit"
-                className="button button-horizon-ai"
-                disabled={!question.trim() || loadingProcessAi}
-              >
-                {loadingProcessAi ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
-                <span>Enviar</span>
-              </button>
-            </div>
-          </form>
-        </>
-      )}
+            {copilotLoading ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
+            <span>Enviar</span>
+          </button>
+        </div>
+      </form>
     </aside>
   );
 }

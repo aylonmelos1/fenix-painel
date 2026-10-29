@@ -9,7 +9,7 @@ import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
-import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput } from './project-drafts.js';
+import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type DraftAiAssistantRequest } from './project-drafts.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
@@ -1060,6 +1060,57 @@ app.post('/api/drafts/ai-assistant', requireSession, draftAiRateLimiter, async (
     const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
     const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
 
+    let systemContext = req.body?.systemContext as DraftAiAssistantRequest['systemContext'];
+    const targetBuildingId = String(req.body?.buildingId || systemContext?.activeBuilding?.id || '');
+
+    try {
+      const sourceUserIds = dataUserIds(res.locals.user.id);
+      const allBuildings = buildingRows(sourceUserIds);
+      const allProcesses = deduplicateProcesses(processRows(sourceUserIds));
+      const inAnalysis = allProcesses.filter((p) => /an[aá]lise/i.test(`${p.status} ${p.stage}`)).length;
+      const notified = allProcesses.filter((p) => /notific/i.test(`${p.status} ${p.stage}`)).length;
+      const stopped = allProcesses.filter((p) => /rascunho|pendente|parad/i.test(`${p.status} ${p.stage}`)).length;
+
+      const metricsSummary = {
+        totalBuildings: allBuildings.length,
+        inAnalysis,
+        notified,
+        stopped
+      };
+
+      let activeBuilding = systemContext?.activeBuilding || null;
+      if (targetBuildingId) {
+        const found = allBuildings.find((b) => b.id === targetBuildingId) || ownedBuilding(res.locals.user.id, targetBuildingId);
+        if (found) {
+          const bProcesses = allProcesses
+            .filter((p) => p.building_id === found.id)
+            .map((p) => ({
+              protocol: p.protocol || '—',
+              type: p.type || '',
+              status: p.status || '',
+              stage: p.stage || '',
+              updatedAt: p.updated_at || ''
+            }));
+          activeBuilding = {
+            id: found.id,
+            reference: found.reference,
+            municipality: found.municipality,
+            area: found.area ? String(found.area) : undefined,
+            floors: found.floors ? String(found.floors) : undefined,
+            height: found.height ? String(found.height) : undefined,
+            processes: bProcesses
+          };
+        }
+      }
+
+      systemContext = {
+        activeBuilding: activeBuilding || systemContext?.activeBuilding || null,
+        metricsSummary: metricsSummary || systemContext?.metricsSummary || null
+      };
+    } catch {
+      // Ignora falhas de enriquecimento do contexto
+    }
+
     const openaiApiKey = getSetting('openai_api_key');
     const openaiModel = getSetting('openai_model') || 'gpt-4o-mini';
 
@@ -1067,6 +1118,7 @@ app.post('/api/drafts/ai-assistant', requireSession, draftAiRateLimiter, async (
       message,
       currentDraft,
       history,
+      systemContext,
       openaiApiKey,
       openaiModel
     });

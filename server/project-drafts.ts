@@ -1265,6 +1265,23 @@ export interface DraftAiAssistantRequest {
   message: string;
   currentDraft: Partial<ProjectDraftInput>;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  systemContext?: {
+    activeBuilding?: {
+      id: string;
+      reference: string;
+      municipality: string;
+      area?: string;
+      floors?: string;
+      height?: string;
+      processes?: Array<{ protocol: string; type: string; status: string; stage: string; updatedAt: string }>;
+    } | null;
+    metricsSummary?: {
+      totalBuildings: number;
+      inAnalysis: number;
+      notified: number;
+      stopped: number;
+    } | null;
+  };
   openaiApiKey?: string | null;
   openaiModel?: string | null;
 }
@@ -1297,6 +1314,125 @@ async function runDeterministicDraftAssistant(
 
   const formPatch: DraftAiAssistantResponse['formPatch'] = {};
   const message = req.message.trim();
+
+  // 0. Verificação de perguntas sobre situação de edificação e processos / métricas gerais
+  const isStartDraftQuery =
+    Boolean(req.systemContext?.activeBuilding) &&
+    /(?:iniciar|novo cadastro|preparar rascunho)/i.test(message);
+
+  const isGeneralPortfolio =
+    !isStartDraftQuery &&
+    (/(?:situaç[ãa]o\s+geral|carteira|processos?\s+em\s+an[aá]lise|notificaç[õo]es?|pend[êe]ncias?\s+da\s+carteira|edificaç[õo]es?\s+e\s+processos|resumo|panorama|vis[ãa]o\s+geral)/i.test(message) ||
+      message.toLowerCase().includes('analise a situação geral'));
+
+  const isActiveBuildingQuery =
+    Boolean(req.systemContext?.activeBuilding) &&
+    !isStartDraftQuery &&
+    !isGeneralPortfolio &&
+    (/(?:situaç[ãa]o|processo|etapa|status|notifica|como est[aá]|explic)/i.test(message) ||
+      message.toLowerCase().includes('explicar a situação atual da edificação'));
+
+  if (isGeneralPortfolio && req.systemContext?.metricsSummary) {
+    thinkingSteps.push(
+      'Consultando base sincronizada de edificações e processos no Fênix...',
+      'Verificando etapas, notificações e status de tramitação...'
+    );
+
+    const m = req.systemContext.metricsSummary;
+    let replyText = `Análise geral da carteira de edificações e processos no Fênix:\n\n`;
+    replyText += `• **Total de Edificações**: ${m.totalBuildings}\n`;
+    replyText += `• **Processos em Análise**: ${m.inAnalysis}\n`;
+    replyText += `• **Processos Notificados**: ${m.notified}\n`;
+    replyText += `• **Processos Parados / Pendentes**: ${m.stopped}\n\n`;
+
+    if (m.notified > 0) {
+      replyText += `⚠️ Atenção: Há **${m.notified} processo(s) com notificação** exigindo cumprimento de pendências junto ao CBMBA.\n`;
+    } else {
+      replyText += `A carteira está regular e não possui notificações urgentes pendentes.\n`;
+    }
+
+    replyText += `\nSelecione uma edificação específica para analisar detalhes ou inicie um novo cadastro quando desejar.`;
+
+    return {
+      reply: replyText,
+      thinkingSteps,
+      appliedChangesSummary: [],
+      suggestions: [
+        '✦ Iniciar novo cadastro para esta edificação',
+        'Filtrar processos notificados',
+        'Ver processos em análise',
+        'Sincronizar dados do Fênix'
+      ]
+    };
+  }
+
+  if (isActiveBuildingQuery && req.systemContext?.activeBuilding) {
+    thinkingSteps.push(
+      'Consultando base sincronizada de edificações e processos no Fênix...',
+      'Verificando etapas, notificações e status de tramitação...'
+    );
+
+    const b = req.systemContext.activeBuilding;
+    let replyText = `Situação da edificação **${b.reference}** em **${b.municipality}**:\n\n`;
+
+    const details: string[] = [];
+    if (b.area) details.push(`Área: ${b.area} m²`);
+    if (b.floors) details.push(`Pavimentos: ${b.floors}`);
+    if (b.height) details.push(`Altura: ${b.height}`);
+    if (details.length > 0) {
+      replyText += `• **Características**: ${details.join(' | ')}\n`;
+    }
+
+    if (b.processes && b.processes.length > 0) {
+      replyText += `• **Processos vinculados (${b.processes.length})**:\n`;
+      for (const p of b.processes) {
+        const formattedDate = p.updatedAt ? new Date(p.updatedAt).toLocaleDateString('pt-BR') : '';
+        replyText += `  - Protocolo **${p.protocol}** (${p.type || 'Processo'}): Status **${p.status || 'Em tramitação'}**, Etapa: **${p.stage || '—'}**${formattedDate ? ` (Atualizado em ${formattedDate})` : ''}\n`;
+      }
+    } else {
+      replyText += `• Não constam processos ativos vinculados a esta edificação no momento.\n`;
+    }
+
+    replyText += `\nCaso precise regularizar ou iniciar um novo processo, posso preparar os dados automaticamente.`;
+
+    return {
+      reply: replyText,
+      thinkingSteps,
+      appliedChangesSummary: [],
+      suggestions: [
+        '✦ Iniciar novo cadastro para esta edificação',
+        'Ver detalhes das notificações',
+        'Sincronizar com o Fênix',
+        'Consultar exigências da IT-14'
+      ]
+    };
+  }
+
+  if (isStartDraftQuery && req.systemContext?.activeBuilding) {
+    const b = req.systemContext.activeBuilding;
+    thinkingSteps.push(
+      `Iniciando novo rascunho a partir dos dados da edificação ${b.reference}.`,
+      'Configurando parâmetros de edificação e município...'
+    );
+    formPatch.name = b.reference;
+    formPatch.edification = {
+      building_area: b.area ? Number(b.area) : undefined,
+      number_floors: b.floors ? Number(b.floors) : undefined,
+      height: b.height || undefined
+    };
+    if (b.municipality) {
+      const norm = (str: unknown) =>
+        String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+      const munNorm = norm(b.municipality);
+      const m = domains.counties.find((c) => norm(c.municipio) === munNorm);
+      formPatch.address = {
+        county: b.municipality.toUpperCase(),
+        municipio_id: m ? m.id : undefined
+      };
+    }
+    appliedChangesSummary.push(`Definido nome "${b.reference}" e município ${b.municipality}`);
+    if (b.area) appliedChangesSummary.push(`Definida área construída para ${b.area} m²`);
+  }
 
   thinkingSteps.push('Analisando solicitação do usuário e estado atual do rascunho.');
 
@@ -1588,8 +1724,10 @@ export async function runDraftAiAssistant(
       const client = new OpenAI({ apiKey: req.openaiApiKey, timeout: 30_000 });
       const model = req.openaiModel || 'gpt-4o-mini';
 
-      const systemPrompt = `Você é o Copiloto Especialista em Regularização e Cadastro Técnico no Sistema Fênix (Corpo de Bombeiros Militar da Bahia - CBMBA).
-Você auxilia engenheiros e projetistas a preencher, conferir e otimizar projetos técnicos segundo o Decreto Estadual 16.302/2015 e a Instrução Técnica IT-14.
+      const systemPrompt = `Você é o Copiloto Especialista em Regularização, Acompanhamento de Processos e Cadastro Técnico no Sistema Fênix (Corpo de Bombeiros Militar da Bahia - CBMBA).
+Você atua como copiloto de IA unificado para todo o painel Fênix, respondendo tanto sobre:
+1. Situação das edificações sincronizadas, processos em tramitação, etapas, notificações e métricas da carteira do usuário.
+2. Preenchimento, conferência e otimização de novos cadastros e projetos técnicos segundo o Decreto Estadual 16.302/2015 e a Instrução Técnica IT-14.
 
 REGRAS OBRIGATÓRIAS DO FÊNIX:
 1. Alturas oficiais (exatamente uma das 6 opções):
@@ -1605,16 +1743,17 @@ REGRAS OBRIGATÓRIAS DO FÊNIX:
    - Área total <= 750 m² e até 3 pavimentos -> PTSCLCB2 (ou PTSAVCB se exigida vistoria)
    - Área total > 750 m² OU > 3 pavimentos OU CNAEs de alto risco (postos, inflamáveis, etc.) -> PT (Projeto Técnico Completo)
 4. Mantenha uma fala em português natural, técnica, clara e amigável.
-5. Sempre que puder aplicar alterações ou correções nos campos da tela, retorne o objeto "formPatch".
+5. Sempre que puder aplicar alterações ou correções nos campos da tela de cadastro, retorne o objeto "formPatch". Se a dúvida for sobre acompanhamento ou situação de processos, explique de forma clara e sugira próximos passos práticos.
 6. Retorne ESTRITAMENTE um JSON com as chaves:
    - "reply": string com a resposta ao usuário explicando o que foi feito ou orientando
    - "thinkingSteps": string[] com os passos de raciocínio lógico
-   - "appliedChangesSummary": string[] com resumo das alterações aplicadas no formPatch
-   - "formPatch": objeto com os campos alterados (step, name, edification, address, occupation, responsavel, securityMeasures)
+   - "appliedChangesSummary": string[] com resumo das alterações aplicadas no formPatch (se houver)
+   - "formPatch": objeto com os campos alterados (se aplicável: step, name, edification, address, occupation, responsavel, securityMeasures)
    - "suggestions": string[] com 3 ou 4 ações rápidas sugeridas`;
 
       const userContent = JSON.stringify({
         message: req.message,
+        systemContext: req.systemContext || null,
         currentDraftState: {
           name: currentDraft.name || currentDraft.reference_name,
           edification: currentDraft.edification || {
