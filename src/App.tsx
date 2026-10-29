@@ -1,17 +1,24 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import HCaptcha from '@hcaptcha/react-hcaptcha';
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Bot, Building2, CalendarClock, Check, CheckCircle2, CheckCheck,
   CircleAlert, ClipboardList, Cloud, FileCheck2, FileSpreadsheet, FileText, Filter, Flame,
-  Gauge, HelpCircle, Home, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
+  Gauge, HelpCircle, Home, Info, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
   Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen,
+  PanelRightClose, PanelRightOpen, Zap,
   Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey } from './types';
-import { OdooIntegration } from './OdooIntegration';
-import { ProjectDraftModal } from './ProjectDraftModal';
+import {
+  type DraftAiAssistantResponse,
+  generateLocalAiAssistantFallback,
+  INITIAL_EMPTY_DRAFT
+} from './draftAiHelper';
+
+const ProjectDraftModal = lazy(() => import('./ProjectDraftModal').then((m) => ({ default: m.ProjectDraftModal })));
+const OdooIntegration = lazy(() => import('./OdooIntegration').then((m) => ({ default: m.OdooIntegration })));
 import { downloadExcelReport, type ExcelCell } from './excel';
 import fireStationHero from './assets/fire-station-hero.webp';
 
@@ -143,8 +150,8 @@ type UserNotification = { id: number; buildingId: string | null; processId: stri
 type RenewalRecord = { id: string; buildingId: string; buildingReference: string; municipality: string; sourceAccountName?: string | null; sourceConnectionId?: string | null; sourceAccountPaused?: boolean; protocol: string; type: string; status: string; stage: string; homologatedAt: string; renewalAt: string; monthsUntilRenewal: number; daysUntilRenewal: number; severity: 'normal' | 'attention' | 'urgent' | 'overdue'; urgency: 'current' | 'next' | 'upcoming' | 'later'; disposition: 'archived' | 'lost' | null };
 const navItems: NavItem[] = [
   { label: 'Visão geral', icon: Home, path: '/painel' },
-  { label: 'Edificações', icon: Building2, path: '/painel?view=buildings' },
   { label: 'Cadastrar no Fênix', icon: Plus, path: '/painel?view=register' },
+  { label: 'Edificações', icon: Building2, path: '/painel?view=buildings' },
   { label: 'Em Análise', icon: ClipboardList, path: '/painel?view=analysis' },
   { label: 'Notificados', icon: FileCheck2, path: '/painel?view=notified' },
   { label: 'Parados', icon: CirclePause, path: '/painel?view=stopped' },
@@ -176,7 +183,7 @@ function matchesProcessMenuFilter(process: DashboardProcess, filter: ProcessMenu
   return filter.join === 'any' ? groups.some(Boolean) : groups.every(Boolean);
 }
 
-function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigate, onNotification, onOpenAi, onSyncRunningChange }: { children: ReactNode; user: { name: string; demo: boolean }; active?: string; breadcrumbs?: ReactNode; onNavigate?: () => void; onNotification?: (notification: UserNotification) => void; onOpenAi?: () => void; onSyncRunningChange?: (running: boolean) => void }) {
+function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigate, onNotification, onOpenAi, copilotOpen, onSyncRunningChange }: { children: ReactNode; user: { name: string; demo: boolean }; active?: string; breadcrumbs?: ReactNode; onNavigate?: () => void; onNotification?: (notification: UserNotification) => void; onOpenAi?: () => void; copilotOpen?: boolean; onSyncRunningChange?: (running: boolean) => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('fenix-sidebar-collapsed') === 'true');
   const [helpOpen, setHelpOpen] = useState(false);
@@ -202,7 +209,7 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
   const lastSyncTitle = fenixSync.lastSync && Number.isFinite(Date.parse(fenixSync.lastSync)) ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bahia' }).format(new Date(fenixSync.lastSync)) : null;
   function navigateFromSidebar(path: string) { setMenuOpen(false); onNavigate?.(); navigate(path); }
   async function logout() { await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined); navigate('/'); }
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${copilotOpen ? 'copilot-open' : ''}`}><aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
     <Link to="/" className="brand brand-light sidebar-brand">{logo}<span>Fênix <b>Painel</b></span></Link>
     <div className="sidebar-section-label">ACOMPANHAMENTO</div><nav className="side-nav">{navItems.map((item) => <button key={item.label} type="button" title={item.label} onClick={() => navigateFromSidebar(item.path!)} className={`side-link ${active === item.label ? 'active' : ''}`}><item.icon size={17} /><span>{item.label}</span></button>)}</nav>
     <div className="sidebar-spacer" /><button className="sidebar-help" type="button" onClick={() => setHelpOpen(true)}><span className="help-icon"><HelpCircle size={17} /></span><span><b>Precisa de ajuda?</b><small>Veja como acompanhar</small></span><ArrowRight size={15} /></button>
@@ -210,7 +217,7 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
     <div className="sidebar-user"><span className="avatar avatar-small">{user.name.slice(0, 1).toUpperCase()}</span><span className="sidebar-user-label"><b>{user.demo ? 'Demonstração' : user.name.split(' ')[0]}</b><small>{user.demo ? 'Dados fictícios' : 'Conta Fênix'}</small></span></div>
   </aside>
   {menuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
-  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions"><span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>{onOpenAi && <button className="button button-ai-min global-ai-button" onClick={onOpenAi} aria-label="Abrir assistente de IA"><Sparkles size={15} /><span>Assistente IA</span></button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
+  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions"><span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>{onOpenAi && <button className={`button button-ai-min global-ai-button ${copilotOpen ? 'active' : ''}`} onClick={onOpenAi} aria-label={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'} title={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'}><Sparkles size={15} /><span>Copiloto IA</span>{copilotOpen ? <PanelRightClose size={13} style={{ marginLeft: 3 }} /> : null}</button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
     {user.demo && <div className="demo-banner"><Eye size={14} /><span>Você está vendo dados fictícios de demonstração. Nenhuma informação real do Fênix está sendo exibida.</span><Link to="/entrar">Entrar com Fênix <ArrowRight size={13} /></Link></div>}
     {children}</main>
     {helpOpen && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setHelpOpen(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header><div><span className="help-icon"><HelpCircle size={20} /></span><div><h2 id="help-title">Como acompanhar processos</h2><p>Um guia rápido para usar o Fênix Painel.</p></div></div><button className="icon-button" onClick={() => setHelpOpen(false)} aria-label="Fechar ajuda"><X size={18} /></button></header><div className="help-content"><section><b>1. Comece pela edificação</b><p>Abra uma edificação para ver seus protocolos, etapa atual, histórico e documentos consultados no Fênix.</p></section><section><b>2. Entenda os indicadores</b><p>Os cartões mostram processos. Clique em um para abrir a lista correspondente; cada linha leva à ficha da edificação.</p></section><section><b>3. Atualize e confira mudanças</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas. Mudanças encontradas aparecem na campainha.</p></section><section><b>4. Use a IA como apoio</b><p>Na ficha, pergunte sobre o status, as movimentações ou os documentos. Confirme decisões e exigências no Fênix.</p></section></div><footer><button className="button button-outline" onClick={() => { setHelpOpen(false); navigateFromSidebar('/painel?view=sync'); }}>Ver consultas e sincronizações <ArrowRight size={15} /></button></footer></section></div>}
@@ -793,6 +800,11 @@ function DashboardPage() {
   const [aiBuilding, setAiBuilding] = useState<Building | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  const [draftContext, setDraftContext] = useState<{
+    currentDraft: any;
+    applyPatch: (patch: any) => void;
+    isEditor: boolean;
+  } | null>(null);
   const launchAi = (building: Building | null, prompt = '') => { setAiBuilding(building); setAiPrompt(prompt); setAiOpen(true); };
   const [syncMenu, setSyncMenu] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -945,21 +957,35 @@ function DashboardPage() {
     { label: 'Processos com vistoria', value: data.metrics.inspections, trend: 'etapas de vistoria', icon: FileCheck2, tone: 'violet', target: 'analysis' }
   ];
   const openBuilding = (building: Building, tab = 'Edificação', processId?: string) => { setSelectedTab(tab); setSelectedProcessId(processId); setSelected(building); };
-  return <Shell user={data.user} active={view === 'register' ? 'Cadastrar no Fênix' : selected ? 'Edificações' : activeNav} breadcrumbs={view === 'register' ? <><b>Cadastrar no Fênix</b></> : selected ? <><b>Edificações</b><span>/</span><b>{selected.reference}</b></> : undefined} onNavigate={() => { setSelected(null); setAiOpen(false); }} onOpenAi={() => launchAi(null)} onSyncRunningChange={setExternalSyncRunning} onNotification={(notification) => {
+  return <Shell user={data.user} active={view === 'register' ? 'Cadastrar no Fênix' : selected ? 'Edificações' : activeNav} breadcrumbs={view === 'register' ? <><b>Cadastrar no Fênix</b></> : selected ? <><b>Edificações</b><span>/</span><b>{selected.reference}</b></> : undefined} onNavigate={() => { setSelected(null); }} onOpenAi={() => setAiOpen((prev) => !prev)} copilotOpen={aiOpen} onSyncRunningChange={setExternalSyncRunning} onNotification={(notification) => {
     const target = data.buildings.find((item) => item.id === notification.buildingId);
     if (target) openBuilding(target, 'Edificação', notification.processId || undefined);
   }}>
     {view === 'register' ? (
       <div className="page-content register-page">
-        <ProjectDraftModal
-          mode="page"
-          open={true}
-          onClose={() => navigate('/painel')}
-          buildings={buildings}
-          onProjectSubmitted={() => {
-            void refreshAll();
-          }}
-        />
+        <Suspense
+          fallback={
+            <div className="register-page-view" style={{ minHeight: '60vh', display: 'grid', placeItems: 'center' }}>
+              <div className="ai-thinking-pill">
+                <LoaderCircle size={22} className="spin text-teal" />
+                <span className="text-rainbow-shimmer">Carregando Cadastro Fênix...</span>
+              </div>
+            </div>
+          }
+        >
+          <ProjectDraftModal
+            mode="page"
+            open={true}
+            onClose={() => navigate('/painel')}
+            buildings={buildings}
+            copilotOpen={aiOpen}
+            onToggleCopilot={() => setAiOpen((prev) => !prev)}
+            onDraftContextChange={setDraftContext}
+            onProjectSubmitted={() => {
+              void refreshAll();
+            }}
+          />
+        </Suspense>
       </div>
     ) : (
       <div className="page-content dashboard-page">
@@ -977,7 +1003,28 @@ function DashboardPage() {
       </div>
     )}
     {selected && <BuildingDrawer key={selected.id} building={selected} initialTab={selectedTab} initialProcessId={selectedProcessId} onClose={() => setSelected(null)} onAsk={(prompt) => launchAi(selected, prompt)} demo={data.user.demo} />}
-    {aiOpen && <AiPanel building={aiBuilding} initialPrompt={aiPrompt} onClose={() => setAiOpen(false)} />}
+    <UnifiedCopilotSidebar
+      isOpen={aiOpen}
+      onClose={() => setAiOpen(false)}
+      building={aiBuilding}
+      initialPrompt={aiPrompt}
+      draftContext={draftContext}
+      isRegisterView={view === 'register'}
+      onNavigateToRegister={async (patch) => {
+        if (patch) {
+          try {
+            const newDraftData = {
+              ...INITIAL_EMPTY_DRAFT,
+              id: crypto.randomUUID(),
+              name: patch.name || 'Projeto IA Fênix',
+              ...patch
+            };
+            await api('/api/drafts', { method: 'POST', body: JSON.stringify(newDraftData) });
+          } catch { /* fallback */ }
+        }
+        navigate('/painel?view=register');
+      }}
+    />
     {toast && <div className="toast"><CheckCircle2 size={16} /> {toast}</div>}
     {connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(message) => { setToast(message); window.setTimeout(() => setToast(''), 4200); setConnectionRevision((revision) => revision + 1); void refresh(); setConnectionModal(null); }} />}
   </Shell>;
@@ -1163,7 +1210,11 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
       <nav className="drawer-tabs">{['Edificação', 'Projetos', 'Odoo', 'Documentos', 'Histórico'].map((name) => <button key={name} onClick={() => setTab(name)} className={tab === name ? 'selected' : ''}>{name}</button>)}</nav>
       {error ? <div className="drawer-error"><CircleAlert size={17} />{error}</div> : !detail ? <div className="detail-loading"><LoaderCircle className="spin" size={19} /> Carregando dados...</div> : <>
         <div className={`detail-content-grid ${tab === 'Odoo' ? 'odoo-active' : ''}`}><div className="detail-primary">
-           {tab === 'Odoo' ? <OdooIntegration buildingId={building.id} documents={documents} demo={demo} /> : tab === 'Documentos' ? documentsPanel : tab === 'Histórico' ? historyPanel : <>
+           {tab === 'Odoo' ? (
+             <Suspense fallback={<div className="detail-loading"><LoaderCircle className="spin" size={19} /> Carregando Odoo...</div>}>
+               <OdooIntegration buildingId={building.id} documents={documents} demo={demo} />
+             </Suspense>
+           ) : tab === 'Documentos' ? documentsPanel : tab === 'Histórico' ? historyPanel : <>
              <div className="detail-section-heading"><div><span className="section-kicker">SITUAÇÃO DO PROCESSO</span><h3>{tab === 'Edificação' ? 'Andamento atual' : tab}</h3></div>{process && <StatusPill status={process.status} />}</div>
              {process ? <>
                <div className="current-status-card"><div className="status-card-main"><span className={`status-dot-large ${statusTone(process.status)}`}>{statusTone(process.status) === 'green' ? <CheckCircle2 size={17} /> : statusTone(process.status) === 'amber' || statusTone(process.status) === 'red' ? <CircleAlert size={17} /> : <Clock3 size={17} />}</span><div><small>ETAPA ATUAL</small><b>{process.stage || process.status}</b><span>Protocolo {process.protocol || 'não informado'} · {process.type}</span>{process.notifiedBy && <span className="detail-notified-by"><b>Servidor Responsável:</b> {process.notifiedBy}</span>}</div></div><button className="button button-ai-soft" onClick={() => onAsk(`Explique em linguagem simples a situação atual do protocolo ${process.protocol || 'desta edificação'}, que está na etapa “${process.stage || process.status}”. Informe o que os dados confirmam, as pendências e o próximo passo a verificar no Fênix.`)}><Sparkles size={15} /> Explicar situação</button></div>
@@ -1181,36 +1232,179 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
 
 type AiTurn = { id: string; question: string; answer?: string; reasoningSummary?: string; sources?: Array<{ protocol: string; type: string; status: string; updatedAt: string; movements: number; documents: string[] }>; error?: string; loading?: boolean };
 
-function AiPanel({ building, initialPrompt, onClose }: { building: Building | null; initialPrompt: string; onClose: () => void }) {
+function UnifiedCopilotSidebar({
+  isOpen,
+  onClose,
+  building,
+  initialPrompt,
+  draftContext,
+  isRegisterView,
+  onNavigateToRegister
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  building: Building | null;
+  initialPrompt: string;
+  draftContext: { currentDraft: any; applyPatch: (patch: any) => void; isEditor: boolean } | null;
+  isRegisterView: boolean;
+  onNavigateToRegister: (initialDraftPatch?: any) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<'draft' | 'processes'>('draft');
+
+  // Sincroniza a aba ativa quando o usuário clica em um processo específico ou navega para cadastro
+  useEffect(() => {
+    if (isRegisterView) {
+      setActiveTab('draft');
+    } else if (building || initialPrompt) {
+      setActiveTab('processes');
+    }
+  }, [isRegisterView, building, initialPrompt]);
+
+  // Fechar com a tecla Escape se a barra estiver aberta
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
+  // ================= ESTADOS DO MODO CADASTRO & IT-14 =================
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotThinking, setCopilotThinking] = useState('');
+  const [copilotPrompt, setCopilotPrompt] = useState('');
+  const [appliedNotice, setAppliedNotice] = useState('');
+  const [copilotMessages, setCopilotMessages] = useState<Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    thinkingSteps?: string[];
+    appliedChangesSummary?: string[];
+    suggestions?: string[];
+    pendingPatch?: any;
+  }>>([
+    {
+      role: 'assistant',
+      content: 'Olá! Sou o Copiloto IA do Fênix Painel, especialista no Decreto Estadual 16.302/BA e IT-14 do CBMBA. Posso preencher campos na tela em tempo real, sugerir medidas, revisar pendências e calcular o enquadramento do seu projeto.',
+      suggestions: [
+        '✦ Auto-revisar e corrigir pendências da tela',
+        '✦ Sugerir e marcar medidas da IT-14',
+        '✦ Exemplo: Galpão 620 m² em Feira de Santana',
+        '✦ Explicar meu enquadramento atual'
+      ]
+    }
+  ]);
+  const draftContentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (draftContentRef.current) {
+      draftContentRef.current.scrollTop = draftContentRef.current.scrollHeight;
+    }
+  }, [copilotMessages, copilotLoading]);
+
+  const handleSendDraftPrompt = async (text: string) => {
+    const userMessage = text.trim();
+    if (!userMessage || copilotLoading) return;
+
+    setCopilotLoading(true);
+    setCopilotThinking('Analisando diretrizes do Decreto 16.302/BA e IT-14...');
+    setCopilotPrompt('');
+    setAppliedNotice('');
+
+    setCopilotMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+
+    try {
+      let aiResult: DraftAiAssistantResponse;
+
+      try {
+        aiResult = await api<DraftAiAssistantResponse>('/api/drafts/ai-assistant', {
+          method: 'POST',
+          body: JSON.stringify({
+            message: userMessage,
+            currentDraft: draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
+            history: copilotMessages.slice(-6).map((m) => ({ role: m.role, content: m.content }))
+          })
+        });
+      } catch {
+        // Fallback local robusto
+        aiResult = generateLocalAiAssistantFallback(
+          userMessage,
+          draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
+          Number(draftContext?.currentDraft?.edification?.building_area) || 500,
+          { sigla: 'PTS', nome: 'Processo Técnico Simplificado', motivo: 'Área calculada dentro dos limites', isPts: true }
+        );
+      }
+
+      // Se temos o rascunho ativo aberto na tela de cadastro, aplicamos instantaneamente!
+      if (aiResult.formPatch && draftContext?.applyPatch) {
+        draftContext.applyPatch(aiResult.formPatch);
+        setAppliedNotice('Alterações aplicadas na tela de cadastro!');
+        setTimeout(() => setAppliedNotice(''), 3500);
+      }
+
+      setCopilotMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: aiResult.reply,
+          thinkingSteps: aiResult.thinkingSteps,
+          appliedChangesSummary: aiResult.appliedChangesSummary,
+          suggestions: aiResult.suggestions,
+          pendingPatch: !draftContext?.applyPatch && aiResult.formPatch ? aiResult.formPatch : undefined
+        }
+      ]);
+    } catch {
+      setCopilotMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: 'Desculpe, ocorreu uma instabilidade ao consultar as diretrizes CBMBA. Pode tentar novamente?'
+        }
+      ]);
+    } finally {
+      setCopilotLoading(false);
+      setCopilotThinking('');
+    }
+  };
+
+  // ================= ESTADOS DO MODO PROCESSOS & FÊNIX =================
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<AiTurn[]>([]);
   const [sessions, setSessions] = useState<Array<{ id: string; buildingId: string | null; title: string; updatedAt: string }>>([]);
   const [sessionId, setSessionId] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loadingProcessAi, setLoadingProcessAi] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [sourceVisibility, setSourceVisibility] = useState<Record<string, boolean>>({});
-  const contentRef = useRef<HTMLDivElement>(null);
-  const initialized = useRef(false);
+  const processContentRef = useRef<HTMLDivElement>(null);
+  const initializedProcessAi = useRef(false);
+
   useEffect(() => {
-    if (initialized.current) return;
-    initialized.current = true;
+    if (!isOpen) return;
+    if (initializedProcessAi.current) return;
+    initializedProcessAi.current = true;
     api<{ configured: boolean }>('/api/settings/ai').then((result) => setConfigured(result.configured)).catch(() => setConfigured(false));
     void (async () => {
       try {
         const result = await api<{ sessions: typeof sessions }>('/api/ai/sessions');
         setSessions(result.sessions);
         const prior = result.sessions.find((item) => item.buildingId === (building?.id || null));
-        if (prior) { await restoreSession(prior.id); if (initialPrompt) await ask(initialPrompt, prior.id); }
+        if (prior) { await restoreSession(prior.id); if (initialPrompt) await askProcess(initialPrompt, prior.id); }
         else {
           const created = await api<{ id: string; buildingId: string | null; title: string; updatedAt: string }>('/api/ai/sessions', { method: 'POST', body: JSON.stringify({ buildingId: building?.id || null }) });
           setSessions((current) => [created, ...current]); setSessionId(created.id);
-          if (initialPrompt) await ask(initialPrompt, created.id);
+          if (initialPrompt) await askProcess(initialPrompt, created.id);
         }
       } catch { setConfigured(false); }
     })();
-  }, []);
-  useEffect(() => { if (contentRef.current) contentRef.current.scrollTop = contentRef.current.scrollHeight; }, [turns, loading]);
-  useEffect(() => { const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } }; window.addEventListener('keydown', closeOnEscape); return () => window.removeEventListener('keydown', closeOnEscape); }, [onClose]);
+  }, [isOpen, building, initialPrompt]);
+
+  useEffect(() => {
+    if (processContentRef.current) processContentRef.current.scrollTop = processContentRef.current.scrollHeight;
+  }, [turns, loadingProcessAi]);
+
   async function restoreSession(id: string) {
     const data = await api<{ messages: Array<{ id: string; role: string; content: string; reasoningSummary?: string; sources?: AiTurn['sources'] }> }>(`/api/ai/sessions/${id}`);
     setSessionId(id);
@@ -1221,15 +1415,17 @@ function AiPanel({ building, initialPrompt, onClose }: { building: Building | nu
     }
     setTurns(restored);
   }
+
   async function newSession() {
     const created = await api<{ id: string; buildingId: string | null; title: string; updatedAt: string }>('/api/ai/sessions', { method: 'POST', body: JSON.stringify({ buildingId: building?.id || null }) });
     setSessions((current) => [created, ...current]); setSessionId(created.id); setTurns([]); setQuestion('');
   }
-  async function ask(text = question, targetSessionId = sessionId) {
+
+  async function askProcess(text = question, targetSessionId = sessionId) {
     const submitted = text.trim();
-    if (!submitted || loading || !targetSessionId) return;
+    if (!submitted || loadingProcessAi || !targetSessionId) return;
     const turnId = crypto.randomUUID();
-    setLoading(true); setQuestion('');
+    setLoadingProcessAi(true); setQuestion('');
     setTurns((current) => [...current, { id: turnId, question: submitted, answer: '', loading: true }]);
     try {
       const response = await fetch('/api/ai/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: targetSessionId, question: submitted }) });
@@ -1253,23 +1449,333 @@ function AiPanel({ building, initialPrompt, onClose }: { building: Building | nu
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Não foi possível obter uma resposta.';
       setTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, error: message, loading: false } : turn));
-    } finally { setLoading(false); }
+    } finally { setLoadingProcessAi(false); }
   }
-  return <div className="ai-panel-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-    <aside className="ai-panel">
-      <header className="ai-panel-head"><div className="ai-panel-brand"><span className="ai-icon ai-icon-large"><Sparkles size={19} /></span><span><b>Assistente Fênix</b><small>IA contextual · {building ? 'Edificação selecionada' : 'Visão geral da conta'}</small></span></div><button className="icon-button" onClick={onClose} aria-label="Fechar assistente"><X size={18} /></button></header>
-      <div className="ai-session-tools"><button className="button button-ai-min" onClick={() => void newSession()} disabled={loading}><MessageCircle size={14} /> Nova sessão</button><label htmlFor="ai-session-select">Histórico</label><select id="ai-session-select" value={sessionId} onChange={(event) => void restoreSession(event.target.value)}>{sessions.filter((item) => item.buildingId === (building?.id || null)).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></div>
-      <div className="ai-context"><span className="context-label">CONTEXTO ATUAL</span>{building ? <><span><Building2 size={14} /> {building.reference}</span><span><ClipboardList size={14} /> {building.protocol} · {building.stage}</span></> : <span><Building2 size={14} /> Edificações e processos sincronizados da conta</span>}</div>
-      <div className="ai-panel-content" ref={contentRef} aria-live="polite">
-        <div className="assistant-message"><span className="ai-avatar"><Sparkles size={15} /></span><div><b>Olá! Posso ajudar a entender {building ? 'este processo' : 'suas edificações e processos'}.</b><p>{building ? 'Pergunte sobre a etapa atual, o histórico ou os documentos vinculados à edificação.' : 'Consulte situações, compare prioridades ou peça um panorama dos processos sincronizados.'}</p></div></div>
-        {turns.map((turn) => <div className="ai-turn" key={turn.id}><div className="user-ai-question"><span>Você</span><p>{turn.question}</p></div>{turn.answer && <div className="user-ai-answer"><span className="ai-answer-label"><Sparkles size={12} /> RESPOSTA DA IA</span><p>{turn.answer}</p><small>Consulte as fontes do processo no Fênix antes de tomar qualquer decisão.</small></div>}{turn.sources?.length ? <details className="ai-citations" open={sourceVisibility[turn.id] ?? false} onToggle={(event) => { const isOpen = event.currentTarget.open; setSourceVisibility((current) => ({ ...current, [turn.id]: isOpen })); }}><summary>FONTES CONSULTADAS <span>· {turn.sources.length}</span></summary>{turn.sources.map((source, index) => <div key={`${source.protocol}-${source.type}-${index}`}><b>{source.protocol || 'Processo vinculado'} · {source.type}</b><span>{source.status} · {source.movements} movimentações{source.documents?.length ? ` · ${source.documents.join(" · ")}` : ""} · {formatDate(source.updatedAt)}</span></div>)}</details> : null}{turn.loading && <div className="assistant-loading"><LoaderCircle size={17} className="spin" /> Consultando os dados selecionados...</div>}{turn.error && <div className="ai-error"><CircleAlert size={15} />{turn.error}{turn.error.includes('Configure') && <Link to="/configuracoes?secao=assistente" onClick={onClose}>Abrir configurações <ArrowRight size={13} /></Link>}</div>}</div>)}
-        {turns.map((turn) => turn.reasoningSummary && <details key={`${turn.id}-reasoning`} className="ai-reasoning-summary" open><summary>Resumo da análise · {turn.question}</summary><p>{turn.reasoningSummary}</p></details>)}
-        {configured === false && !turns.some((turn) => turn.error) && <div className="configure-ai-note"><Sparkles size={16} /><span><b>Ative respostas completas com IA</b><small>Configure sua chave OpenAI. A chave fica criptografada no banco local e nunca é enviada ao navegador em respostas.</small><Link to="/configuracoes?secao=assistente" onClick={onClose}>Configurar agora <ArrowRight size={13} /></Link></span></div>}
-      </div>
-      {turns.length === 0 && <div className="suggested-prompts"><small>SUGESTÕES DE PERGUNTA</small><button onClick={() => void ask(building ? `Explique em linguagem simples a situação atual do processo ${building.protocol}.` : 'Quais processos precisam de mais atenção agora e por quê?')}>{building ? 'O que significa a etapa atual?' : 'Quais processos precisam de atenção?'}</button><button onClick={() => void ask(building ? 'O que devo conferir nos documentos deste processo?' : 'Quais edificações têm documentação pendente?')}>{building ? 'O que devo conferir nos documentos?' : 'Onde há documentação pendente?'}</button><button onClick={() => void ask(building ? 'Resuma o histórico deste processo e o que aconteceu por último.' : 'Resuma as mudanças mais relevantes nos processos acompanhados.')}>{building ? 'Resuma o histórico do processo' : 'Resuma as situações acompanhadas'}</button></div>}
-      <form className="ai-input-area" onSubmit={(e) => { e.preventDefault(); void ask(); }}><div className="ai-composer"><input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={building ? 'Pergunte sobre esta edificação...' : 'Pergunte sobre seus processos...'} maxLength={1200} aria-label="Pergunta para o assistente Fênix" /><button type="submit" className="send-button" disabled={!question.trim() || loading} aria-label="Enviar pergunta"><Send size={16} /></button></div><div className="ai-input-bottom"><span>{turns.length ? 'A conversa permanece neste painel enquanto ele estiver aberto.' : 'Dados selecionados enviados à OpenAI quando você perguntar.'}</span></div></form>
-      </aside>
-  </div>;
+
+  return (
+    <aside
+      className={`copilot-sidebar-right ${isOpen ? 'open' : ''}`}
+      aria-label="Copiloto IA do Fênix Painel"
+    >
+      <header className="copilot-sidebar-header">
+        <div className="copilot-header-top">
+          <div className="copilot-brand-badge">
+            <span className="copilot-brand-icon">
+              <Sparkles size={18} />
+            </span>
+            <div className="copilot-brand-info">
+              <h3>✦ Copiloto IA</h3>
+              <p>{activeTab === 'draft' ? 'Especialista CBMBA · IT-14 & Cadastro' : 'Assistente de Processos & Fênix'}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="icon-button copilot-close-btn"
+            onClick={onClose}
+            aria-label="Recolher Copiloto IA"
+            title="Recolher Copiloto (ou clique no botão no topo)"
+          >
+            <PanelRightClose size={18} />
+          </button>
+        </div>
+
+        <div className="copilot-mode-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'draft'}
+            className={`copilot-tab-btn ${activeTab === 'draft' ? 'active' : ''}`}
+            onClick={() => setActiveTab('draft')}
+          >
+            <Flame size={14} />
+            <span>Cadastro & IT-14</span>
+            {isRegisterView && <span className="copilot-tab-badge-new">TELA</span>}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'processes'}
+            className={`copilot-tab-btn ${activeTab === 'processes' ? 'active' : ''}`}
+            onClick={() => setActiveTab('processes')}
+          >
+            <Building2 size={14} />
+            <span>Processos & Fênix</span>
+          </button>
+        </div>
+      </header>
+
+      {appliedNotice && (
+        <div className="copilot-toast-applied animate-fade-in">
+          <CheckCircle2 size={14} /> {appliedNotice}
+        </div>
+      )}
+
+      {/* CONTEÚDO DA ABA 1: CADASTRO & IT-14 */}
+      {activeTab === 'draft' && (
+        <>
+          <div className="copilot-sidebar-body" ref={draftContentRef}>
+            <div className="copilot-chips-row">
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Auto-revisar e corrigir pendências da tela')}
+                disabled={copilotLoading}
+              >
+                <Sparkles size={13} /> Auto-revisar pendências
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Sugerir e marcar medidas da IT-14')}
+                disabled={copilotLoading}
+              >
+                <ShieldCheck size={13} /> Sugerir medidas IT-14
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Exemplo: Galpão 620 m² em Feira de Santana')}
+                disabled={copilotLoading}
+              >
+                <Building2 size={13} /> Galpão 620 m² (FSA)
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Explicar meu enquadramento atual')}
+                disabled={copilotLoading}
+              >
+                <Info size={13} /> Explicar enquadramento
+              </button>
+            </div>
+
+            <div className="copilot-chat-history">
+              {copilotMessages.map((msg, idx) => (
+                <div key={idx} className={`copilot-message message-${msg.role}`}>
+                  <div className="message-text">{msg.content}</div>
+
+                  {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                    <div className="copilot-thinking-box">
+                      <strong>Linha de Raciocínio CBMBA:</strong>
+                      {msg.thinkingSteps.map((stepItem, sIdx) => (
+                        <span key={sIdx}>• {stepItem}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {msg.appliedChangesSummary && msg.appliedChangesSummary.length > 0 && (
+                    <div className="copilot-applied-badges">
+                      {msg.appliedChangesSummary.map((item, bIdx) => (
+                        <span key={bIdx} className="copilot-applied-badge">
+                          <CheckCircle2 size={12} /> {item}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {msg.pendingPatch && !isRegisterView && (
+                    <button
+                      type="button"
+                      className="button button-horizon-ai button-xs mt-2"
+                      onClick={() => onNavigateToRegister(msg.pendingPatch)}
+                    >
+                      <Plus size={13} /> Abrir Cadastro no Fênix e Aplicar
+                    </button>
+                  )}
+
+                  {msg.suggestions && msg.suggestions.length > 0 && (
+                    <div className="copilot-chips-row mt-1">
+                      {msg.suggestions.map((sug, sgIdx) => (
+                        <button
+                          key={sgIdx}
+                          type="button"
+                          className="copilot-chip-action"
+                          onClick={() => void handleSendDraftPrompt(sug)}
+                          disabled={copilotLoading}
+                        >
+                          {sug}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {copilotLoading && (
+                <div className="copilot-message message-assistant">
+                  <div className="ai-thinking-pill">
+                    <LoaderCircle size={15} className="spin text-teal" />
+                    <span className="text-rainbow-shimmer">{copilotThinking || 'Processando raciocínio com IA...'}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <form
+            className="copilot-sidebar-footer"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (copilotPrompt.trim()) {
+                void handleSendDraftPrompt(copilotPrompt);
+              }
+            }}
+          >
+            <div className="copilot-input-row">
+              <input
+                type="text"
+                placeholder={isRegisterView ? "Ex: 'Muda a área para 520m² e marca hidrantes'..." : "Diga o que deseja cadastrar ou consulte a IT-14..."}
+                value={copilotPrompt}
+                onChange={(e) => setCopilotPrompt(e.target.value)}
+                disabled={copilotLoading}
+              />
+              <button
+                type="submit"
+                className="button button-horizon-ai"
+                disabled={copilotLoading || !copilotPrompt.trim()}
+              >
+                {copilotLoading ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
+                <span>Enviar</span>
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+
+      {/* CONTEÚDO DA ABA 2: PROCESSOS & FÊNIX */}
+      {activeTab === 'processes' && (
+        <>
+          <div className="copilot-session-bar">
+            <button className="button button-ai-min" onClick={() => void newSession()} disabled={loadingProcessAi}>
+              <MessageCircle size={13} /> Nova sessão
+            </button>
+            <select
+              className="copilot-session-select"
+              value={sessionId}
+              onChange={(event) => void restoreSession(event.target.value)}
+            >
+              {sessions.filter((item) => item.buildingId === (building?.id || null)).map((item) => (
+                <option key={item.id} value={item.id}>{item.title}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="ai-context copilot-context-bar">
+            <span className="context-label">CONTEXTO ATUAL</span>
+            {building ? (
+              <>
+                <span><Building2 size={13} /> {building.reference}</span>
+                <span><ClipboardList size={13} /> {building.protocol} · {building.stage}</span>
+              </>
+            ) : (
+              <span><Building2 size={13} /> Edificações e processos sincronizados da conta</span>
+            )}
+          </div>
+
+          <div className="copilot-sidebar-body" ref={processContentRef}>
+            <div className="assistant-message">
+              <span className="ai-avatar"><Sparkles size={15} /></span>
+              <div>
+                <b>Olá! Posso ajudar a entender {building ? 'este processo' : 'suas edificações e processos'}.</b>
+                <p>{building ? 'Pergunte sobre a etapa atual, o histórico ou os documentos vinculados.' : 'Consulte situações, prioridades ou peça um panorama geral.'}</p>
+              </div>
+            </div>
+
+            {turns.map((turn) => (
+              <div className="ai-turn" key={turn.id}>
+                <div className="user-ai-question">
+                  <span>Você</span>
+                  <p>{turn.question}</p>
+                </div>
+                {turn.answer && (
+                  <div className="user-ai-answer">
+                    <span className="ai-answer-label"><Sparkles size={12} /> RESPOSTA DA IA</span>
+                    <p>{turn.answer}</p>
+                    <small>Consulte as fontes do processo no Fênix antes de tomar qualquer decisão.</small>
+                  </div>
+                )}
+                {turn.sources?.length ? (
+                  <details className="ai-citations" open={sourceVisibility[turn.id] ?? false} onToggle={(event) => { const isDetailsOpen = event.currentTarget.open; setSourceVisibility((curr) => ({ ...curr, [turn.id]: isDetailsOpen })); }}>
+                    <summary>FONTES CONSULTADAS <span>· {turn.sources.length}</span></summary>
+                    {turn.sources.map((source, index) => (
+                      <div key={`${source.protocol}-${source.type}-${index}`}>
+                        <b>{source.protocol || 'Processo vinculado'} · {source.type}</b>
+                        <span>{source.status} · {source.movements} movimentações{source.documents?.length ? ` · ${source.documents.join(' · ')}` : ''} · {formatDate(source.updatedAt)}</span>
+                      </div>
+                    ))}
+                  </details>
+                ) : null}
+                {turn.loading && <div className="assistant-loading"><LoaderCircle size={16} className="spin" /> Consultando dados...</div>}
+                {turn.error && <div className="ai-error"><CircleAlert size={14} />{turn.error}</div>}
+              </div>
+            ))}
+
+            {turns.map((turn) => turn.reasoningSummary && (
+              <details key={`${turn.id}-reasoning`} className="ai-reasoning-summary" open>
+                <summary>Resumo da análise · {turn.question}</summary>
+                <p>{turn.reasoningSummary}</p>
+              </details>
+            ))}
+
+            {turns.length === 0 && (
+              <div className="suggested-prompts">
+                <small>SUGESTÕES DE PERGUNTA</small>
+                <button onClick={() => void askProcess(building ? `Explique a situação do processo ${building.protocol}.` : 'Quais processos precisam de mais atenção agora e por quê?')}>
+                  {building ? 'O que significa a etapa atual?' : 'Quais processos precisam de atenção?'}
+                </button>
+                <button onClick={() => void askProcess(building ? 'O que devo conferir nos documentos deste processo?' : 'Quais edificações têm documentação pendente?')}>
+                  {building ? 'O que devo conferir nos documentos?' : 'Onde há documentação pendente?'}
+                </button>
+                <button onClick={() => void askProcess(building ? 'Resuma o histórico deste processo.' : 'Resuma as mudanças mais relevantes.')}>
+                  {building ? 'Resuma o histórico do processo' : 'Resuma as situações acompanhadas'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <form
+            className="copilot-sidebar-footer"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void askProcess();
+            }}
+          >
+            <div className="copilot-input-row">
+              <input
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                placeholder={building ? 'Pergunte sobre esta edificação...' : 'Pergunte sobre seus processos...'}
+                maxLength={1200}
+                disabled={loadingProcessAi}
+              />
+              <button
+                type="submit"
+                className="button button-horizon-ai"
+                disabled={!question.trim() || loadingProcessAi}
+              >
+                {loadingProcessAi ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
+                <span>Enviar</span>
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </aside>
+  );
+}
+
+function AiPanel({ building, initialPrompt, onClose }: { building: Building | null; initialPrompt: string; onClose: () => void }) {
+  return (
+    <UnifiedCopilotSidebar
+      isOpen={true}
+      onClose={onClose}
+      building={building}
+      initialPrompt={initialPrompt}
+      draftContext={null}
+      isRegisterView={false}
+      onNavigateToRegister={() => undefined}
+    />
+  );
 }
 
 function UserPreferences() {

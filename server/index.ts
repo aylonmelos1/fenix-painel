@@ -9,7 +9,7 @@ import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
-import { deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput } from './project-drafts.js';
+import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput } from './project-drafts.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
@@ -861,7 +861,64 @@ app.get('/api/fenix-cnae/:code', requireSession, async (req, res) => {
   }
 });
 
-app.get('/api/cnpj-it14/:cnpj', requireSession, async (req, res) => {
+function resolveFenixUserId(user: { id: string; fenix_user_id?: string | null }): number | null {
+  if (user.fenix_user_id) {
+    const parsed = parseInt(String(user.fenix_user_id).replace(/\D/g, ''), 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  if (user.id?.startsWith('fenix:')) {
+    const parsed = parseInt(user.id.replace('fenix:', ''), 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  try {
+    const conn = db.prepare('SELECT fenix_user_id FROM fenix_connections WHERE owner_user_id = ? AND paused = 0 ORDER BY updated_at DESC LIMIT 1').get(user.id) as { fenix_user_id: string } | undefined;
+    if (conn?.fenix_user_id) {
+      const parsed = parseInt(String(conn.fenix_user_id).replace(/\D/g, ''), 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function createRateLimiter(maxRequests: number, windowMs = 60_000) {
+  const requests = new Map<string, number[]>();
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = (res.locals?.user?.id as string) || req.ip || 'anonymous';
+    const now = Date.now();
+    const timestamps = requests.get(key) || [];
+    const validTimestamps = timestamps.filter(ts => now - ts < windowMs);
+
+    if (validTimestamps.length >= maxRequests) {
+      return res.status(429).json({
+        error: 'Limite de requisições excedido. Tente novamente em instantes.'
+      });
+    }
+
+    validTimestamps.push(now);
+    requests.set(key, validTimestamps);
+
+    if (requests.size > 500) {
+      for (const [k, tsList] of requests.entries()) {
+        const filtered = tsList.filter(ts => now - ts < windowMs);
+        if (filtered.length === 0) {
+          requests.delete(k);
+        } else {
+          requests.set(k, filtered);
+        }
+      }
+    }
+
+    next();
+  };
+}
+
+const cnpjRateLimiter = createRateLimiter(20, 60_000);
+const draftAiRateLimiter = createRateLimiter(25, 60_000);
+
+app.get('/api/cnpj-it14/:cnpj', requireSession, cnpjRateLimiter, async (req, res) => {
   try {
     const rawCnpj = String(req.params.cnpj || '');
     const cleanCnpj = rawCnpj.replace(/\D/g, '');
@@ -894,7 +951,7 @@ app.get('/api/drafts', requireSession, (_req, res) => {
 app.post('/api/drafts', requireSession, (req, res) => {
   try {
     const input = (req.body?.data || req.body) as ProjectDraftInput;
-    const fenixUserId = res.locals.user.fenix_user_id ? Number(res.locals.user.fenix_user_id) : null;
+    const fenixUserId = resolveFenixUserId(res.locals.user);
     const validation = simulateProjectDraft(input, fenixUserId);
     const draft = upsertProjectDraft(res.locals.user.id, input, input.id);
     const updated = updateDraftSimulation(res.locals.user.id, draft.id, validation) || draft;
@@ -921,7 +978,7 @@ app.post('/api/drafts/:id/simulate', requireSession, (req, res) => {
     if (!draft) {
       return res.status(404).json({ error: 'Rascunho não encontrado.' });
     }
-    const fenixUserId = res.locals.user.fenix_user_id ? Number(res.locals.user.fenix_user_id) : null;
+    const fenixUserId = resolveFenixUserId(res.locals.user);
     const validation = simulateProjectDraft(draft.data, fenixUserId);
     const updated = updateDraftSimulation(res.locals.user.id, draft.id, validation) || draft;
     res.json({
@@ -953,7 +1010,7 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
     if (!draft) {
       return res.status(404).json({ error: 'Rascunho não encontrado.' });
     }
-    const fenixUserId = res.locals.user.fenix_user_id ? Number(res.locals.user.fenix_user_id) : null;
+    const fenixUserId = resolveFenixUserId(res.locals.user);
     const validation = simulateProjectDraft(draft.data, fenixUserId);
     if (!validation.valid) {
       return res.status(400).json({
@@ -962,9 +1019,26 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
       });
     }
 
+    const lock = acquireDraftSubmissionLock(res.locals.user.id, draft.id);
+    if (!lock.acquired) {
+      if (lock.reason === 'not_found') {
+        return res.status(404).json({ error: 'Rascunho não encontrado.' });
+      }
+      if (lock.reason === 'already_submitted') {
+        return res.status(409).json({ error: 'Este rascunho já foi submetido anteriormente ao Fênix.' });
+      }
+      if (lock.reason === 'already_submitting') {
+        return res.status(409).json({ error: 'Submissão já está em andamento para este rascunho. Aguarde a conclusão.' });
+      }
+      return res.status(409).json({ error: 'Não foi possível obter o bloqueio de submissão do rascunho.' });
+    }
+
     try {
       const result = await submitFenixTechnicalProject(res.locals.user.id, validation.fenixPayload);
       const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: true, result });
+      if (!res.locals.user.demo && !syncInProgress.has(res.locals.user.id)) {
+        void executeSync(res.locals.user.id, 'automatic').catch(() => undefined);
+      }
       res.json({ ok: true, draft: updated || draft, result });
     } catch (submitErr) {
       const message = submitErr instanceof Error ? submitErr.message : 'Erro na requisição ao Fênix.';
@@ -977,7 +1051,7 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
   }
 });
 
-app.post('/api/drafts/ai-assistant', requireSession, async (req, res) => {
+app.post('/api/drafts/ai-assistant', requireSession, draftAiRateLimiter, async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
     if (!message) {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  acquireDraftSubmissionLock,
   buildAndValidateFenixProjectPayload,
   deleteProjectDraft,
   getFenixDomains,
@@ -486,5 +487,146 @@ test('runDraftAiAssistant revisa e auto-corrige pendências de rascunho incomple
 
   // Deve aplicar medidas recomendadas se não havia nenhuma
   assert.equal(res.formPatch?.securityMeasures?.extintores, true);
+});
+
+test('acquireDraftSubmissionLock gerencia concorrência e idempotência atômica', () => {
+  const testUserId = 'test-lock-user-' + Date.now();
+  db.prepare(`
+    INSERT INTO users (id, name, email, demo, created_at)
+    VALUES (?, ?, ?, 1, ?)
+  `).run(testUserId, 'Usuário Lock Test', 'lock-test@exemplo.com', new Date().toISOString());
+
+  try {
+    const draftInput: ProjectDraftInput = {
+      reference_name: 'Edificação Teste Lock',
+      building_area: 100,
+      number_floors: 1,
+      height: 'Térrea = Um pavimento',
+      address: { zip_code: '45355000', public_place: 'RUA LOCK', number: '10', municipio_id: 22 },
+      institution: { cnae: '4754701', razao_social: 'EMPRESA LOCK' }
+    };
+
+    const draft = upsertProjectDraft(testUserId, draftInput);
+
+    // 1. Lock em rascunho inexistente retorna not_found
+    const notFoundLock = acquireDraftSubmissionLock(testUserId, 'inexistent-id-999');
+    assert.deepEqual(notFoundLock, { acquired: false, reason: 'not_found' });
+
+    // 2. Primeira aquisição deve ser bem sucedida
+    const lock1 = acquireDraftSubmissionLock(testUserId, draft.id);
+    assert.deepEqual(lock1, { acquired: true });
+
+    // Status no banco deve ser 'submitting'
+    const inFlight = getProjectDraft(testUserId, draft.id);
+    assert.equal(inFlight?.status, 'submitting');
+
+    // 3. Segunda tentativa imediata de lock deve ser rejeitada como already_submitting
+    const lock2 = acquireDraftSubmissionLock(testUserId, draft.id);
+    assert.deepEqual(lock2, { acquired: false, reason: 'already_submitting' });
+
+    // 4. Se a submissão falhar, status vai para 'error' e lock pode ser readquirido (retry)
+    updateDraftSubmission(testUserId, draft.id, { ok: false, error: 'Falha temporária de rede' });
+    const errorState = getProjectDraft(testUserId, draft.id);
+    assert.equal(errorState?.status, 'error');
+
+    const retryLock = acquireDraftSubmissionLock(testUserId, draft.id);
+    assert.deepEqual(retryLock, { acquired: true });
+
+    // 5. Quando submissão tiver sucesso, status vai para 'submitted'
+    updateDraftSubmission(testUserId, draft.id, {
+      ok: true,
+      result: { id: 12345, num_projeto: '001/2026' }
+    });
+    const finalState = getProjectDraft(testUserId, draft.id);
+    assert.equal(finalState?.status, 'submitted');
+
+    // 6. Tentativa após submissão definitiva retorna already_submitted
+    const submittedLock = acquireDraftSubmissionLock(testUserId, draft.id);
+    assert.deepEqual(submittedLock, { acquired: false, reason: 'already_submitted' });
+  } finally {
+    db.prepare('DELETE FROM users WHERE id = ?').run(testUserId);
+  }
+});
+
+test('Persistência SQLite: criptografia AES-256-GCM do payload_json e compatibilidade legada', () => {
+  const testUserId = 'test-crypto-user-' + Date.now();
+  db.prepare(`
+    INSERT INTO users (id, name, email, demo, created_at)
+    VALUES (?, ?, ?, 1, ?)
+  `).run(testUserId, 'Usuário Crypto Test', 'crypto-test@exemplo.com', new Date().toISOString());
+
+  try {
+    const sensitiveInput: ProjectDraftInput = {
+      reference_name: 'Edificação Ultra Segura',
+      building_area: 320,
+      number_floors: 2,
+      height: 'Baixa = H <= 6,00 m',
+      address: {
+        zip_code: '45355000',
+        public_place: 'AVENIDA DA PRIVACIDADE',
+        number: '777',
+        municipio_id: 22
+      },
+      institution: {
+        tipo_pessoa: 'PJ',
+        cnpj: '12345678000199',
+        razao_social: 'CONFIDENCIAL ENGENHARIA LTDA'
+      },
+      proprietario: {
+        tipo: 'PF',
+        cpf_cnpj: '98765432100',
+        nome_razao_social: 'Engenheiro Confidencial'
+      }
+    };
+
+    // 1. Salva rascunho com dados sensíveis
+    const saved = upsertProjectDraft(testUserId, sensitiveInput);
+    assert.ok(saved.id);
+
+    // 2. Lê a coluna raw no banco SQLite diretamente
+    const rawRow = db
+      .prepare('SELECT payload_json FROM fenix_project_drafts WHERE id = ?')
+      .get(saved.id) as { payload_json: string } | undefined;
+    assert.ok(rawRow);
+    const rawPayload = rawRow.payload_json;
+
+    // Garante que os dados sensíveis NÃO estão em texto claro no SQLite
+    assert.equal(rawPayload.includes('12345678000199'), false, 'CNPJ não deve estar em texto claro no SQLite');
+    assert.equal(rawPayload.includes('98765432100'), false, 'CPF não deve estar em texto claro no SQLite');
+    assert.equal(rawPayload.includes('CONFIDENCIAL ENGENHARIA LTDA'), false, 'Razão social não deve estar em texto claro no SQLite');
+    assert.equal(rawPayload.includes('Engenheiro Confidencial'), false, 'Nome não deve estar em texto claro no SQLite');
+
+    // Garante formato selado AES-256-GCM (três partes base64url separadas por ponto: iv.tag.ciphertext)
+    const parts = rawPayload.split('.');
+    assert.equal(parts.length, 3, 'Payload selado deve conter iv, authTag e ciphertext');
+
+    // 3. Lê via getProjectDraft e verifica se a decriptação restaura os dados sensíveis perfeitamente
+    const decrypted = getProjectDraft(testUserId, saved.id);
+    assert.ok(decrypted);
+    assert.equal(decrypted.data.institution?.cnpj, '12345678000199');
+    assert.equal(decrypted.data.institution?.razao_social, 'CONFIDENCIAL ENGENHARIA LTDA');
+    assert.equal((decrypted.data.proprietario as any)?.cpf_cnpj, '98765432100');
+    assert.equal((decrypted.data.proprietario as any)?.nome_razao_social, 'Engenheiro Confidencial');
+
+    // 4. Teste de retrocompatibilidade: rascunho legado armazenado em JSON plano não criptografado
+    const legacyPlainJson = JSON.stringify({
+      data: {
+        reference_name: 'Edificação Legada Plaintext',
+        building_area: 150,
+        institution: { cnpj: '55555555000155', razao_social: 'LEGADO S/A' }
+      }
+    });
+
+    db.prepare('UPDATE fenix_project_drafts SET payload_json = ? WHERE id = ?').run(legacyPlainJson, saved.id);
+
+    // Leitura deve suportar JSON plano normalmente sem erros
+    const legacyRead = getProjectDraft(testUserId, saved.id);
+    assert.ok(legacyRead);
+    assert.equal(legacyRead.data.reference_name, 'Edificação Legada Plaintext');
+    assert.equal(legacyRead.data.institution?.cnpj, '55555555000155');
+    assert.equal(legacyRead.data.institution?.razao_social, 'LEGADO S/A');
+  } finally {
+    db.prepare('DELETE FROM users WHERE id = ?').run(testUserId);
+  }
 });
 

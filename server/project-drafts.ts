@@ -2,6 +2,19 @@ import { randomUUID, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import OpenAI from 'openai';
 import { db } from './store.js';
+import { seal, unseal } from './crypto.js';
+
+export function decodeDraftPayloadJson(raw: string): any {
+  const trimmed = (raw || '').trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return JSON.parse(trimmed);
+  }
+  try {
+    return JSON.parse(unseal(trimmed));
+  } catch {
+    return JSON.parse(trimmed);
+  }
+}
 
 // Inicialização da tabela SQLite para rascunhos de projetos técnicos
 db.exec(`
@@ -186,7 +199,7 @@ export interface BuildPayloadResult {
 export interface DraftRecord {
   id: string;
   name: string;
-  status: 'draft' | 'simulated' | 'submitted' | 'error';
+  status: 'draft' | 'simulated' | 'submitting' | 'submitted' | 'error';
   updatedAt: string;
   data: ProjectDraftInput;
   lastSimulation?: {
@@ -218,6 +231,10 @@ export function buildAndValidateFenixProjectPayload(
   const domains = getFenixDomains();
   const errors: string[] = [];
   const warnings: string[] = [];
+
+  if (!fenixUserId) {
+    warnings.push('ID de solicitante Fênix não identificado na sessão; usando ID de referência para simulação.');
+  }
 
   // 1. Extração normalizada de campos (compatível com raiz ou objeto aninhado)
   const reference_name = String(input.reference_name || input.edification?.reference_name || '').trim();
@@ -459,7 +476,7 @@ function rowToDraftRecord(row: {
 }): DraftRecord {
   let parsed: any = {};
   try {
-    parsed = JSON.parse(row.payload_json || '{}');
+    parsed = decodeDraftPayloadJson(row.payload_json);
   } catch {}
 
   const inputData: ProjectDraftInput = parsed.data || parsed.input || parsed;
@@ -534,7 +551,7 @@ export function upsertProjectDraft(
   let storedPayload: any = {};
   if (existing) {
     try {
-      storedPayload = JSON.parse(existing.payload_json);
+      storedPayload = decodeDraftPayloadJson(existing.payload_json);
     } catch {}
   }
 
@@ -551,17 +568,19 @@ export function upsertProjectDraft(
     data: input
   };
 
+  const encryptedPayload = seal(JSON.stringify(updatedPayload));
+
   if (existing) {
     db.prepare(`
       UPDATE fenix_project_drafts 
       SET status = ?, edificacao_mode = ?, edificacao_id = ?, payload_json = ?, updated_at = ?
       WHERE id = ? AND user_id = ?
-    `).run(status, edificacaoMode, edificacaoId, JSON.stringify(updatedPayload), now, draftId, userId);
+    `).run(status, edificacaoMode, edificacaoId, encryptedPayload, now, draftId, userId);
   } else {
     db.prepare(`
       INSERT INTO fenix_project_drafts (id, user_id, status, edificacao_mode, edificacao_id, payload_json, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(draftId, userId, status, edificacaoMode, edificacaoId, JSON.stringify(updatedPayload), now, now);
+    `).run(draftId, userId, status, edificacaoMode, edificacaoId, encryptedPayload, now, now);
   }
 
   return getProjectDraft(userId, draftId)!;
@@ -580,7 +599,7 @@ export function updateDraftSimulation(
     .get(id, userId) as any;
   let storedPayload: any = {};
   try {
-    storedPayload = JSON.parse(row?.payload_json || '{}');
+    storedPayload = decodeDraftPayloadJson(row?.payload_json || '{}');
   } catch {}
 
   const nextStatus = simulationResult.valid ? 'simulated' : 'draft';
@@ -600,11 +619,13 @@ export function updateDraftSimulation(
     fenixPayload: simulationResult.fenixPayload
   };
 
+  const encryptedPayload = seal(JSON.stringify(storedPayload));
+
   db.prepare(`
     UPDATE fenix_project_drafts 
     SET status = ?, payload_json = ?, updated_at = ?
     WHERE id = ? AND user_id = ?
-  `).run(nextStatus, JSON.stringify(storedPayload), now, id, userId);
+  `).run(nextStatus, encryptedPayload, now, id, userId);
 
   return getProjectDraft(userId, id);
 }
@@ -626,11 +647,12 @@ export function updateDraftSubmission(
     .get(id, userId) as any;
   let storedPayload: any = {};
   try {
-    storedPayload = JSON.parse(row?.payload_json || '{}');
+    storedPayload = decodeDraftPayloadJson(row?.payload_json || '{}');
   } catch {}
 
   const now = new Date().toISOString();
   storedPayload.lastSubmission = submissionResult;
+  const encryptedPayload = seal(JSON.stringify(storedPayload));
 
   if (submissionResult.ok && submissionResult.result) {
     db.prepare(`
@@ -640,7 +662,7 @@ export function updateDraftSubmission(
     `).run(
       submissionResult.result.id,
       submissionResult.result.num_projeto,
-      JSON.stringify(storedPayload),
+      encryptedPayload,
       now,
       id,
       userId
@@ -652,7 +674,7 @@ export function updateDraftSubmission(
       WHERE id = ? AND user_id = ?
     `).run(
       submissionResult.error || 'Falha desconhecida no envio ao Fênix.',
-      JSON.stringify(storedPayload),
+      encryptedPayload,
       now,
       id,
       userId
@@ -660,6 +682,40 @@ export function updateDraftSubmission(
   }
 
   return getProjectDraft(userId, id);
+}
+
+export function acquireDraftSubmissionLock(
+  userId: string,
+  draftId: string
+): { acquired: boolean; reason?: 'not_found' | 'already_submitted' | 'already_submitting' } {
+  const row = db
+    .prepare('SELECT status FROM fenix_project_drafts WHERE id = ? AND user_id = ?')
+    .get(draftId, userId) as { status: string } | undefined;
+
+  if (!row) {
+    return { acquired: false, reason: 'not_found' };
+  }
+  if (row.status === 'submitted') {
+    return { acquired: false, reason: 'already_submitted' };
+  }
+  if (row.status === 'submitting') {
+    return { acquired: false, reason: 'already_submitting' };
+  }
+
+  const now = new Date().toISOString();
+  const res = db
+    .prepare(
+      `UPDATE fenix_project_drafts 
+       SET status = 'submitting', updated_at = ?
+       WHERE id = ? AND user_id = ? AND status NOT IN ('submitted', 'submitting')`
+    )
+    .run(now, draftId, userId);
+
+  if (res.changes === 0) {
+    return { acquired: false, reason: 'already_submitting' };
+  }
+
+  return { acquired: true };
 }
 
 export function deleteProjectDraft(userId: string, id: string): boolean {
@@ -869,7 +925,8 @@ export async function lookupCnpjAndIt14(
     const cookieId = cookieMatch ? cookieMatch[1] : '';
     const { seed, timestamp } = (await handshakeRes.json()) as { seed: string; timestamp: number };
 
-    const signature = createHmac('sha256', 'calcrisco-client-secret-v1')
+    const secret = process.env.IT14_CLIENT_SECRET || 'calcrisco-client-secret-v1';
+    const signature = createHmac('sha256', secret)
       .update(`${seed}${timestamp}${cookieId}`)
       .digest('hex');
     const token = `${timestamp}:${seed}:${signature}`;

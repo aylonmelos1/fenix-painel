@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -224,6 +224,13 @@ export interface ProjectDraftModalProps {
   buildings?: Building[];
   onProjectSubmitted?: () => void;
   mode?: 'page' | 'modal';
+  copilotOpen?: boolean;
+  onToggleCopilot?: () => void;
+  onDraftContextChange?: (ctx: {
+    currentDraft: ProjectDraftInput;
+    applyPatch: (patch: NonNullable<DraftAiAssistantResponse['formPatch']>) => void;
+    isEditor: boolean;
+  } | null) => void;
 }
 
 export interface DraftAiAssistantResponse {
@@ -665,6 +672,76 @@ function formatCnae(val?: string): string {
   return digits;
 }
 
+// Parse inteligente de endereço para reaproveitamento de edificações existentes
+export function parseBuildingAddressString(rawAddress?: string | null): {
+  zip_code?: string;
+  public_place?: string;
+  number?: string;
+  district?: string;
+  complement?: string;
+} {
+  if (!rawAddress || typeof rawAddress !== 'string') return {};
+  const cleaned = rawAddress.trim();
+  if (!cleaned) return {};
+
+  let remaining = cleaned;
+  let zip_code: string | undefined;
+
+  const cepMatch = remaining.match(/\b(\d{5}-?\d{3})\b/);
+  if (cepMatch) {
+    zip_code = cepMatch[1].replace('-', '');
+    remaining = remaining.replace(cepMatch[0], '').trim();
+  }
+
+  const segments = remaining
+    .split(/[,–—]/)
+    .map((s) => s.trim())
+    .filter((s) => Boolean(s) && !/^(BA|Bahia)$/i.test(s));
+
+  let public_place: string | undefined;
+  let number: string | undefined;
+  let district: string | undefined;
+  let complement: string | undefined;
+
+  if (segments.length >= 1) {
+    const first = segments[0];
+    const numMatch = first.match(/^(.*?)(?:,\s*|\s+(?:n[ºo]?\s*)|\s+)(\d+|s\/?n\b)(.*)$/i);
+    if (numMatch && numMatch[1].trim() && numMatch[2]) {
+      public_place = numMatch[1].trim();
+      number = numMatch[2].trim();
+      if (numMatch[3]?.trim()) complement = numMatch[3].trim();
+    } else {
+      public_place = first;
+    }
+  }
+
+  if (segments.length >= 2) {
+    const second = segments[1];
+    if (!number && /^\s*(?:n[ºo]?\s*)?(\d+|s\/?n\b)\s*$/i.test(second)) {
+      number = second.replace(/n[ºo]?\s*/i, '').trim();
+    } else if (!district) {
+      district = second;
+    }
+  }
+
+  if (segments.length >= 3) {
+    const third = segments[2];
+    if (!district) {
+      district = third;
+    } else if (!complement) {
+      complement = third;
+    }
+  }
+
+  return {
+    ...(zip_code ? { zip_code } : {}),
+    ...(public_place ? { public_place } : {}),
+    ...(number ? { number } : {}),
+    ...(district ? { district } : {}),
+    ...(complement ? { complement } : {})
+  };
+}
+
 export const ProjectDraftPage = ProjectDraftModal;
 
 export function ProjectDraftModal({
@@ -673,7 +750,10 @@ export function ProjectDraftModal({
   onClose,
   buildings = [],
   onProjectSubmitted,
-  mode = 'page'
+  mode = 'page',
+  copilotOpen: externalCopilotOpen,
+  onToggleCopilot,
+  onDraftContextChange
 }: ProjectDraftModalProps) {
   const isOpen = Boolean(open ?? legacyIsOpen);
   const isPage = mode === 'page';
@@ -719,11 +799,75 @@ export function ProjectDraftModal({
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // Estados do Copiloto IA Integrado
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [localCopilotOpen, setLocalCopilotOpen] = useState(false);
+  const copilotOpen = externalCopilotOpen !== undefined ? externalCopilotOpen : localCopilotOpen;
+  const toggleCopilot = onToggleCopilot || (() => setLocalCopilotOpen((prev) => !prev));
+
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotThinking, setCopilotThinking] = useState<string>('');
   const [copilotPrompt, setCopilotPrompt] = useState('');
   const [fieldFlashKeys, setFieldFlashKeys] = useState<Set<string>>(new Set());
+
+  // Aplicação reativa de patch de rascunho
+  const applyFormPatch = useCallback((patch: NonNullable<DraftAiAssistantResponse['formPatch']>) => {
+    const modifiedKeys = new Set<string>();
+
+    setFormData((prev) => {
+      const next = { ...prev };
+      if (patch.name) {
+        next.name = patch.name;
+        modifiedKeys.add('name');
+      }
+      if (patch.edification) {
+        next.edification = { ...next.edification, ...patch.edification };
+        modifiedKeys.add('edification');
+      }
+      if (patch.address) {
+        next.address = { ...next.address, ...patch.address };
+        modifiedKeys.add('address');
+      }
+      if (patch.occupation) {
+        next.occupation = { ...next.occupation, ...patch.occupation };
+        modifiedKeys.add('occupation');
+      }
+      if (patch.responsavel) {
+        next.responsavel = { ...next.responsavel, ...patch.responsavel };
+        modifiedKeys.add('responsavel');
+      }
+      if (patch.securityMeasures) {
+        const nextMeasures = { ...next.securityMeasures };
+        Object.entries(patch.securityMeasures).forEach(([k, v]) => {
+          nextMeasures[k] = v ? 1 : 0;
+        });
+        next.securityMeasures = nextMeasures;
+        modifiedKeys.add('measures');
+      }
+      return next;
+    });
+
+    if (patch.step && (patch.step === 1 || patch.step === 2 || patch.step === 3)) {
+      setStep(patch.step);
+    }
+
+    setFieldFlashKeys(modifiedKeys);
+    setTimeout(() => setFieldFlashKeys(new Set()), 2600);
+    setToast({ message: 'Modificações da IA aplicadas ao formulário!', type: 'success' });
+  }, []);
+
+  // Notifica o Shell/Sidebar do Copiloto sobre o rascunho atual em edição
+  useEffect(() => {
+    onDraftContextChange?.({
+      currentDraft: formData,
+      applyPatch: applyFormPatch,
+      isEditor: view === 'editor'
+    });
+  }, [formData, applyFormPatch, view, onDraftContextChange]);
+
+  useEffect(() => {
+    return () => {
+      onDraftContextChange?.(null);
+    };
+  }, [onDraftContextChange]);
   const [copilotMessages, setCopilotMessages] = useState<Array<{
     role: 'user' | 'assistant';
     content: string;
@@ -1441,6 +1585,8 @@ export function ProjectDraftModal({
       }
     }
 
+    const parsedAddr = parseBuildingAddressString(selectedBuilding.address);
+
     setFormData((prev) => ({
       ...prev,
       edificacao_mode: 'existing',
@@ -1455,10 +1601,15 @@ export function ProjectDraftModal({
       address: {
         ...prev.address,
         county: matchedCountyName || prev.address.county,
-        municipio_id: matchedCountyId ?? prev.address.municipio_id
+        municipio_id: matchedCountyId ?? prev.address.municipio_id,
+        public_place: parsedAddr.public_place || prev.address.public_place,
+        number: parsedAddr.number || prev.address.number,
+        district: parsedAddr.district || prev.address.district,
+        complement: parsedAddr.complement || prev.address.complement,
+        zip_code: parsedAddr.zip_code || prev.address.zip_code
       }
     }));
-    showToast(`Edificação "${selectedBuilding.reference}" vinculada ao rascunho.`, 'info');
+    showToast(`Edificação "${selectedBuilding.reference}" vinculada ao rascunho com endereço pré-carregado.`, 'info');
   };
 
   // Preenchimento atalho dos dados da ABA Incêndio para proprietário / responsável
@@ -1734,7 +1885,7 @@ export function ProjectDraftModal({
         <button
           type="button"
           className="button button-outline button-xs"
-          onClick={() => setCopilotOpen(false)}
+          onClick={toggleCopilot}
         >
           <X size={14} /> Recolher
         </button>
@@ -3339,10 +3490,10 @@ export function ProjectDraftModal({
             <button
               type="button"
               className={`button button-horizon-ai ${copilotOpen ? 'active' : ''}`}
-              onClick={() => setCopilotOpen(!copilotOpen)}
-              title="Abrir o Copiloto IA especializado no CBMBA"
+              onClick={toggleCopilot}
+              title="Abrir o Copiloto IA na lateral direita"
             >
-              <Sparkles size={15} /> ✦ Copiloto IA do Cadastro
+              <Sparkles size={15} /> ✦ Copiloto IA
             </button>
             {view === 'list' ? (
               <>
@@ -3376,9 +3527,6 @@ export function ProjectDraftModal({
             <span>{toast.message}</span>
           </div>
         )}
-
-        {/* Painel do Copiloto IA */}
-        {copilotOpen && copilotPanel}
 
         {/* VIEW 1: LISTA DE RASCUNHOS NATIVA */}
         {view === 'list' && (
@@ -3448,7 +3596,7 @@ export function ProjectDraftModal({
             <button
               type="button"
               className={`button button-horizon-ai button-xs ${copilotOpen ? 'active' : ''}`}
-              onClick={() => setCopilotOpen(!copilotOpen)}
+              onClick={toggleCopilot}
               title="Abrir o Copiloto IA especializado no CBMBA"
             >
               <Sparkles size={14} /> ✦ Copiloto IA
@@ -3563,3 +3711,7 @@ export function ProjectDraftModal({
     </div>
   );
 }
+
+export default ProjectDraftModal;
+export { generateLocalAiAssistantFallback, INITIAL_EMPTY_DRAFT };
+
