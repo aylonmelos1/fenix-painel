@@ -7,7 +7,7 @@ import {
   Gauge, HelpCircle, Home, Info, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
   Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen,
   PanelRightClose, PanelRightOpen, Zap,
-  Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight
+  Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight, Square
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey } from './types';
@@ -1312,9 +1312,40 @@ function UnifiedCopilotSidebar({
 
   // ================= ESTADOS DO COPILOTO IA =================
   const [copilotLoading, setCopilotLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [copilotThinking, setCopilotThinking] = useState('');
   const [copilotPrompt, setCopilotPrompt] = useState('');
   const [appliedNotice, setAppliedNotice] = useState('');
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [isAssemblingPrompt, setIsAssemblingPrompt] = useState(false);
+  const [typewriterText, setTypewriterText] = useState('');
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const streamingIntervalRef = useRef<any>(null);
+  const streamingTargetTextRef = useRef<string>('');
+  const streamingDrainedLengthRef = useRef<number>(0);
+  const isStreamSourceDoneRef = useRef<boolean>(false);
+  const pendingDoneDataRef = useRef<{
+    suggestions?: string[];
+    appliedChangesSummary?: string[];
+    pendingPatch?: any;
+  } | null>(null);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const draftContentRef = useRef<HTMLDivElement>(null);
+  const assembleIntervalRef = useRef<any>(null);
+  const typewriterTimeoutRef = useRef<any>(null);
+  const lastPromptRef = useRef<string>('');
+
+  // Limpeza de timers e aborts ao desmontar
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+      if (streamingIntervalRef.current) clearInterval(streamingIntervalRef.current);
+      if (assembleIntervalRef.current) clearInterval(assembleIntervalRef.current);
+      if (typewriterTimeoutRef.current) clearTimeout(typewriterTimeoutRef.current);
+    };
+  }, []);
 
   const welcomeText = building
     ? `Olá! Sou o Copiloto IA do Fênix Painel. Estou com o contexto completo da edificação "${building.reference}" carregado. Posso analisar seus processos, explicar a situação dos documentos, resumir o histórico ou auxiliar em um novo enquadramento CBMBA. Como posso ajudar?`
@@ -1349,6 +1380,7 @@ function UnifiedCopilotSidebar({
     appliedChangesSummary?: string[];
     suggestions?: string[];
     pendingPatch?: any;
+    isStreaming?: boolean;
   }>>([
     {
       role: 'assistant',
@@ -1366,24 +1398,203 @@ function UnifiedCopilotSidebar({
     });
   }, [building?.id, isRegisterView]);
 
-  const draftContentRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (draftContentRef.current) {
       draftContentRef.current.scrollTop = draftContentRef.current.scrollHeight;
     }
-  }, [copilotMessages, copilotLoading]);
+  }, [copilotMessages, copilotLoading, isStreaming]);
 
-  const handleSendDraftPrompt = async (text: string) => {
+  // ================= TYPEWRITER ANIMADO NO PLACEHOLDER =================
+  const typewriterPhrases = building
+    ? [
+        'Explicar situação e documentos desta edificação...',
+        'Por que há documentos pendentes ou indisponíveis?',
+        'Resumir histórico e linha do tempo do processo...'
+      ]
+    : isRegisterView
+    ? [
+        'Cadastrar galpão de 620 m² ou evento temporário...',
+        'Sugerir e marcar medidas de proteção da IT-14...',
+        'Auto-revisar e corrigir pendências da tela...'
+      ]
+    : [
+        'Pergunte sobre processos, IT-14 ou cadastro no Fênix...',
+        'Quais processos precisam de atenção imediata?',
+        'Resumo geral da carteira de edificações...'
+      ];
+
+  useEffect(() => {
+    let isCancelled = false;
+    let phraseIdx = 0;
+    let charIdx = 0;
+    let isDeleting = false;
+
+    const tick = () => {
+      if (isCancelled) return;
+      const currentPhrase = typewriterPhrases[phraseIdx % typewriterPhrases.length];
+
+      if (!isDeleting) {
+        charIdx++;
+        setTypewriterText(currentPhrase.slice(0, charIdx));
+        if (charIdx >= currentPhrase.length) {
+          typewriterTimeoutRef.current = setTimeout(() => {
+            isDeleting = true;
+            tick();
+          }, 2400);
+          return;
+        }
+        typewriterTimeoutRef.current = setTimeout(tick, 45);
+      } else {
+        charIdx--;
+        setTypewriterText(currentPhrase.slice(0, charIdx));
+        if (charIdx <= 0) {
+          isDeleting = false;
+          phraseIdx++;
+          typewriterTimeoutRef.current = setTimeout(tick, 350);
+          return;
+        }
+        typewriterTimeoutRef.current = setTimeout(tick, 22);
+      }
+    };
+
+    typewriterTimeoutRef.current = setTimeout(tick, 300);
+
+    return () => {
+      isCancelled = true;
+      if (typewriterTimeoutRef.current) {
+        clearTimeout(typewriterTimeoutRef.current);
+      }
+    };
+  }, [building?.id, isRegisterView]);
+
+  // ================= PARAR ■ (ABORT STREAMING) =================
+  const handleStopPrompt = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    if (streamingIntervalRef.current) {
+      clearInterval(streamingIntervalRef.current);
+      streamingIntervalRef.current = null;
+    }
+    setIsStreaming(false);
+    setCopilotLoading(false);
+    setCopilotThinking('');
+    setCopilotMessages((prev) => {
+      const lastIdx = prev.length - 1;
+      if (lastIdx < 0 || prev[lastIdx].role !== 'assistant') return prev;
+      return [
+        ...prev.slice(0, lastIdx),
+        {
+          ...prev[lastIdx],
+          content: streamingTargetTextRef.current.slice(0, streamingDrainedLengthRef.current) || prev[lastIdx].content,
+          isStreaming: false
+        }
+      ];
+    });
+  }, []);
+
+  // ================= DRENADOR FLUIDO DE BUFFER COM CURSOR ▍ =================
+  const startDraining = useCallback(() => {
+    if (streamingIntervalRef.current) {
+      clearInterval(streamingIntervalRef.current);
+    }
+
+    streamingIntervalRef.current = setInterval(() => {
+      const target = streamingTargetTextRef.current;
+      const currentLen = streamingDrainedLengthRef.current;
+
+      if (currentLen < target.length) {
+        const remaining = target.length - currentLen;
+        // Drena de 3 a 6 caracteres por tick (16ms)
+        const step = Math.min(remaining, Math.max(3, Math.min(6, Math.ceil(remaining / 4))));
+        const nextLen = currentLen + step;
+        streamingDrainedLengthRef.current = nextLen;
+        const nextContent = target.slice(0, nextLen);
+
+        setCopilotMessages((prev) => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx < 0 || prev[lastIdx].role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            { ...prev[lastIdx], content: nextContent, isStreaming: true }
+          ];
+        });
+
+        if (draftContentRef.current) {
+          draftContentRef.current.scrollTop = draftContentRef.current.scrollHeight;
+        }
+      } else if (isStreamSourceDoneRef.current) {
+        // Fonte finalizou e todos os caracteres do buffer já foram drenados
+        clearInterval(streamingIntervalRef.current);
+        streamingIntervalRef.current = null;
+
+        const doneData = pendingDoneDataRef.current;
+        setCopilotMessages((prev) => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx < 0 || prev[lastIdx].role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            {
+              ...prev[lastIdx],
+              content: target || prev[lastIdx].content,
+              isStreaming: false,
+              suggestions: doneData?.suggestions || prev[lastIdx].suggestions || [],
+              appliedChangesSummary: doneData?.appliedChangesSummary || prev[lastIdx].appliedChangesSummary || [],
+              pendingPatch: doneData?.pendingPatch !== undefined ? doneData.pendingPatch : prev[lastIdx].pendingPatch
+            }
+          ];
+        });
+
+        setIsStreaming(false);
+        setCopilotLoading(false);
+        setCopilotThinking('');
+
+        if (draftContentRef.current) {
+          draftContentRef.current.scrollTop = draftContentRef.current.scrollHeight;
+        }
+      }
+    }, 16);
+  }, []);
+
+  // ================= ENVIO COM SSE STREAMING REAL + FALLBACKS =================
+  const handleSendDraftPrompt = useCallback(async (text: string) => {
     const userMessage = text.trim();
     if (!userMessage || copilotLoading) return;
 
+    if (assembleIntervalRef.current) {
+      clearInterval(assembleIntervalRef.current);
+      assembleIntervalRef.current = null;
+    }
+    setIsAssemblingPrompt(false);
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const signal = abortController.signal;
+
     setCopilotLoading(true);
+    setIsStreaming(true);
     setCopilotThinking('Analisando diretrizes do Decreto 16.302/BA e dados do Fênix...');
     setCopilotPrompt('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
     setAppliedNotice('');
 
-    setCopilotMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    streamingTargetTextRef.current = '';
+    streamingDrainedLengthRef.current = 0;
+    isStreamSourceDoneRef.current = false;
+    pendingDoneDataRef.current = null;
+
+    setCopilotMessages((prev) => [
+      ...prev,
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: '', thinkingSteps: [], isStreaming: true }
+    ]);
+
+    startDraining();
 
     const isMatchingDetail = Boolean(buildingDetail && building && buildingDetail.building.id === building.id);
 
@@ -1443,39 +1654,129 @@ function UnifiedCopilotSidebar({
         }
       : null;
 
-    try {
-      let aiResult: DraftAiAssistantResponse;
+    const requestPayload = {
+      message: userMessage,
+      currentDraft: draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
+      history: copilotMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+      buildingId: building?.id || null,
+      systemContext: {
+        currentView: currentView || (isRegisterView ? 'register' : 'buildings'),
+        activeBuilding: buildingPayload,
+        metricsSummary: metrics ? {
+          buildings: metrics.buildings,
+          processes: metrics.processes,
+          attention: metrics.attention,
+          analysis: metrics.analysis
+        } : null,
+        buildingsOverview: (buildings || []).slice(0, 15).map((b) => ({
+          id: b.id,
+          reference: b.reference,
+          municipality: b.municipality,
+          status: b.status,
+          stage: b.stage
+        }))
+      }
+    };
 
-      try {
-        aiResult = await api<DraftAiAssistantResponse>('/api/drafts/ai-assistant', {
-          method: 'POST',
-          body: JSON.stringify({
-            message: userMessage,
-            currentDraft: draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
-            history: copilotMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
-            buildingId: building?.id || null,
-            systemContext: {
-              currentView: currentView || (isRegisterView ? 'register' : 'buildings'),
-              activeBuilding: buildingPayload,
-              metricsSummary: metrics ? {
-                buildings: metrics.buildings,
-                processes: metrics.processes,
-                attention: metrics.attention,
-                analysis: metrics.analysis
-              } : null,
-              buildingsOverview: (buildings || []).slice(0, 15).map((b) => ({
-                id: b.id,
-                reference: b.reference,
-                municipality: b.municipality,
-                status: b.status,
-                stage: b.stage
-              }))
+    let sseCompleted = false;
+
+    try {
+      // 1. Tenta SSE streaming real (/api/drafts/ai-assistant/stream)
+      const sseRes = await fetch('/api/drafts/ai-assistant/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
+        },
+        body: JSON.stringify(requestPayload),
+        signal
+      });
+
+      if (!sseRes.ok || !sseRes.body) {
+        throw new Error(`SSE stream indisponível (${sseRes.status})`);
+      }
+
+      const reader = sseRes.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const jsonStr = trimmed.slice(5).trim();
+          if (!jsonStr) continue;
+
+          try {
+            const event = JSON.parse(jsonStr);
+            if (event.type === 'thinking') {
+              if (event.step) {
+                setCopilotThinking(event.step);
+                setCopilotMessages((prev) => {
+                  const lastIdx = prev.length - 1;
+                  if (lastIdx < 0 || prev[lastIdx].role !== 'assistant') return prev;
+                  const steps = prev[lastIdx].thinkingSteps || [];
+                  if (!steps.includes(event.step)) {
+                    return [
+                      ...prev.slice(0, lastIdx),
+                      { ...prev[lastIdx], thinkingSteps: [...steps, event.step] }
+                    ];
+                  }
+                  return prev;
+                });
+              }
+            } else if (event.type === 'delta') {
+              if (event.text) {
+                streamingTargetTextRef.current += event.text;
+              }
+            } else if (event.type === 'done') {
+              sseCompleted = true;
+              if (event.reply) {
+                streamingTargetTextRef.current = event.reply;
+              }
+              if (event.formPatch && draftContext?.applyPatch && isRegisterView) {
+                draftContext.applyPatch(event.formPatch);
+                setAppliedNotice('Alterações aplicadas na tela de cadastro!');
+                setTimeout(() => setAppliedNotice(''), 3500);
+              }
+              pendingDoneDataRef.current = {
+                suggestions: event.suggestions || [],
+                appliedChangesSummary: event.appliedChangesSummary || event.appliedChanges || [],
+                pendingPatch: !draftContext?.applyPatch && event.formPatch ? event.formPatch : undefined
+              };
+              isStreamSourceDoneRef.current = true;
+            } else if (event.type === 'error') {
+              throw new Error(event.error || 'Falha no streaming');
             }
-          })
+          } catch {
+            // Linha corrompida ou JSON parcial ignorado
+          }
+        }
+      }
+
+      if (!sseCompleted && !signal.aborted) {
+        isStreamSourceDoneRef.current = true;
+      }
+    } catch {
+      if (signal.aborted) return;
+
+      // 2. Fallback automático para POST /api/drafts/ai-assistant ou generateLocalAiAssistantFallback
+      let fallbackRes: DraftAiAssistantResponse;
+      try {
+        fallbackRes = await api<DraftAiAssistantResponse>('/api/drafts/ai-assistant', {
+          method: 'POST',
+          body: JSON.stringify(requestPayload),
+          signal
         });
       } catch {
-        // Fallback local robusto e contextual
-        aiResult = generateLocalAiAssistantFallback(
+        if (signal.aborted) return;
+        fallbackRes = generateLocalAiAssistantFallback(
           userMessage,
           draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
           Number(draftContext?.currentDraft?.edification?.building_area) || Number(buildingPayload?.area) || 500,
@@ -1484,46 +1785,109 @@ function UnifiedCopilotSidebar({
         );
       }
 
-      // Se temos o rascunho ativo aberto na tela de cadastro, aplicamos instantaneamente!
-      if (aiResult.formPatch && draftContext?.applyPatch && isRegisterView) {
-        draftContext.applyPatch(aiResult.formPatch);
+      if (signal.aborted) return;
+
+      if (fallbackRes.formPatch && draftContext?.applyPatch && isRegisterView) {
+        draftContext.applyPatch(fallbackRes.formPatch);
         setAppliedNotice('Alterações aplicadas na tela de cadastro!');
         setTimeout(() => setAppliedNotice(''), 3500);
       }
 
-      setCopilotMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: aiResult.reply,
-          thinkingSteps: aiResult.thinkingSteps,
-          appliedChangesSummary: aiResult.appliedChangesSummary,
-          suggestions: aiResult.suggestions,
-          pendingPatch: !draftContext?.applyPatch && aiResult.formPatch ? aiResult.formPatch : undefined
-        }
-      ]);
-    } catch {
-      setCopilotMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Desculpe, ocorreu uma instabilidade ao consultar as diretrizes CBMBA. Pode tentar novamente?'
-        }
-      ]);
-    } finally {
-      setCopilotLoading(false);
-      setCopilotThinking('');
-    }
-  };
+      streamingTargetTextRef.current = fallbackRes.reply;
+      pendingDoneDataRef.current = {
+        suggestions: fallbackRes.suggestions || [],
+        appliedChangesSummary: fallbackRes.appliedChangesSummary || [],
+        pendingPatch: !draftContext?.applyPatch && fallbackRes.formPatch ? fallbackRes.formPatch : undefined
+      };
 
-  // Se initialPrompt for passado e a barra abrir, dispara automaticamente!
-  const lastPromptRef = useRef<string>('');
+      if (fallbackRes.thinkingSteps?.length) {
+        setCopilotMessages((prev) => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx < 0 || prev[lastIdx].role !== 'assistant') return prev;
+          return [
+            ...prev.slice(0, lastIdx),
+            { ...prev[lastIdx], thinkingSteps: fallbackRes.thinkingSteps }
+          ];
+        });
+      }
+
+      isStreamSourceDoneRef.current = true;
+    }
+  }, [
+    copilotLoading,
+    copilotMessages,
+    building,
+    buildingDetail,
+    currentView,
+    buildings,
+    metrics,
+    processes,
+    draftContext,
+    isRegisterView,
+    startDraining
+  ]);
+
+  // ================= ANIMAÇÃO DO PROMPT SENDO MONTADO (HORIZONX) =================
+  const animateAssembleAndSend = useCallback((targetText: string) => {
+    const text = targetText.trim();
+    if (!text || copilotLoading || isAssemblingPrompt) return;
+
+    if (assembleIntervalRef.current) {
+      clearInterval(assembleIntervalRef.current);
+    }
+
+    setIsAssemblingPrompt(true);
+    setComposerFocused(true);
+    setCopilotPrompt('');
+
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.style.height = 'auto';
+    }
+
+    const duration = 240; // ~240ms no total (faixa 220ms - 280ms)
+    const stepInterval = 18;
+    const totalSteps = Math.max(8, Math.floor(duration / stepInterval));
+    let currentStep = 0;
+
+    assembleIntervalRef.current = setInterval(() => {
+      currentStep += 1;
+      const progress = Math.min(1, currentStep / totalSteps);
+      const charsToShow = Math.ceil(progress * text.length);
+      const slice = text.slice(0, charsToShow);
+
+      setCopilotPrompt(slice);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+      }
+
+      if (currentStep >= totalSteps) {
+        clearInterval(assembleIntervalRef.current);
+        assembleIntervalRef.current = null;
+        setCopilotPrompt(text);
+        setTimeout(() => {
+          setIsAssemblingPrompt(false);
+          void handleSendDraftPrompt(text);
+        }, 40);
+      }
+    }, stepInterval);
+  }, [copilotLoading, isAssemblingPrompt, handleSendDraftPrompt]);
+
+  // Se initialPrompt for passado e a barra abrir, dispara com a montagem animada!
   useEffect(() => {
     if (isOpen && initialPrompt && initialPrompt !== lastPromptRef.current) {
       lastPromptRef.current = initialPrompt;
-      void handleSendDraftPrompt(initialPrompt);
+      animateAssembleAndSend(initialPrompt);
     }
-  }, [isOpen, initialPrompt]);
+  }, [isOpen, initialPrompt, animateAssembleAndSend]);
+
+  const isComposerExpanded =
+    composerFocused ||
+    Boolean(copilotPrompt.trim()) ||
+    isAssemblingPrompt ||
+    copilotLoading ||
+    isStreaming;
 
   return (
     <aside
@@ -1573,7 +1937,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action copilot-chip-highlight"
-                onClick={() => void handleSendDraftPrompt(`Explicar situação da edificação ${building.reference}`)}
+                onClick={() => animateAssembleAndSend(`Explicar situação da edificação ${building.reference}`)}
                 disabled={copilotLoading}
               >
                 <Sparkles size={13} /> Explicar situação de {building.reference}
@@ -1581,7 +1945,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Por que há documentos indisponíveis?')}
+                onClick={() => animateAssembleAndSend('Por que há documentos indisponíveis?')}
                 disabled={copilotLoading}
               >
                 <FileText size={13} /> Documentos indisponíveis?
@@ -1589,7 +1953,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt(`Resumir linha do tempo do processo de ${building.reference}`)}
+                onClick={() => animateAssembleAndSend(`Resumir linha do tempo do processo de ${building.reference}`)}
                 disabled={copilotLoading}
               >
                 <CalendarClock size={13} /> Resumir linha do tempo
@@ -1597,7 +1961,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt(`Preencher novo cadastro com os dados da edificação ${building.reference}`)}
+                onClick={() => animateAssembleAndSend(`Preencher novo cadastro com os dados da edificação ${building.reference}`)}
                 disabled={copilotLoading}
               >
                 <Building2 size={13} /> Preencher cadastro com esta edificação
@@ -1608,7 +1972,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Auto-revisar e corrigir pendências da tela')}
+                onClick={() => animateAssembleAndSend('Auto-revisar e corrigir pendências da tela')}
                 disabled={copilotLoading}
               >
                 <Sparkles size={13} /> Auto-revisar pendências
@@ -1616,7 +1980,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Sugerir e marcar medidas da IT-14')}
+                onClick={() => animateAssembleAndSend('Sugerir e marcar medidas da IT-14')}
                 disabled={copilotLoading}
               >
                 <ShieldCheck size={13} /> Sugerir medidas IT-14
@@ -1624,7 +1988,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Exemplo: Galpão 620 m² em Feira de Santana')}
+                onClick={() => animateAssembleAndSend('Exemplo: Galpão 620 m² em Feira de Santana')}
                 disabled={copilotLoading}
               >
                 <Building2 size={13} /> Galpão 620 m² (FSA)
@@ -1632,7 +1996,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Explicar meu enquadramento atual')}
+                onClick={() => animateAssembleAndSend('Explicar meu enquadramento atual')}
                 disabled={copilotLoading}
               >
                 <Info size={13} /> Explicar enquadramento
@@ -1643,7 +2007,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action copilot-chip-highlight"
-                onClick={() => void handleSendDraftPrompt('Analise o resumo geral da carteira de edificações e processos acompanhados.')}
+                onClick={() => animateAssembleAndSend('Analise o resumo geral da carteira de edificações e processos acompanhados.')}
                 disabled={copilotLoading}
               >
                 <Sparkles size={13} /> Resumo geral da carteira
@@ -1651,7 +2015,7 @@ function UnifiedCopilotSidebar({
               <button
                 type="button"
                 className="copilot-chip-action"
-                onClick={() => void handleSendDraftPrompt('Quais processos estão notificados ou precisam de atenção imediata?')}
+                onClick={() => animateAssembleAndSend('Quais processos estão notificados ou precisam de atenção imediata?')}
                 disabled={copilotLoading}
               >
                 <CircleAlert size={13} /> Processos com pendência
@@ -1671,7 +2035,17 @@ function UnifiedCopilotSidebar({
         <div className="copilot-chat-history">
           {copilotMessages.map((msg, idx) => (
             <div key={idx} className={`copilot-message message-${msg.role}`}>
-              <div className="message-text">{msg.content}</div>
+              {msg.isStreaming && !msg.content ? (
+                <div className="ai-thinking-pill">
+                  <LoaderCircle size={14} className="spin text-teal" />
+                  <span className="text-rainbow-shimmer">{copilotThinking || 'Consultando diretrizes CBMBA...'}</span>
+                </div>
+              ) : (
+                <div className="message-text">
+                  {msg.content}
+                  {msg.isStreaming && <span className="copilot-streaming-caret" aria-hidden="true">▍</span>}
+                </div>
+              )}
 
               {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
                 <div className="copilot-thinking-box">
@@ -1702,14 +2076,14 @@ function UnifiedCopilotSidebar({
                 </button>
               )}
 
-              {msg.suggestions && msg.suggestions.length > 0 && (
+              {msg.suggestions && msg.suggestions.length > 0 && !msg.isStreaming && (
                 <div className="copilot-chips-row mt-1">
                   {msg.suggestions.map((sug, sgIdx) => (
                     <button
                       key={sgIdx}
                       type="button"
                       className="copilot-chip-action"
-                      onClick={() => void handleSendDraftPrompt(sug)}
+                      onClick={() => animateAssembleAndSend(sug)}
                       disabled={copilotLoading}
                     >
                       {sug}
@@ -1719,51 +2093,136 @@ function UnifiedCopilotSidebar({
               )}
             </div>
           ))}
-
-          {copilotLoading && (
-            <div className="copilot-message message-assistant">
-              <div className="ai-thinking-pill">
-                <LoaderCircle size={15} className="spin text-teal" />
-                <span className="text-rainbow-shimmer">{copilotThinking || 'Processando raciocínio com IA...'}</span>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
-      <form
-        className="copilot-sidebar-footer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (copilotPrompt.trim()) {
-            void handleSendDraftPrompt(copilotPrompt);
-          }
-        }}
-      >
-        <div className="copilot-input-row">
-          <input
-            type="text"
-            placeholder={
-              isRegisterView
-                ? "Ex: 'Muda a área para 520m² e marca hidrantes'..."
-                : building
-                ? `Pergunte sobre ${building.reference}, documentos ou processos...`
-                : "Pergunte sobre seus processos, carteira ou consulte a IT-14..."
-            }
-            value={copilotPrompt}
-            onChange={(e) => setCopilotPrompt(e.target.value)}
-            disabled={copilotLoading}
-          />
-          <button
-            type="submit"
-            className="button button-horizon-ai"
-            disabled={copilotLoading || !copilotPrompt.trim()}
-          >
-            {copilotLoading ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
-            <span>Enviar</span>
-          </button>
+      <footer className="copilot-sidebar-footer">
+        <div className={`copilot-sidebar-composer ${isComposerExpanded ? 'expanded' : 'collapsed'} ${copilotLoading ? 'loading' : ''}`}>
+          {!isComposerExpanded ? (
+            <div
+              className="copilot-composer-pill-trigger"
+              onClick={() => {
+                setComposerFocused(true);
+                setTimeout(() => textareaRef.current?.focus(), 40);
+              }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setComposerFocused(true);
+                  setTimeout(() => textareaRef.current?.focus(), 40);
+                }
+              }}
+            >
+              <div className="copilot-composer-pill-content">
+                <Sparkles size={14} className="copilot-composer-sparkle" />
+                <span className="copilot-composer-typewriter-text">
+                  {typewriterText}
+                  <span className="composer-typewriter-cursor">|</span>
+                </span>
+              </div>
+              <div className="copilot-composer-pill-badge">
+                ✦ Prompt Composer
+              </div>
+            </div>
+          ) : (
+            <form
+              className="copilot-composer-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (copilotLoading || isStreaming) {
+                  handleStopPrompt();
+                } else if (copilotPrompt.trim()) {
+                  void handleSendDraftPrompt(copilotPrompt);
+                }
+              }}
+            >
+              <div className="copilot-composer-input-area">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  value={copilotPrompt}
+                  placeholder={
+                    isRegisterView
+                      ? "Ex: 'Muda a área para 520m² e marca hidrantes'..."
+                      : building
+                      ? `Pergunte sobre ${building.reference}, documentos ou processos...`
+                      : "Pergunte sobre seus processos, carteira ou consulte a IT-14..."
+                  }
+                  onChange={(e) => {
+                    setCopilotPrompt(e.target.value);
+                    const el = e.target;
+                    el.style.height = 'auto';
+                    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+                  }}
+                  onFocus={() => setComposerFocused(true)}
+                  onBlur={() => {
+                    if (!copilotPrompt.trim() && !isAssemblingPrompt && !copilotLoading && !isStreaming) {
+                      setComposerFocused(false);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (copilotPrompt.trim() && !copilotLoading && !isAssemblingPrompt) {
+                        void handleSendDraftPrompt(copilotPrompt);
+                      }
+                    }
+                  }}
+                  disabled={copilotLoading}
+                />
+              </div>
+
+              <div className="copilot-composer-bottom-bar">
+                <div className="copilot-composer-context-pills">
+                  <span className="composer-pill-tag tag-primary">
+                    ✦ CBMBA · IT-14
+                  </span>
+                  {building ? (
+                    <span className="composer-pill-tag tag-secondary" title={building.reference}>
+                      <Building2 size={11} /> {building.reference.length > 18 ? building.reference.slice(0, 16) + '...' : building.reference}
+                    </span>
+                  ) : isRegisterView ? (
+                    <span className="composer-pill-tag tag-secondary">
+                      <FileText size={11} /> Cadastro
+                    </span>
+                  ) : (
+                    <span className="composer-pill-tag tag-secondary">
+                      <Sparkles size={11} /> Geral
+                    </span>
+                  )}
+                </div>
+
+                <div className="copilot-composer-actions">
+                  {copilotLoading || isStreaming ? (
+                    <button
+                      type="button"
+                      className="button-composer-action button-composer-stop"
+                      onClick={handleStopPrompt}
+                      title="Parar resposta da IA"
+                      aria-label="Parar resposta da IA"
+                    >
+                      <Square size={10} fill="currentColor" />
+                      <span>Parar</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      className="button-composer-action button-composer-send"
+                      disabled={!copilotPrompt.trim() || isAssemblingPrompt}
+                      title="Enviar prompt"
+                      aria-label="Enviar prompt"
+                    >
+                      <Send size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </form>
+          )}
         </div>
-      </form>
+      </footer>
     </aside>
   );
 }

@@ -3047,63 +3047,215 @@
   "projectTypes": [
     {
       "id": 1,
+      "code": "PT",
+      "mode": "pt",
+      "temporary": false,
+      "name": "Projeto Técnico (PT)",
       "sigla": "PT",
-      "descricao": "Projeto Técnico"
+      "descricao": "Projeto Técnico (PT)"
     },
     {
       "id": 2,
+      "code": "PTIOT",
+      "mode": "pt",
+      "temporary": true,
+      "name": "Projeto Técnico para Instalação e Ocupação Temporária (PTIOT)",
       "sigla": "PTIOT",
-      "descricao": "Projeto Técnico para Instalação e Ocupação Temporária"
+      "descricao": "Projeto Técnico para Instalação e Ocupação Temporária (PTIOT)"
     },
     {
       "id": 3,
+      "code": "PTOTEP",
+      "mode": "pt",
+      "temporary": true,
+      "name": "Projeto Técnico para Ocupação Temporária em Edificação Permanente (PTOTEP)",
       "sigla": "PTOTEP",
-      "descricao": "Projeto Técnico para Ocupação Temporária em Edificação Permanente"
+      "descricao": "Projeto Técnico para Ocupação Temporária em Edificação Permanente (PTOTEP)"
     },
     {
       "id": 4,
+      "code": "PTSCLCB1",
+      "mode": "pts",
+      "temporary": false,
+      "name": "Projeto Técnico Simplificado com área até 200 m e altura térrea (PTSCLCB1)",
       "sigla": "PTSCLCB1",
-      "descricao": "Projeto Técnico Simplificado com área até 200 m e altura térrea"
+      "descricao": "Projeto Técnico Simplificado com área até 200 m e altura térrea (PTSCLCB1)"
     },
     {
       "id": 5,
+      "code": "PTSCLCB2",
+      "mode": "pts",
+      "temporary": false,
+      "name": "Projeto Técnico Simplificado com área menor do que 750 m e altura térrea até 3 pavimentos (PTSCLCB2)",
       "sigla": "PTSCLCB2",
-      "descricao": "Projeto Técnico Simplificado com área menor do que 750 m e altura térrea até 3 pavimentos"
+      "descricao": "Projeto Técnico Simplificado com área menor do que 750 m e altura térrea até 3 pavimentos (PTSCLCB2)"
     },
     {
       "id": 6,
+      "code": "PTSAVCB",
+      "mode": "pts",
+      "temporary": false,
+      "name": "Projeto Técnico Simplificado que se regulariza com vistoria (PTSAVCB)",
       "sigla": "PTSAVCB",
-      "descricao": "Projeto Técnico Simplificado que se regulariza com vistoria"
+      "descricao": "Projeto Técnico Simplificado que se regulariza com vistoria (PTSAVCB)"
     },
     {
       "id": 7,
+      "code": "PTSAVCBPTIOT",
+      "mode": "pts",
+      "temporary": true,
+      "name": "Projeto Técnico Simplificado para Instalação e Ocupação Temporária (PTSAVCBPTIOT)",
       "sigla": "PTSAVCBPTIOT",
-      "descricao": "Projeto Técnico Simplificado para Instalação e Ocupação Temporária"
+      "descricao": "Projeto Técnico Simplificado para Instalação e Ocupação Temporária (PTSAVCBPTIOT)"
     },
     {
       "id": 8,
+      "code": "PTSAVCBPTOTEP",
+      "mode": "pts",
+      "temporary": true,
+      "name": "Projeto Técnico Simplificado para Ocupação Temporária em Edificação Permanente (PTSAVCBPTOTEP)",
       "sigla": "PTSAVCBPTOTEP",
-      "descricao": "Projeto Técnico Simplificado para Ocupação Temporária em Edificação Permanente"
+      "descricao": "Projeto Técnico Simplificado para Ocupação Temporária em Edificação Permanente (PTSAVCBPTOTEP)"
     }
+  ],
+  "securityMeasures": [
+    { "key": "iluminacao_emerg", "name": "Iluminação de Emergência", "ptsAllowed": true },
+    { "key": "brigada_incendio", "name": "Brigada de incêndio", "ptsAllowed": true },
+    { "key": "sinal_emerg", "name": "Sinalização de Emergência", "ptsAllowed": true },
+    { "key": "extintores", "name": "Extintores", "ptsAllowed": true },
+    { "key": "saidas_emerg", "name": "Saídas de emergência", "ptsAllowed": true },
+    { "key": "control_mat_acab", "name": "Controle de material de acabamento", "ptsAllowed": true },
+    { "key": "comp_horizontal", "name": "Compartimentação horizontal", "ptsAllowed": false },
+    { "key": "comp_vertical", "name": "Compartimentação vertical", "ptsAllowed": false },
+    { "key": "separacao_edific", "name": "Separação entre as edificações", "ptsAllowed": false },
+    { "key": "acesso_viatura", "name": "Acesso de viatura do Corpo de Bombeiros", "ptsAllowed": false },
+    { "key": "resfriamento", "name": "Resfriamento", "ptsAllowed": false },
+    { "key": "hidrante_mangot", "name": "Hidrantes e mangotinhos", "ptsAllowed": false },
+    { "key": "deteccao_incendio", "name": "Detecção de incêndio", "ptsAllowed": false },
+    { "key": "chuveiros_auto", "name": "Chuveiros automáticos", "ptsAllowed": false },
+    { "key": "elevador_emerg", "name": "Elevador de emergência", "ptsAllowed": false },
+    { "key": "seguranca_estrutural", "name": "Segurança estrutural nas edificações", "ptsAllowed": false },
+    { "key": "control_fumaca", "name": "Controle de fumaça", "ptsAllowed": false },
+    { "key": "espuma", "name": "Espuma", "ptsAllowed": false },
+    { "key": "plano_emerg_incendio", "name": "Plano de emergência contra incêndio", "ptsAllowed": false },
+    { "key": "sis_fixo_gases", "name": "Sistema fixo de gases limpos e CO2", "ptsAllowed": false },
+    { "key": "alarme_incendio", "name": "Alarme de incêndio", "ptsAllowed": false },
+    { "key": "sis_prot_cont_desc_elet", "name": "Sistema de proteção contra descargas elétricas", "ptsAllowed": false }
   ],
   "exemptions": [
     {
       "id": 1,
+      "name": "Sem isenção",
       "descricao": "Sem isenção"
     },
     {
       "id": 2,
+      "name": "Edificação Isenta",
       "descricao": "Edificação Isenta"
     }
   ],
   "decrees": [
     {
       "id": 1,
+      "name": "Anterior a 2015",
       "descricao": "Anterior a 2015"
     },
     {
       "id": 2,
+      "name": "Decreto 16.302/2015",
       "descricao": "Decreto 16.302/2015"
+    }
+  ],
+  "stateDecrees": [
+    {
+      "id": 2,
+      "name": "Decreto 16.302/2015",
+      "descricao": "Decreto 16.302/2015"
+    },
+    {
+      "id": 1,
+      "name": "Anterior a 2015",
+      "descricao": "Anterior a 2015"
+    }
+  ],
+  "institutionSizes": [
+    "MEI",
+    "ME",
+    "EPP",
+    "Médio Porte",
+    "Grande Empresa",
+    "Outros"
+  ],
+  "glpClasses": [
+    {
+      "id": "classe_1",
+      "name": "Classe I",
+      "description": "Até 520 kg de GLP",
+      "maxKg": 520
+    },
+    {
+      "id": "classe_2",
+      "name": "Classe II",
+      "description": "De 521 kg até 1.560 kg de GLP",
+      "maxKg": 1560
+    },
+    {
+      "id": "classe_3",
+      "name": "Classe III",
+      "description": "De 1.561 kg até 6.240 kg de GLP",
+      "maxKg": 6240
+    },
+    {
+      "id": "classe_4",
+      "name": "Classe IV",
+      "description": "De 6.241 kg até 12.480 kg de GLP",
+      "maxKg": 12480
+    },
+    {
+      "id": "classe_5",
+      "name": "Classe V",
+      "description": "De 12.481 kg até 24.960 kg de GLP",
+      "maxKg": 24960
+    },
+    {
+      "id": "classe_6",
+      "name": "Classe VI",
+      "description": "De 24.961 kg até 49.920 kg de GLP",
+      "maxKg": 49920
+    },
+    {
+      "id": "classe_7",
+      "name": "Classe VII",
+      "description": "De 49.921 kg até 99.840 kg de GLP",
+      "maxKg": 99840
+    },
+    {
+      "id": "classe_especial",
+      "name": "Classe ESPECIAL",
+      "description": "Acima de 99.840 kg de GLP",
+      "maxKg": null
+    }
+  ],
+  "specialRisks": [
+    {
+      "key": "liquidos_inflamaveis",
+      "name": "Líquidos Inflamáveis / Combustíveis"
+    },
+    {
+      "key": "gas_liquefeito_petroleo",
+      "name": "Gás Liquefeito de Petróleo (GLP)"
+    },
+    {
+      "key": "produtos_perigosos",
+      "name": "Produtos Perigosos"
+    },
+    {
+      "key": "fogos_artificio",
+      "name": "Fogos de Artifício / Pirotecnia"
+    },
+    {
+      "key": "vaso_pressao",
+      "name": "Vasos sob Pressão / Caldeiras"
     }
   ],
   "heights": [

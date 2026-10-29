@@ -56,18 +56,43 @@ export interface FenixDivisionGroup {
 
 export interface FenixProjectType {
   id: number;
-  sigla: string;
-  descricao: string;
+  code: string;
+  mode: 'pt' | 'pts';
+  temporary: boolean;
+  name: string;
+  sigla?: string;
+  descricao?: string;
+}
+
+export interface FenixSecurityMeasureDomain {
+  key: string;
+  name: string;
+  ptsAllowed: boolean;
 }
 
 export interface FenixExemption {
   id: number;
-  descricao: string;
+  name?: string;
+  descricao?: string;
 }
 
 export interface FenixDecree {
   id: number;
+  name?: string;
+  description?: string;
+  descricao?: string;
+}
+
+export interface FenixGlpClass {
+  id: string;
+  name: string;
   description: string;
+  maxKg: number | null;
+}
+
+export interface FenixSpecialRisk {
+  key: string;
+  name: string;
 }
 
 export interface FenixDomains {
@@ -75,8 +100,13 @@ export interface FenixDomains {
   occupationGroups: FenixOccupationGroup[];
   divisionGroups: FenixDivisionGroup[];
   projectTypes: FenixProjectType[];
+  securityMeasures?: FenixSecurityMeasureDomain[];
   exemptions: FenixExemption[];
   decrees: FenixDecree[];
+  stateDecrees?: FenixDecree[];
+  institutionSizes?: string[];
+  glpClasses?: FenixGlpClass[];
+  specialRisks?: FenixSpecialRisk[];
   heights: string[];
   blockedPtsCnaes: string[];
 }
@@ -111,7 +141,11 @@ export interface ProjectDraftInstitution {
   razao_social?: string;
   nome_fantasia?: string;
   natureza_juridica?: string;
+  porte?: string;
+  porte_outros?: string | null;
   cnae?: string;
+  cnae_selecao_automatica?: boolean;
+  cnae_not_in_it14?: boolean;
   atividade_economica?: string;
   risk?: number | string;
   cobertura_fsps_sup200?: boolean;
@@ -128,6 +162,10 @@ export interface ProjectDraftOccupation {
   qtde_leitos?: number | null;
   qtde_pessoas?: number | null;
   qtde_funcionarios?: number | null;
+  area_comum?: number | string | null;
+  cobertura_fsps_sup200?: boolean;
+  subsolo_maior_50m?: boolean;
+  is_permanent_edification?: boolean;
 }
 
 export interface ProjectDraftEdification {
@@ -141,15 +179,64 @@ export interface ProjectDraftEdification {
   number_floors?: number | string;
 }
 
+export interface ProjectDraftTechnicalManager {
+  tipo_numero?: 'CREA' | 'CAU' | 'CFT' | string;
+  crea_cau: string;
+  name?: string;
+  nome?: string;
+  cpf_cnpj?: string;
+  phone?: string;
+  telefone?: string;
+  email?: string;
+  art_rrt?: string;
+}
+
+export interface ProjectDraftSpecialRisks {
+  liquidos_inflamaveis?: boolean;
+  gas_liquefeito_petroleo?: boolean;
+  produtos_perigosos?: boolean;
+  fogos_artificio?: boolean;
+  vaso_pressao?: boolean;
+  outros?: string | null;
+  total_kg_glp?: number | null;
+  classes_glp?: string[];
+}
+
+export interface ProjectDraftQuestionnaire {
+  renovacao_sap?: boolean;
+  edf_saida_direta?: boolean;
+  edf_regularizada_certificado?: boolean;
+  tipo_certificado?: string;
+  n_certificado?: string;
+  existe_gases_inflamaveis?: boolean;
+  existe_liquidos_inflamaveis?: boolean;
+  gas_glp?: boolean;
+  glp_12480kg?: boolean;
+  armazena_produtos_perigosos?: boolean;
+  local_reuniao_publico?: boolean;
+  lotacao_max_pessoas?: number | boolean | null;
+  subsolo_maior_50m_pt?: boolean;
+  cobertura_fibras_sape?: boolean;
+  [key: string]: unknown;
+}
+
 export interface ProjectDraftInput {
   id?: string;
   name?: string;
   status?: string;
+  form_mode?: 'pt' | 'pts';
+  tipo_projeto_id?: number;
+  evento?: 'S' | 'N';
+  data_inicio?: string;
+  data_fim?: string;
   edificacao_mode?: 'new' | 'existing';
   edificacao_id?: number | string | null;
   process_category?: 'pts' | 'pt' | string;
   license_type?: 'CLCB' | 'AVCB' | string;
   isencao_id?: number;
+  projeto_anterior?: boolean;
+  n_projeto_anterior?: string | null;
+  decreto_estadual_adotado_id?: number;
   n_art_rrt?: string;
   reference_name?: string;
   registration?: string | null;
@@ -164,23 +251,15 @@ export interface ProjectDraftInput {
   institution?: ProjectDraftInstitution;
   occupation?: ProjectDraftOccupation;
   occupationsDivisions?: Array<Record<string, unknown>>;
+  specialRisks?: ProjectDraftSpecialRisks;
+  total_kg_glp?: number | null;
+  classes_glp?: string[];
   proprietario?: Record<string, unknown>;
   responsavel?: Record<string, unknown>;
   responsavel_uso_igual_prop?: boolean | string;
   technical?: Record<string, unknown>;
-  questionario?: {
-    edf_saida_direta?: boolean;
-    existe_gases_inflamaveis?: boolean;
-    existe_liquidos_inflamaveis?: boolean;
-    glp_12480kg?: boolean;
-    gas_glp?: boolean;
-    armazena_produtos_perigosos?: boolean;
-    local_reuniao_publico?: boolean;
-    lotacao_max_pessoas?: boolean;
-    subsolo_maior_50m_pt?: boolean;
-    cobertura_fibras_sape?: boolean;
-    [key: string]: unknown;
-  };
+  responsaveis_tecnicos?: ProjectDraftTechnicalManager[];
+  questionario?: ProjectDraftQuestionnaire;
   securityMeasures?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -299,25 +378,44 @@ export function buildAndValidateFenixProjectPayload(
 
   // 7. CNAE e Enquadramento de Tipo de Projeto
   const cleanCnae = String(input.institution?.cnae || '').replace(/\D/g, '');
+  const formMode =
+    input.form_mode ||
+    (input.process_category ? String(input.process_category).toLowerCase() : undefined) ||
+    (totalArea > 750 || floors > 3 || domains.blockedPtsCnaes.includes(cleanCnae) ? 'pt' : 'pts');
   let tipoProjetoId: number;
   let tipoProjetoSigla: string;
 
-  if (process_category === 'pt') {
-    tipoProjetoId = 1;
-    tipoProjetoSigla = 'PT';
+  if (input.tipo_projeto_id && Number.isInteger(Number(input.tipo_projeto_id)) && Number(input.tipo_projeto_id) >= 1 && Number(input.tipo_projeto_id) <= 8) {
+    tipoProjetoId = Number(input.tipo_projeto_id);
+    const foundType = domains.projectTypes.find((t) => t.id === tipoProjetoId);
+    tipoProjetoSigla = foundType?.code || foundType?.sigla || (tipoProjetoId === 1 ? 'PT' : `TIPO_${tipoProjetoId}`);
+  } else if (formMode === 'pt') {
+    if (input.evento === 'S') {
+      if (input.occupation?.is_permanent_edification) {
+        tipoProjetoId = 3;
+        tipoProjetoSigla = 'PTOTEP';
+      } else {
+        tipoProjetoId = 2;
+        tipoProjetoSigla = 'PTIOT';
+      }
+    } else {
+      tipoProjetoId = 1;
+      tipoProjetoSigla = 'PT';
+    }
   } else {
     // Processo PTS (padrão)
-    if (totalArea > 750 || floors > 3) {
-      errors.push('Para Projeto Técnico Simplificado (PTS), a área total deve ser de até 750 m² e até 3 pavimentos.');
-    }
-    if (domains.blockedPtsCnaes.includes(cleanCnae)) {
-      errors.push('Este CNAE exige Projeto Técnico Completo (PT) mesmo com área reduzida.');
-    }
-
-    if (license_type === 'AVCB') {
+    if (input.evento === 'S') {
+      if (input.occupation?.is_permanent_edification) {
+        tipoProjetoId = 8;
+        tipoProjetoSigla = 'PTSAVCBPTOTEP';
+      } else {
+        tipoProjetoId = 7;
+        tipoProjetoSigla = 'PTSAVCBPTIOT';
+      }
+    } else if (license_type === 'AVCB') {
       tipoProjetoId = 6;
       tipoProjetoSigla = 'PTSAVCB';
-    } else if (totalArea <= 200 && floors <= 2) {
+    } else if (totalArea <= 200 && floors === 1 && height === 'Térrea = Um pavimento') {
       tipoProjetoId = 4;
       tipoProjetoSigla = 'PTSCLCB1';
     } else {
@@ -326,8 +424,99 @@ export function buildAndValidateFenixProjectPayload(
     }
   }
 
+  // Validações por modalidade
+  const isPtsMode = [4, 5, 6, 7, 8].includes(tipoProjetoId) || formMode === 'pts';
+  const special = input.specialRisks || {};
+  const totalKgGlp = special.total_kg_glp ?? input.total_kg_glp ?? (input.questionario?.glp_12480kg === false ? 12481 : null);
+  const classesGlp = Array.isArray(special.classes_glp) ? special.classes_glp : (Array.isArray(input.classes_glp) ? input.classes_glp : []);
+
+  if (isPtsMode) {
+    if (totalArea > 750 || floors > 3) {
+      errors.push('Para Projeto Técnico Simplificado (PTS), a área total deve ser de até 750 m² e até 3 pavimentos.');
+    }
+    if (domains.blockedPtsCnaes.includes(cleanCnae)) {
+      errors.push('Este CNAE exige Projeto Técnico Completo (PT) mesmo com área reduzida.');
+    }
+    if (cleanCnae === '4784900' || cleanCnae === '4682600') {
+      if (tipoProjetoId === 4 || tipoProjetoId === 5) {
+        errors.push('Revenda de GLP (CNAE 4784900 / 4682600) não pode ser regularizada via CLCB; migre para PTS com vistoria (PTSAVCB) ou Projeto Técnico (PT).');
+      }
+    }
+    const funcionarios = Number(input.occupation?.qtde_funcionarios || 0);
+    if (input.occupation?.division_group_id === 12 && funcionarios > 100) {
+      errors.push('Divisão D-4 com mais de 100 funcionários exige Projeto Técnico Completo (PT).');
+    }
+    if (totalKgGlp !== null && totalKgGlp > 12480) {
+      errors.push('Armazenamento de GLP acima de 12.480 kg exige Projeto Técnico Completo (PT).');
+    }
+  }
+
+  if (tipoProjetoId === 4) {
+    if (totalArea > 200 || floors > 1) {
+      errors.push('PTSCLCB1 exige área total de até 200 m² e edificação térrea (1 pavimento).');
+    }
+  }
+
+  // Warning bloqueioCadastroPTSviaCardPT
+  if (tipoProjetoId === 1 && totalArea <= 750 && floors <= 3 && !domains.blockedPtsCnaes.includes(cleanCnae)) {
+    const hasSevereRisk = Boolean(special.liquidos_inflamaveis || special.gas_liquefeito_petroleo || special.produtos_perigosos || special.fogos_artificio || special.vaso_pressao || (totalKgGlp !== null && totalKgGlp > 12480));
+    const hasLargeUnderground = Boolean(input.occupation?.subsolo_maior_50m || input.questionario?.subsolo_maior_50m_pt);
+    if (!hasSevereRisk && !hasLargeUnderground) {
+      warnings.push(
+        'O Fênix CBMBA bloqueia o cadastro de Projetos Técnicos Simplificados (PTS) através da tela de PT Completo. Esta edificação possui características de PTS (área até 750 m² e até 3 pavimentos); utilize o formulário de Projeto Técnico Simplificado.'
+      );
+    }
+  }
+
+  // Eventos / Ocupações Temporárias (2, 3, 7, 8)
+  const isTemporary = [2, 3, 7, 8].includes(tipoProjetoId) || input.evento === 'S';
+  const dataInicio = input.data_inicio
+    ? String(input.data_inicio).trim()
+    : input.questionario?.data_inicio_evento
+      ? String(input.questionario.data_inicio_evento).trim()
+      : '';
+  const dataFim = input.data_fim
+    ? String(input.data_fim).trim()
+    : input.questionario?.data_termino_evento
+      ? String(input.questionario.data_termino_evento).trim()
+      : '';
+  if (isTemporary) {
+    if (!dataInicio || !dataFim) {
+      errors.push('Projetos para instalação ou ocupação temporária exigem data de início e data de término do evento.');
+    } else if (dataFim < dataInicio) {
+      errors.push('A data de término do evento deve ser igual ou posterior à data de início.');
+    } else {
+      const startMs = Date.parse(dataInicio);
+      const endMs = Date.parse(dataFim);
+      const diffDays = Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24));
+      if ([7, 8].includes(tipoProjetoId) && diffDays > 180) {
+        errors.push('Eventos temporários em PTS não podem ultrapassar a duração máxima de 180 dias (6 meses).');
+      }
+      if ([2, 3].includes(tipoProjetoId)) {
+        const daysAhead = Math.ceil((startMs - Date.now()) / (1000 * 60 * 60 * 24));
+        if (daysAhead < 15) {
+          warnings.push('A data de início do evento possui antecedência inferior ao prazo de 15 dias recomendado pelo CBMBA para análise de PT temporário.');
+        }
+      }
+    }
+  }
+
+  // Isenção e Projeto Anterior
+  const isencaoId = input.isencao_id ? Number(input.isencao_id) : 1;
+  const projetoAnterior = Boolean(input.projeto_anterior);
+  const decretoAdotadoId = input.decreto_estadual_adotado_id ? Number(input.decreto_estadual_adotado_id) : 2;
+  if (projetoAnterior && !input.decreto_estadual_adotado_id) {
+    errors.push('Projetos com edificação anterior exigem a seleção do decreto estadual adotado (1: Anterior a 2015 ou 2: Decreto 16.302/2015).');
+  }
+
+  // Questionário e Saída Direta
+  const edfSaidaDireta = input.questionario?.edf_saida_direta ?? true;
+  if (isPtsMode && edfSaidaDireta === false && !input.questionario?.edf_regularizada_certificado) {
+    errors.push('Edificação sem saída direta para a via pública em PTS exige que o imóvel faça parte de uma edificação de maior porte já regularizada com AVCB/CLCB válido.');
+  }
+
   // 8. RT Opcional (dispensa de ART/RRT quando PTSCLCB1 e saída direta para a via pública)
-  const rtOptional = tipoProjetoId === 4 && Boolean(input.questionario?.edf_saida_direta);
+  const rtOptional = tipoProjetoId === 4 && Boolean(edfSaidaDireta);
 
   // 9. Ocupações e Subsolo
   const occupationsDivisions: Array<Record<string, unknown>> = [];
@@ -375,9 +564,10 @@ export function buildAndValidateFenixProjectPayload(
   let recommendedMeasures: string[] = [];
   if (tipoProjetoId === 4) {
     recommendedMeasures = ['iluminacao_emerg', 'sinal_emerg', 'extintores', 'saidas_emerg'];
-  } else if (tipoProjetoId === 5 || tipoProjetoId === 6) {
+  } else if ([5, 6, 7, 8].includes(tipoProjetoId)) {
     recommendedMeasures = ['iluminacao_emerg', 'sinal_emerg', 'extintores', 'saidas_emerg', 'brigada_incendio'];
-  } else if (tipoProjetoId === 1) {
+  } else {
+    // PT (1, 2, 3)
     recommendedMeasures = [
       'acesso_viatura',
       'seguranca_estrutural',
@@ -392,16 +582,79 @@ export function buildAndValidateFenixProjectPayload(
       'extintores',
       'hidrante_mangot'
     ];
-  } else {
-    recommendedMeasures = ['iluminacao_emerg', 'sinal_emerg', 'extintores', 'saidas_emerg', 'brigada_incendio'];
   }
 
   // 11. Montagem do payload idêntico ao dataResource do Fênix
   const regValue = registration ? String(registration).trim() : null;
-  const registrationZipCode = `${regValue || 'null'}-${cleanZip}`;
+  const registrationZipCode = regValue ? `${regValue}-${cleanZip}` : `-${cleanZip}`;
 
   const rawCnpjCpf = String(input.institution?.cnpj_cpf || input.institution?.cnpj || input.institution?.cpf || '').replace(/\D/g, '');
   const tipoPessoa = input.institution?.tipo_pessoa || (rawCnpjCpf.length === 11 ? 'PF' : 'PJ');
+
+  const ptsAllowedSet = new Set<string>([
+    'iluminacao_emerg',
+    'brigada_incendio',
+    'sinal_emerg',
+    'extintores',
+    'saidas_emerg',
+    'control_mat_acab'
+  ]);
+
+  const rawSecurity = (input.securityMeasures || {}) as Record<string, unknown>;
+  const medida_seguranca: Record<string, number> = {};
+
+  for (const key of FENIX_22_SECURITY_MEASURES) {
+    if (isPtsMode && !ptsAllowedSet.has(key)) {
+      medida_seguranca[key] = 0;
+    } else {
+      const val = rawSecurity[key] ??
+        (key === 'saidas_emerg' ? rawSecurity.saidas_emergencia :
+         key === 'iluminacao_emerg' ? rawSecurity.iluminacao_emergencia :
+         key === 'sinal_emerg' ? rawSecurity.sinalizacao_emergencia :
+         key === 'hidrante_mangot' ? rawSecurity.hidrante_mangotinhos :
+         key === 'acesso_viatura' ? rawSecurity.acesso_viatura_edificacao :
+         key === 'seguranca_estrutural' ? rawSecurity.seguranca_estrutural_contra_incendio :
+         key === 'chuveiros_auto' ? rawSecurity.chuveiros_automaticos :
+         key === 'plano_emerg_incendio' ? rawSecurity.plano_emergencia :
+         key === 'control_mat_acab' ? rawSecurity.controle_materiais_acabamento :
+         key === 'comp_horizontal' ? rawSecurity.compartimentacao_horizontal :
+         key === 'comp_vertical' ? rawSecurity.compartimentacao_vertical :
+         key === 'separacao_edific' ? rawSecurity.separacao_entre_edificacoes :
+         key === 'elevador_emerg' ? rawSecurity.elevador_emergencia :
+         key === 'control_fumaca' ? rawSecurity.controle_fumaca :
+         key === 'sis_fixo_gases' ? rawSecurity.sistema_fixo_gases_limpos :
+         key === 'sis_prot_cont_desc_elet' ? rawSecurity.spda : undefined);
+
+      medida_seguranca[key] = val ? 1 : 0;
+    }
+  }
+
+  const responsaveisTecnicos: Array<Record<string, unknown>> = [];
+  if (Array.isArray(input.responsaveis_tecnicos) && input.responsaveis_tecnicos.length > 0) {
+    for (const rt of input.responsaveis_tecnicos) {
+      responsaveisTecnicos.push({
+        tipo_numero: rt.tipo_numero || 'CREA',
+        crea_cau: String(rt.crea_cau || '').trim(),
+        name: String(rt.name || rt.nome || '').trim(),
+        cpf_cnpj: String(rt.cpf_cnpj || '').replace(/\D/g, ''),
+        phone: String(rt.phone || rt.telefone || '').trim(),
+        email: String(rt.email || '').trim()
+      });
+    }
+  } else if (input.technical && (input.technical.crea_cau || input.technical.name)) {
+    responsaveisTecnicos.push({
+      tipo_numero: input.technical.tipo_numero || 'CREA',
+      crea_cau: String(input.technical.crea_cau || '').trim(),
+      name: String(input.technical.name || '').trim(),
+      cpf_cnpj: String(input.technical.cpf_cnpj || input.technical.cpf || '').replace(/\D/g, ''),
+      phone: String(input.technical.phone || input.technical.telefone || '').trim(),
+      email: String(input.technical.email || '').trim()
+    });
+  }
+
+  if (!rtOptional && responsaveisTecnicos.length === 0 && !input.n_art_rrt && !(input.technical as any)?.n_art_rrt) {
+    warnings.push('Responsável técnico não informado. Obrigatório para a emissão da ART/RRT antes da tramitação.');
+  }
 
   const fenixPayload: Record<string, unknown> = {
     edificacao_id: input.edificacao_mode === 'existing' && input.edificacao_id ? input.edificacao_id : 'new',
@@ -414,6 +667,22 @@ export function buildAndValidateFenixProjectPayload(
     total_area: totalArea.toFixed(2),
     height,
     number_floors: floors,
+    tipo_projeto_id: tipoProjetoId,
+    evento: isTemporary ? 'S' : 'N',
+    data_inicio: input.data_inicio || null,
+    data_fim: input.data_fim || null,
+    isencao_id: isencaoId,
+    projeto_anterior: projetoAnterior,
+    n_projeto_anterior: input.n_projeto_anterior || null,
+    decreto_estadual_adotado_id: decretoAdotadoId,
+    liquidos_inflamaveis: special.liquidos_inflamaveis ? 1 : 0,
+    gas_liquefeito_petroleo: special.gas_liquefeito_petroleo ? 1 : 0,
+    produtos_perigosos: special.produtos_perigosos ? 1 : 0,
+    fogos_artificio: special.fogos_artificio ? 1 : 0,
+    vaso_pressao: special.vaso_pressao ? 1 : 0,
+    outros: special.outros || null,
+    total_kg_glp: totalKgGlp,
+    classes_glp: classesGlp,
     address: {
       zip_code: cleanZip,
       public_place: String(input.address?.public_place || ''),
@@ -432,19 +701,24 @@ export function buildAndValidateFenixProjectPayload(
       razao_social: String(input.institution?.razao_social || ''),
       nome_fantasia: String(input.institution?.nome_fantasia || input.institution?.razao_social || ''),
       natureza_juridica: String(input.institution?.natureza_juridica || 'Empresa de Pequeno Porte (EPP)'),
+      porte: String(input.institution?.porte || 'EPP'),
+      porte_outros: input.institution?.porte_outros || null,
       cnae: cleanCnae,
+      cnae_selecao_automatica: Boolean(input.institution?.cnae_selecao_automatica),
+      cnae_not_in_it14: Boolean(input.institution?.cnae_not_in_it14),
       atividade_economica: String(input.institution?.atividade_economica || ''),
       risk: typeof input.institution?.risk === 'number' ? input.institution.risk : Number(input.institution?.risk) || 300,
       cobertura_fsps_sup200: Boolean(input.institution?.cobertura_fsps_sup200 || input.questionario?.cobertura_fibras_sape)
     },
     occupationsDivisions,
+    occupations_divisions: occupationsDivisions,
     proprietario: input.proprietario || {},
     responsavel: input.responsavel || {},
     technical: input.technical || {},
+    projeto_responsavel_tecnico: responsaveisTecnicos,
     questionario: input.questionario || {},
     securityMeasures: input.securityMeasures || {},
-    tipo_projeto_id: tipoProjetoId,
-    isencao_id: input.isencao_id || 1,
+    medida_seguranca,
     n_art_rrt: String(input.n_art_rrt || (input.technical as any)?.n_art_rrt || ''),
     solicitante: { id: fenixUserId || 14574 }
   };
@@ -732,42 +1006,39 @@ export function simulateProjectDraft(
   return buildAndValidateFenixProjectPayload(input, fenixUserId);
 }
 
-export const FENIX_28_SECURITY_MEASURES = [
-  'acesso_viatura_edificacao',
-  'seguranca_estrutural_contra_incendio',
-  'compartimentacao_horizontal',
-  'compartimentacao_vertical',
-  'controle_materiais_acabamento',
-  'saidas_emergencia',
-  'elevador_emergencia',
-  'controle_fumaca',
-  'iluminacao_emergencia',
-  'deteccao_incendio',
-  'alarme_incendio',
-  'sinalizacao_emergencia',
-  'extintores',
-  'hidrante_mangotinhos',
-  'chuveiros_automaticos',
-  'resfriamento',
-  'espuma',
-  'sistema_fixo_gases_limpos',
+export const FENIX_22_SECURITY_MEASURES = [
+  'iluminacao_emerg',
   'brigada_incendio',
-  'plano_emergencia',
-  'spda',
-  'controle_fontes_ignicao',
-  'central_glp',
-  'separacao_entre_edificacoes',
-  'bloqueio_fumaca',
-  'pressurizacao_escadas',
-  'sinalizacao_rotas_resgate',
-  'sistema_pararaios'
+  'sinal_emerg',
+  'extintores',
+  'saidas_emerg',
+  'control_mat_acab',
+  'comp_horizontal',
+  'comp_vertical',
+  'separacao_edific',
+  'acesso_viatura',
+  'resfriamento',
+  'hidrante_mangot',
+  'deteccao_incendio',
+  'chuveiros_auto',
+  'elevador_emerg',
+  'seguranca_estrutural',
+  'control_fumaca',
+  'espuma',
+  'plano_emerg_incendio',
+  'sis_fixo_gases',
+  'alarme_incendio',
+  'sis_prot_cont_desc_elet'
 ] as const;
 
-export type FenixSecurityMeasureKey = typeof FENIX_28_SECURITY_MEASURES[number];
+export const FENIX_SECURITY_MEASURES = FENIX_22_SECURITY_MEASURES;
+export const FENIX_28_SECURITY_MEASURES = FENIX_22_SECURITY_MEASURES;
+
+export type FenixSecurityMeasureKey = typeof FENIX_22_SECURITY_MEASURES[number];
 
 export function mapIt14MeasuresToFenix(rawMeasures: string[]): Record<string, boolean> {
   const result: Record<string, boolean> = {};
-  for (const key of FENIX_28_SECURITY_MEASURES) {
+  for (const key of FENIX_22_SECURITY_MEASURES) {
     result[key] = false;
   }
 
@@ -780,35 +1051,69 @@ export function mapIt14MeasuresToFenix(rawMeasures: string[]): Record<string, bo
   );
 
   for (const item of normalizedItems) {
-    if (item.includes('acesso de viatura')) result.acesso_viatura_edificacao = true;
-    if (item.includes('seguranca estrutural')) result.seguranca_estrutural_contra_incendio = true;
-    if (item.includes('compartimentacao horizontal')) result.compartimentacao_horizontal = true;
-    if (item.includes('compartimentacao vertical')) result.compartimentacao_vertical = true;
-    if (item.includes('controle de materiais de acabamento') || item.includes('controle de material de acabamento')) result.controle_materiais_acabamento = true;
-    if (item.includes('saidas de emergencia') || item.includes('saida de emergencia')) result.saidas_emergencia = true;
-    if (item.includes('controle de fumaca')) result.controle_fumaca = true;
-    if (item.includes('plano de emergencia')) result.plano_emergencia = true;
+    if (item.includes('iluminacao de emergencia')) result.iluminacao_emerg = true;
     if (item.includes('brigada')) result.brigada_incendio = true;
-    if (item.includes('iluminacao de emergencia')) result.iluminacao_emergencia = true;
-    if (item.includes('deteccao de incendio')) result.deteccao_incendio = true;
-    if (item.includes('alarme de incendio')) result.alarme_incendio = true;
-    if (item.includes('sinalizacao de emergencia')) result.sinalizacao_emergencia = true;
+    if (item.includes('sinalizacao de emergencia')) result.sinal_emerg = true;
     if (item.includes('extintor')) result.extintores = true;
-    if (item.includes('hidrante') || item.includes('mangotinho')) result.hidrante_mangotinhos = true;
-    if (item.includes('chuveiros automaticos') || item.includes('sprinkler')) result.chuveiros_automaticos = true;
+    if (item.includes('saidas de emergencia') || item.includes('saida de emergencia')) result.saidas_emerg = true;
+    if (item.includes('controle de materiais de acabamento') || item.includes('controle de material de acabamento')) result.control_mat_acab = true;
+    if (item.includes('compartimentacao horizontal')) result.comp_horizontal = true;
+    if (item.includes('compartimentacao vertical')) result.comp_vertical = true;
+    if (item.includes('separacao entre') || item.includes('separacao de edific')) result.separacao_edific = true;
+    if (item.includes('acesso de viatura') || item.includes('acesso a viatura') || item.includes('acesso da viatura')) result.acesso_viatura = true;
     if (item.includes('resfriamento')) result.resfriamento = true;
+    if (item.includes('hidrante') || item.includes('mangotinho')) result.hidrante_mangot = true;
+    if (item.includes('deteccao de incendio')) result.deteccao_incendio = true;
+    if (item.includes('chuveiros automaticos') || item.includes('chuveiro automatico') || item.includes('sprinkler')) result.chuveiros_auto = true;
+    if (item.includes('elevador de emergencia')) result.elevador_emerg = true;
+    if (item.includes('seguranca estrutural')) result.seguranca_estrutural = true;
+    if (item.includes('controle de fumaca') || item.includes('bloqueio de fumaca') || item.includes('pressurizacao')) result.control_fumaca = true;
     if (item.includes('espuma')) result.espuma = true;
-    if (item.includes('gases limpos') || item.includes('co2')) result.sistema_fixo_gases_limpos = true;
-    if (item.includes('descargas atmosfericas') || item.includes('spda')) result.spda = true;
-    if (item.includes('fontes de ignicao')) result.controle_fontes_ignicao = true;
-    if (item.includes('central de glp')) result.central_glp = true;
-    if (item.includes('elevador de emergencia')) result.elevador_emergencia = true;
-    if (item.includes('separacao entre')) result.separacao_entre_edificacoes = true;
-    if (item.includes('bloqueio de fumaca')) result.bloqueio_fumaca = true;
-    if (item.includes('pressurizacao')) result.pressurizacao_escadas = true;
+    if (item.includes('plano de emergencia')) result.plano_emerg_incendio = true;
+    if (item.includes('gases limpos') || item.includes('co2')) result.sis_fixo_gases = true;
+    if (item.includes('alarme de incendio')) result.alarme_incendio = true;
+    if (item.includes('descargas atmosfericas') || item.includes('spda') || item.includes('pararaios') || item.includes('para-raios')) result.sis_prot_cont_desc_elet = true;
   }
 
-  return result;
+  return attachLegacyMeasureAliases(result);
+}
+
+// Aliases legados não enumeráveis para máxima compatibilidade retroativa
+export const FENIX_LEGACY_MEASURE_ALIASES: Record<string, string> = {
+  saidas_emergencia: 'saidas_emerg',
+  iluminacao_emergencia: 'iluminacao_emerg',
+  sinalizacao_emergencia: 'sinal_emerg',
+  hidrante_mangotinhos: 'hidrante_mangot',
+  acesso_viatura_edificacao: 'acesso_viatura',
+  seguranca_estrutural_contra_incendio: 'seguranca_estrutural',
+  chuveiros_automaticos: 'chuveiros_auto',
+  plano_emergencia: 'plano_emerg_incendio',
+  controle_materiais_acabamento: 'control_mat_acab',
+  compartimentacao_horizontal: 'comp_horizontal',
+  compartimentacao_vertical: 'comp_vertical',
+  separacao_entre_edificacoes: 'separacao_edific',
+  elevador_emergencia: 'elevador_emerg',
+  controle_fumaca: 'control_fumaca',
+  sistema_fixo_gases_limpos: 'sis_fixo_gases',
+  spda: 'sis_prot_cont_desc_elet'
+};
+
+export function attachLegacyMeasureAliases<T extends Record<string, any>>(target: T): T {
+  for (const [legacyKey, officialKey] of Object.entries(FENIX_LEGACY_MEASURE_ALIASES)) {
+    if (!(legacyKey in target)) {
+      Object.defineProperty(target, legacyKey, {
+        get() {
+          return this[officialKey];
+        },
+        set(v: any) {
+          this[officialKey] = v;
+        },
+        enumerable: false,
+        configurable: true
+      });
+    }
+  }
+  return target;
 }
 
 export interface CnpjIt14LookupResult {
@@ -1612,8 +1917,9 @@ async function runDeterministicDraftAssistant(
 
   // 2. Extração de Área
   const areaMatch =
-    message.match(/(?:área|area|com)\s*(?:de)?\s*(\d+(?:[.,]\d+)?)\s*(?:m²|m2|metros)?/i) ||
-    message.match(/\b(\d+(?:[.,]\d+)?)\s*(?:m²|m2)\b/i);
+    message.match(/(?:área|area)\s*(?:de)?\s*(\d+(?:[.,]\d+)?)/i) ||
+    message.match(/\b(\d+(?:[.,]\d+)?)\s*(?:m²|m2|metros?\s*quadrados?)/i) ||
+    message.match(/\bcom\s*(?:de)?\s*(\d+(?:[.,]\d+)?)\s*(?:m²|m2|metros)?/i);
   if (areaMatch && areaMatch[1]) {
     const parsedArea = Number(areaMatch[1].replace(',', '.'));
     if (parsedArea > 0) {
@@ -1728,22 +2034,11 @@ async function runDeterministicDraftAssistant(
   );
   if (wantsRecommended) {
     formPatch.securityMeasures = formPatch.securityMeasures || {};
-    for (const key of FENIX_28_SECURITY_MEASURES) {
+    for (const key of FENIX_22_SECURITY_MEASURES) {
       formPatch.securityMeasures[key] = false;
     }
     for (const rec of currentVal.recommendedMeasures) {
-      if (rec === 'extintores') formPatch.securityMeasures.extintores = true;
-      if (rec === 'iluminacao_emerg') formPatch.securityMeasures.iluminacao_emergencia = true;
-      if (rec === 'sinal_emerg') formPatch.securityMeasures.sinalizacao_emergencia = true;
-      if (rec === 'saidas_emerg') formPatch.securityMeasures.saidas_emergencia = true;
-      if (rec === 'brigada_incendio') formPatch.securityMeasures.brigada_incendio = true;
-      if (rec === 'hidrante_mangot') formPatch.securityMeasures.hidrante_mangotinhos = true;
-      if (rec === 'alarme_incendio') formPatch.securityMeasures.alarme_incendio = true;
-      if (rec === 'deteccao_incendio') formPatch.securityMeasures.deteccao_incendio = true;
-      if (rec === 'acesso_viatura') formPatch.securityMeasures.acesso_viatura_edificacao = true;
-      if (rec === 'seguranca_estrutural') formPatch.securityMeasures.seguranca_estrutural_contra_incendio = true;
-      if (rec === 'comp_horizontal') formPatch.securityMeasures.compartimentacao_horizontal = true;
-      if (rec === 'control_mat_acab') formPatch.securityMeasures.controle_materiais_acabamento = true;
+      formPatch.securityMeasures[rec] = true;
     }
     thinkingSteps.push(
       `Ativadas as ${currentVal.recommendedMeasures.length} medidas recomendadas para ${currentVal.tipoProjetoSigla}.`
@@ -1756,7 +2051,7 @@ async function runDeterministicDraftAssistant(
   // Medidas individuais mencionadas
   if (/\b(?:hidrante|mangotinho)\b/i.test(message)) {
     formPatch.securityMeasures = formPatch.securityMeasures || {};
-    formPatch.securityMeasures.hidrante_mangotinhos = true;
+    formPatch.securityMeasures.hidrante_mangot = true;
     appliedChangesSummary.push('Ativada medida: Hidrantes e Mangotinhos');
   }
   if (/\b(?:alarme)\b/i.test(message)) {
@@ -1773,6 +2068,16 @@ async function runDeterministicDraftAssistant(
     formPatch.securityMeasures = formPatch.securityMeasures || {};
     formPatch.securityMeasures.extintores = true;
     appliedChangesSummary.push('Ativada medida: Extintores');
+  }
+  if (/\b(?:chuveiro|sprinkler)\b/i.test(message)) {
+    formPatch.securityMeasures = formPatch.securityMeasures || {};
+    formPatch.securityMeasures.chuveiros_auto = true;
+    appliedChangesSummary.push('Ativada medida: Chuveiros Automáticos');
+  }
+  if (/\b(?:spda|p[aá]ra-?raios?)\b/i.test(message)) {
+    formPatch.securityMeasures = formPatch.securityMeasures || {};
+    formPatch.securityMeasures.sis_prot_cont_desc_elet = true;
+    appliedChangesSummary.push('Ativada medida: SPDA / Sistema de Proteção contra Descargas Elétricas');
   }
 
   // 7. Comando de Revisão / Correção
@@ -1797,12 +2102,11 @@ async function runDeterministicDraftAssistant(
       (!currentDraft.securityMeasures || Object.keys(currentDraft.securityMeasures).length === 0)
     ) {
       formPatch.securityMeasures = {};
+      for (const key of FENIX_22_SECURITY_MEASURES) {
+        formPatch.securityMeasures[key] = false;
+      }
       for (const rec of currentVal.recommendedMeasures) {
-        if (rec === 'extintores') formPatch.securityMeasures.extintores = true;
-        if (rec === 'iluminacao_emerg') formPatch.securityMeasures.iluminacao_emergencia = true;
-        if (rec === 'sinal_emerg') formPatch.securityMeasures.sinalizacao_emergencia = true;
-        if (rec === 'saidas_emerg') formPatch.securityMeasures.saidas_emergencia = true;
-        if (rec === 'brigada_incendio') formPatch.securityMeasures.brigada_incendio = true;
+        formPatch.securityMeasures[rec] = true;
       }
       appliedChangesSummary.push(
         `Aplicadas ${currentVal.recommendedMeasures.length} medidas recomendadas para ${currentVal.tipoProjetoSigla}`
@@ -1837,6 +2141,10 @@ async function runDeterministicDraftAssistant(
   }
   suggestions.push('Aplicar medidas recomendadas');
   suggestions.push('Revisar pendências do rascunho');
+
+  if (formPatch.securityMeasures) {
+    attachLegacyMeasureAliases(formPatch.securityMeasures as Record<string, any>);
+  }
 
   return {
     reply,
@@ -1959,6 +2267,65 @@ DIRETRIZES DE ATENDIMENTO:
   }
 
   return runDeterministicDraftAssistant(req, validation, domains);
+}
+
+export type DraftAiStreamEvent =
+  | { type: 'thinking'; step: string }
+  | { type: 'delta'; text: string }
+  | {
+      type: 'done';
+      reply: string;
+      thinkingSteps: string[];
+      suggestions: string[];
+      formPatch?: DraftAiAssistantResponse['formPatch'];
+      appliedChanges?: string[];
+      appliedChangesSummary?: string[];
+    }
+  | { type: 'error'; error: string };
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function streamDraftAiAssistant(
+  req: DraftAiAssistantRequest,
+  onEvent: (event: DraftAiStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<DraftAiAssistantResponse> {
+  onEvent({
+    type: 'thinking',
+    step: 'Analisando solicitação e verificando parâmetros da edificação e do projeto...'
+  });
+
+  const result = await runDraftAiAssistant(req);
+  if (signal?.aborted) return result;
+
+  for (const step of result.thinkingSteps) {
+    if (signal?.aborted) return result;
+    onEvent({ type: 'thinking', step });
+    await delay(70);
+  }
+
+  if (signal?.aborted) return result;
+
+  const chunks = result.reply.match(/\S+\s*/g) || [result.reply];
+  for (const chunk of chunks) {
+    if (signal?.aborted) return result;
+    onEvent({ type: 'delta', text: chunk });
+    await delay(16);
+  }
+
+  if (signal?.aborted) return result;
+
+  onEvent({
+    type: 'done',
+    reply: result.reply,
+    thinkingSteps: result.thinkingSteps,
+    suggestions: result.suggestions || [],
+    formPatch: result.formPatch,
+    appliedChanges: result.appliedChangesSummary || [],
+    appliedChangesSummary: result.appliedChangesSummary || []
+  });
+
+  return result;
 }
 
 

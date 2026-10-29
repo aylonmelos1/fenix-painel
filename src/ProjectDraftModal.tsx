@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Building2,
+  CalendarClock,
   Check,
   CheckCircle2,
   CircleAlert,
   ClipboardList,
   Copy,
   ExternalLink,
+  FileText,
   Flame,
+  HardHat,
   HelpCircle,
   Info,
   Layers,
@@ -32,90 +35,18 @@ import {
   Zap
 } from 'lucide-react';
 import { api, type Building } from './types';
+import {
+  type ProjectDraftInput,
+  type TechnicalManagerItem,
+  type DraftAiAssistantResponse,
+  OFFICIAL_FENIX_MEASURES,
+  FENIX_MEASURE_SYNONYMS,
+  normalizeSecurityMeasures,
+  generateLocalAiAssistantFallback,
+  INITIAL_EMPTY_DRAFT
+} from './draftAiHelper';
 
-export interface ProjectDraftInput {
-  id?: string;
-  name?: string;
-  edificacao_mode?: 'new' | 'existing';
-  edificacao_id?: number | null;
-  process_category?: 'pts' | 'pt';
-  license_type?: 'CLCB' | 'AVCB';
-  isencao_id?: number;
-  n_art_rrt?: string;
-  edification: {
-    reference_name: string;
-    registration?: string;
-    height: string;
-    number_floors: number | string;
-    building_area: number | string;
-    area_to_be_built?: number | string;
-    discount_area?: number | string;
-    total_area?: number | string;
-  };
-  address: {
-    zip_code: string;
-    public_place: string;
-    number: string;
-    complement?: string;
-    district: string;
-    municipio_id: number | null;
-    county?: string;
-    state?: string;
-    geographic_coordinates?: string;
-  };
-  institution: {
-    tipo_pessoa?: 'PJ' | 'PF';
-    cnpj_cpf: string;
-    razao_social: string;
-    nome_fantasia?: string;
-    natureza_juridica?: string;
-    cnae: string;
-    atividade_economica: string;
-    risk: number | string;
-  };
-  occupation: {
-    occupation_group_id: number | null;
-    division_group_id: number | null;
-    has_underground?: boolean;
-    underground_occupation_group_id?: number | null;
-    underground_division_group_id?: number | null;
-  };
-  proprietario: {
-    tipo_pessoa_prop: 'PJ' | 'PF';
-    cpf_cnpj_prop: string;
-    nome_proprietario: string;
-    email_proprietario: string;
-    tel_proprietario: string;
-  };
-  responsavel: {
-    responsavel_uso_igual_prop?: boolean;
-    tipo_pessoa_resp: 'PJ' | 'PF';
-    cpf_cnpj_resp: string;
-    nome_responsavel: string;
-    email_responsavel_uso: string;
-    tel_responsavel_uso: string;
-  };
-  technical?: {
-    cpf?: string;
-    name?: string;
-    crea_cau?: string;
-    telephone?: string;
-    email?: string;
-  };
-  questionario?: {
-    edf_saida_direta?: boolean;
-    existe_gases_inflamaveis?: boolean;
-    existe_liquidos_inflamaveis?: boolean;
-    glp_12480kg?: boolean;
-    gas_glp?: boolean;
-    armazena_produtos_perigosos?: boolean;
-    local_reuniao_publico?: boolean;
-    lotacao_max_pessoas?: boolean;
-    subsolo_maior_50m_pt?: boolean;
-    cobertura_fibras_sape?: boolean;
-  };
-  securityMeasures?: Record<string, number | boolean>;
-}
+export type { ProjectDraftInput, TechnicalManagerItem, DraftAiAssistantResponse };
 
 export interface DraftRecord {
   id: string;
@@ -233,119 +164,112 @@ export interface ProjectDraftModalProps {
   } | null) => void;
 }
 
-export interface DraftAiAssistantResponse {
-  reply: string;
-  thinkingSteps: string[];
-  appliedChangesSummary: string[];
-  formPatch?: {
-    step?: 1 | 2 | 3;
-    name?: string;
-    edification?: Partial<ProjectDraftInput['edification']>;
-    address?: Partial<ProjectDraftInput['address']>;
-    occupation?: Partial<ProjectDraftInput['occupation']>;
-    responsavel?: Partial<ProjectDraftInput['responsavel']>;
-    securityMeasures?: Record<string, boolean>;
-  };
-  suggestions: string[];
+export interface FenixOfficialProjectType {
+  id: number;
+  sigla: string;
+  descricao: string;
+  form_mode: 'pts' | 'pt';
+  category: 'pts' | 'pt';
+  license: 'CLCB' | 'AVCB';
+  isTemporario?: boolean;
 }
 
-function generateLocalAiAssistantFallback(
-  prompt: string,
-  draft: ProjectDraftInput,
-  totalArea: number,
-  enq: { sigla: string; nome: string; motivo: string; isPts: boolean }
-): DraftAiAssistantResponse {
-  const norm = prompt.toLowerCase();
-  
-  if (norm.includes('exemplo') || norm.includes('galpao') || norm.includes('galpão')) {
-    return {
-      reply: 'Apliquei o exemplo de um Galpão Comercial de 620 m² em Feira de Santana, divisão C-2 com medidas de segurança da IT-14 ajustadas.',
-      thinkingSteps: ['Identificada intenção de carregar caso prático', 'Calculando medidas mínimas CBMBA para 620 m²', 'Definindo município Feira de Santana (ID 108)'],
-      appliedChangesSummary: [
-        'Área construída → 620 m²',
-        'Município → FEIRA DE SANTANA',
-        'Pavimentos → 1 (Térrea)',
-        'Divisão → C-2',
-        'Medidas recomendadas marcadas'
-      ],
-      formPatch: {
-        step: 1,
-        name: 'Galpão Comercial - Feira de Santana',
-        edification: {
-          reference_name: 'GALPÃO COMERCIAL NORTE',
-          building_area: 620,
-          number_floors: 1,
-          height: 'Térrea = Um pavimento'
-        },
-        address: {
-          county: 'FEIRA DE SANTANA',
-          municipio_id: 108,
-          public_place: 'Avenida Presidente Dutra',
-          number: '1500',
-          district: 'Centro',
-          state: 'BA'
-        },
-        occupation: {
-          division_group_id: 6
-        },
-        securityMeasures: {
-          extintores: true,
-          iluminacao_emerg: true,
-          sinal_emerg: true,
-          saidas_emerg: true,
-          brigada_incendio: true
-        }
-      },
-      suggestions: ['✦ Explicar meu enquadramento atual', '✦ Auto-revisar e corrigir pendências da tela']
-    };
+export const OFFICIAL_PROJECT_TYPES: FenixOfficialProjectType[] = [
+  // PT (Completo - form_mode: 'pt' — EXATAMENTE AS 3 OPÇÕES OFICIAIS)
+  {
+    id: 1,
+    sigla: 'PT',
+    descricao: 'Projeto Técnico (PT)',
+    form_mode: 'pt',
+    category: 'pt',
+    license: 'AVCB',
+    isTemporario: false
+  },
+  {
+    id: 2,
+    sigla: 'PTIOT',
+    descricao: 'Projeto Técnico para Instalação e Ocupação Temporária (PTIOT)',
+    form_mode: 'pt',
+    category: 'pt',
+    license: 'AVCB',
+    isTemporario: true
+  },
+  {
+    id: 3,
+    sigla: 'PTOTEP',
+    descricao: 'Projeto Técnico para Ocupação Temporária em Edificação Permanente (PTOTEP)',
+    form_mode: 'pt',
+    category: 'pt',
+    license: 'AVCB',
+    isTemporario: true
+  },
+  // PTS (Simplificado - form_mode: 'pts' — EXATAMENTE AS 5 OPÇÕES OFICIAIS)
+  {
+    id: 4,
+    sigla: 'PTSCLCB1',
+    descricao: 'Projeto Técnico Simplificado com área até 200 m e altura térrea (PTSCLCB1)',
+    form_mode: 'pts',
+    category: 'pts',
+    license: 'CLCB',
+    isTemporario: false
+  },
+  {
+    id: 5,
+    sigla: 'PTSCLCB2',
+    descricao: 'Projeto Técnico Simplificado com área menor do que 750 m e altura térrea até 3 pavimentos (PTSCLCB2)',
+    form_mode: 'pts',
+    category: 'pts',
+    license: 'CLCB',
+    isTemporario: false
+  },
+  {
+    id: 6,
+    sigla: 'PTSAVCB',
+    descricao: 'Projeto Técnico Simplificado que se regulariza com vistoria (PTSAVCB)',
+    form_mode: 'pts',
+    category: 'pts',
+    license: 'AVCB',
+    isTemporario: false
+  },
+  {
+    id: 7,
+    sigla: 'PTSAVCBPTIOT',
+    descricao: 'Projeto Técnico Simplificado para Instalação e Ocupação Temporária (PTSAVCBPTIOT)',
+    form_mode: 'pts',
+    category: 'pts',
+    license: 'AVCB',
+    isTemporario: true
+  },
+  {
+    id: 8,
+    sigla: 'PTSAVCBPTOTEP',
+    descricao: 'Projeto Técnico Simplificado para Ocupação Temporária em Edificação Permanente (PTSAVCBPTOTEP)',
+    form_mode: 'pts',
+    category: 'pts',
+    license: 'AVCB',
+    isTemporario: true
   }
+];
 
-  if (norm.includes('medida') || norm.includes('it-14') || norm.includes('it 14') || norm.includes('sugerir')) {
-    const isLarge = totalArea > 750;
-    return {
-      reply: `Revisei as exigências da IT-14 / Decreto 16.302/BA para o porte de ${totalArea || draft.edification.building_area} m². ${isLarge ? 'Por ultrapassar 750 m², ativei hidrantes e alarme de incêndio.' : 'Enquadramento PTS: medidas básicas essenciais ativadas.'}`,
-      thinkingSteps: ['Cruzando área total com tabela do Decreto Estadual 16.302/BA', 'Determinando se exige sistema fixo de combate a incêndio', 'Habilitando sliders correspondentes'],
-      appliedChangesSummary: isLarge
-        ? ['Extintores, Iluminação, Sinalização, Saídas, Brigada, Hidrantes, Alarme']
-        : ['Extintores, Iluminação, Sinalização, Saídas'],
-      formPatch: {
-        step: 2,
-        securityMeasures: {
-          extintores: true,
-          iluminacao_emerg: true,
-          sinal_emerg: true,
-          saidas_emerg: true,
-          brigada_incendio: totalArea > 200,
-          hidrante_mangot: isLarge,
-          alarme_incendio: isLarge
-        }
-      },
-      suggestions: ['✦ Auto-revisar e corrigir pendências da tela', '✦ Explicar meu enquadramento atual']
-    };
-  }
+export const GLP_CLASSES = [
+  { id: 'Classe I', label: 'Classe I', limit: 'Até 520 kg', maxKg: 520, isPt: false },
+  { id: 'Classe II', label: 'Classe II', limit: 'Até 1.560 kg', maxKg: 1560, isPt: false },
+  { id: 'Classe III', label: 'Classe III', limit: 'Até 6.240 kg', maxKg: 6240, isPt: false },
+  { id: 'Classe IV', label: 'Classe IV', limit: 'Até 12.480 kg', maxKg: 12480, isPt: false },
+  { id: 'Classe V', label: 'Classe V', limit: 'Até 24.960 kg', maxKg: 24960, isPt: true },
+  { id: 'Classe VI', label: 'Classe VI', limit: 'Até 49.920 kg', maxKg: 49920, isPt: true },
+  { id: 'Classe VII', label: 'Classe VII', limit: 'Até 99.840 kg', maxKg: 99840, isPt: true },
+  { id: 'Classe ESPECIAL', label: 'Classe ESPECIAL', limit: 'Acima de 99.840 kg', maxKg: Infinity, isPt: true }
+] as const;
 
-  if (norm.includes('revisar') || norm.includes('corrigir') || norm.includes('pendencia') || norm.includes('pendência')) {
-    return {
-      reply: 'Revisei todos os campos do rascunho com base nas diretrizes do CBMBA. Ajustei consistências de altura e conferi o enquadramento.',
-      thinkingSteps: ['Verificando obrigatoriedade de campos de endereço e edificação', 'Validando paridade de pavimentos e altura', 'Conferindo CNAE e medidas de segurança'],
-      appliedChangesSummary: [
-        'Altura sincronizada com pavimentos',
-        'Regras do Decreto 16.302/BA validadas'
-      ],
-      formPatch: {
-        step: 1
-      },
-      suggestions: ['✦ Sugerir e marcar medidas da IT-14', '✦ Explicar meu enquadramento atual']
-    };
-  }
-
-  return {
-    reply: `Seu projeto está enquadrado atualmente como ${enq.sigla} (${enq.nome}). ${enq.motivo}. Posso ajustar a área, preencher dados de contato ou configurar medidas para você.`,
-    thinkingSteps: ['Lendo estado atual do formulário', 'Consultando regras da IT-14 CBMBA'],
-    appliedChangesSummary: [],
-    suggestions: ['✦ Auto-revisar e corrigir pendências da tela', '✦ Sugerir e marcar medidas da IT-14']
-  };
-}
+export const PORTES_INSTITUICAO = [
+  'MEI - Microempreendedor Individual',
+  'ME - Microempresa',
+  'EPP - Empresa de Pequeno Porte',
+  'Médio Porte',
+  'Grande Empresa',
+  'Outros'
+];
 
 /** Componente de Switch Slider Deslizante moderno para substituir todas as checkboxes */
 function ToggleSlider({
@@ -410,31 +334,30 @@ const BLOCKED_PTS_CNAES_DEFAULT = [
   '4789006'
 ];
 
-// Medidas de segurança conhecidas
-const SECURITY_MEASURES_CATALOG: Array<{ key: string; label: string; desc: string; basic: boolean }> = [
-  { key: 'extintores', label: 'Extintores de Incêndio', desc: 'Proteção por extintores portáteis / sobrerrodas', basic: true },
-  { key: 'iluminacao_emerg', label: 'Iluminação de Emergência', desc: 'Blocos autônomos ou sistema centralizado', basic: true },
-  { key: 'sinal_emerg', label: 'Sinalização de Emergência', desc: 'Placas fotoluminescentes NBR 13434', basic: true },
-  { key: 'saidas_emerg', label: 'Saídas de Emergência', desc: 'Rotas de fuga e portas corta-fogo desobstruídas', basic: true },
-  { key: 'brigada_incendio', label: 'Brigada de Incêndio', desc: 'Pessoal treinado conforme IT 17', basic: false },
-  { key: 'hidrante_mangot', label: 'Hidrantes e Mangotinhos', desc: 'Rede pressurizada sob comando (IT 22)', basic: false },
-  { key: 'alarme_incendio', label: 'Alarme de Incêndio', desc: 'Botoeiras e sinalizadores sonoros/visuais', basic: false },
-  { key: 'deteccao_incendio', label: 'Detecção de Incêndio', desc: 'Detectores automáticos pontuais de fumaça e calor', basic: false },
-  { key: 'acesso_viatura', label: 'Acesso de Viatura', desc: 'Faixas e acessos livres para viaturas do CBMBA', basic: false },
-  { key: 'seguranca_estrutural', label: 'Segurança Estrutural', desc: 'Tempo requerido de resistência ao fogo (TRRF)', basic: false },
-  { key: 'chuveiros_auto', label: 'Chuveiros Automáticos (Sprinklers)', desc: 'Sistemas fixos de bicos de chuveiro automático', basic: false },
-  { key: 'plano_emerg_incendio', label: 'Plano de Emergência (PEI)', desc: 'Documento tático operacional de abandono', basic: false }
-];
-
 // Dados Gabarito Reais do VAL SAT extraídos de docs/FENIX-CADASTRO-EDIFICACAO-E-PROJETO.md
 export const VAL_SAT_SAMPLE: ProjectDraftInput = {
   name: 'VAL SAT - Apuarema (Gabarito Oficial CBMBA)',
   edificacao_mode: 'new',
   edificacao_id: null,
+  form_mode: 'pts',
+  tipo_projeto_id: 5,
   process_category: 'pts',
   license_type: 'CLCB',
   isencao_id: 1,
   n_art_rrt: 'BA20261628773',
+  data_inicio: '',
+  data_fim: '',
+  projeto_anterior: false,
+  n_projeto_anterior: '',
+  decreto_estadual_adotado_id: 2,
+  cnae_not_in_it14: false,
+  porte_outros: '',
+  qtde_pessoas: '',
+  qtde_leitos: '',
+  qtde_funcionarios: '',
+  area_comum: '',
+  subsolo_maior_50m: false,
+  cobertura_fsps_sup200: false,
   edification: {
     reference_name: 'VAL SAT',
     registration: '',
@@ -457,11 +380,11 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
   },
   institution: {
     tipo_pessoa: 'PJ',
-    cnpj_cpf: '09.566.970/0001-23',
+    cnpj_cpf: '09566970000123',
     razao_social: 'VANDERLEI DA SILVA SANTOS DE APUAREMA',
     nome_fantasia: 'VAL SAT E CASA DOS COLCHÕES',
-    natureza_juridica: 'Empresa de Pequeno Porte (EPP)',
-    cnae: '4754-7/01',
+    natureza_juridica: 'EPP - Empresa de Pequeno Porte',
+    cnae: '4754701',
     atividade_economica: 'Comércio varejista de móveis',
     risk: 300
   },
@@ -474,7 +397,7 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
   },
   proprietario: {
     tipo_pessoa_prop: 'PJ',
-    cpf_cnpj_prop: '09.566.970/0001-23',
+    cpf_cnpj_prop: '09566970000123',
     nome_proprietario: 'VAL SAT E CASA DOS COLCHÕES',
     email_proprietario: 'engenharia@abaincendio.com.br',
     tel_proprietario: '(71) 4000-2895'
@@ -482,7 +405,7 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
   responsavel: {
     responsavel_uso_igual_prop: true,
     tipo_pessoa_resp: 'PJ',
-    cpf_cnpj_resp: '09.566.970/0001-23',
+    cpf_cnpj_resp: '09566970000123',
     nome_responsavel: 'VAL SAT E CASA DOS COLCHÕES',
     email_responsavel_uso: 'engenharia@abaincendio.com.br',
     tel_responsavel_uso: '(71) 4000-2895'
@@ -494,17 +417,44 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
     telephone: '(71) 4000-2895',
     email: 'engenharia@abaincendio.com.br'
   },
+  responsaveis_tecnicos: [
+    {
+      tipo_numero: 'CREA',
+      crea_cau: 'BA20261628773',
+      name: 'ABA Incêndio - Engenharia e Projetos',
+      cpf_cnpj: '00000000000',
+      phone: '(71) 4000-2895',
+      email: 'engenharia@abaincendio.com.br'
+    }
+  ],
+  incluir_rt_opcional: false,
   questionario: {
     edf_saida_direta: true,
+    edf_regularizada_certificado: false,
+    tipo_certificado: 'AVCB',
+    n_certificado: '',
+    renovacao_sap: false,
+    lotacao_max_pessoas: false,
     existe_gases_inflamaveis: false,
     existe_liquidos_inflamaveis: false,
     glp_12480kg: false,
     gas_glp: false,
     armazena_produtos_perigosos: false,
     local_reuniao_publico: false,
-    lotacao_max_pessoas: false,
     subsolo_maior_50m_pt: false,
     cobertura_fibras_sape: false
+  },
+  specialRisks: {
+    liquidos_inflamaveis: false,
+    gas_liquefeito_petroleo: false,
+    produtos_perigosos: false,
+    fogos_artificio: false,
+    vaso_pressao: false,
+    outros: ''
+  },
+  glpData: {
+    total_kg_glp: '',
+    classe_glp: 'Classe I'
   },
   securityMeasures: {
     iluminacao_emerg: 1,
@@ -512,108 +462,7 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
     extintores: 1,
     saidas_emerg: 1,
     brigada_incendio: 1,
-    acesso_viatura: 0,
-    hidrante_mangot: 0,
-    alarme_incendio: 0,
-    deteccao_incendio: 0,
-    seguranca_estrutural: 0,
-    chuveiros_auto: 0,
-    plano_emerg_incendio: 0
-  }
-};
-
-const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
-  name: 'Novo Rascunho de Projeto',
-  edificacao_mode: 'new',
-  edificacao_id: null,
-  process_category: 'pts',
-  license_type: 'CLCB',
-  isencao_id: 1,
-  n_art_rrt: '',
-  edification: {
-    reference_name: '',
-    registration: '',
-    height: 'Térrea = Um pavimento',
-    number_floors: 1,
-    building_area: '',
-    area_to_be_built: 0,
-    discount_area: 0
-  },
-  address: {
-    zip_code: '',
-    public_place: '',
-    number: '',
-    complement: '***',
-    district: '',
-    municipio_id: null,
-    county: '',
-    state: 'BA',
-    geographic_coordinates: ''
-  },
-  institution: {
-    tipo_pessoa: 'PJ',
-    cnpj_cpf: '',
-    razao_social: '',
-    nome_fantasia: '',
-    natureza_juridica: '',
-    cnae: '',
-    atividade_economica: '',
-    risk: 300
-  },
-  occupation: {
-    occupation_group_id: 3,
-    division_group_id: 6,
-    has_underground: false,
-    underground_occupation_group_id: 13,
-    underground_division_group_id: 58
-  },
-  proprietario: {
-    tipo_pessoa_prop: 'PJ',
-    cpf_cnpj_prop: '',
-    nome_proprietario: '',
-    email_proprietario: 'engenharia@abaincendio.com.br',
-    tel_proprietario: '(71) 4000-2895'
-  },
-  responsavel: {
-    responsavel_uso_igual_prop: true,
-    tipo_pessoa_resp: 'PJ',
-    cpf_cnpj_resp: '',
-    nome_responsavel: '',
-    email_responsavel_uso: 'engenharia@abaincendio.com.br',
-    tel_responsavel_uso: '(71) 4000-2895'
-  },
-  technical: {
-    cpf: '',
-    name: 'ABA Incêndio',
-    crea_cau: '',
-    telephone: '(71) 4000-2895',
-    email: 'engenharia@abaincendio.com.br'
-  },
-  questionario: {
-    edf_saida_direta: true,
-    existe_gases_inflamaveis: false,
-    existe_liquidos_inflamaveis: false,
-    glp_12480kg: false,
-    gas_glp: false,
-    armazena_produtos_perigosos: false,
-    local_reuniao_publico: false,
-    lotacao_max_pessoas: false,
-    subsolo_maior_50m_pt: false,
-    cobertura_fibras_sape: false
-  },
-  securityMeasures: {
-    iluminacao_emerg: 1,
-    sinal_emerg: 1,
-    extintores: 1,
-    saidas_emerg: 1,
-    brigada_incendio: 0,
-    acesso_viatura: 0,
-    hidrante_mangot: 0,
-    alarme_incendio: 0,
-    deteccao_incendio: 0,
-    seguranca_estrutural: 0,
-    chuveiros_auto: 0,
-    plano_emerg_incendio: 0
+    control_mat_acab: 1
   }
 };
 
@@ -818,6 +667,20 @@ export function ProjectDraftModal({
         next.name = patch.name;
         modifiedKeys.add('name');
       }
+      if (patch.form_mode) {
+        next.form_mode = patch.form_mode;
+        modifiedKeys.add('form_mode');
+      }
+      if (patch.tipo_projeto_id) {
+        next.tipo_projeto_id = patch.tipo_projeto_id;
+        const targetType = OFFICIAL_PROJECT_TYPES.find((t) => t.id === patch.tipo_projeto_id);
+        if (targetType) {
+          next.form_mode = targetType.form_mode;
+          next.process_category = targetType.category;
+          next.license_type = targetType.license;
+        }
+        modifiedKeys.add('tipo_projeto_id');
+      }
       if (patch.edification) {
         next.edification = { ...next.edification, ...patch.edification };
         modifiedKeys.add('edification');
@@ -826,20 +689,38 @@ export function ProjectDraftModal({
         next.address = { ...next.address, ...patch.address };
         modifiedKeys.add('address');
       }
+      if (patch.institution) {
+        next.institution = { ...next.institution, ...patch.institution };
+        modifiedKeys.add('institution');
+      }
       if (patch.occupation) {
         next.occupation = { ...next.occupation, ...patch.occupation };
         modifiedKeys.add('occupation');
+      }
+      if (patch.proprietario) {
+        next.proprietario = { ...next.proprietario, ...patch.proprietario };
+        modifiedKeys.add('proprietario');
       }
       if (patch.responsavel) {
         next.responsavel = { ...next.responsavel, ...patch.responsavel };
         modifiedKeys.add('responsavel');
       }
+      if (patch.technical) {
+        next.technical = { ...next.technical, ...patch.technical };
+        modifiedKeys.add('technical');
+      }
+      if (patch.questionario) {
+        next.questionario = { ...(next.questionario || {}), ...patch.questionario };
+        modifiedKeys.add('questionario');
+      }
+      if (patch.specialRisks) {
+        next.specialRisks = { ...(next.specialRisks || {}), ...patch.specialRisks };
+        modifiedKeys.add('specialRisks');
+      }
       if (patch.securityMeasures) {
-        const nextMeasures = { ...next.securityMeasures };
-        Object.entries(patch.securityMeasures).forEach(([k, v]) => {
-          nextMeasures[k] = v ? 1 : 0;
-        });
-        next.securityMeasures = nextMeasures;
+        const isPts = (next.form_mode || prev.form_mode || 'pts') === 'pts';
+        const normalized = normalizeSecurityMeasures(patch.securityMeasures, isPts);
+        next.securityMeasures = { ...next.securityMeasures, ...normalized };
         modifiedKeys.add('measures');
       }
       return next;
@@ -970,14 +851,22 @@ export function ProjectDraftModal({
     const blockedList = domains?.blockedPtsCnaes || BLOCKED_PTS_CNAES_DEFAULT;
     const isCnaeBlocked = blockedList.includes(rawCnae);
 
-    if (isCnaeBlocked) {
+    // Identifica riscos especiais de GLP (> 12.480kg ou Classe V+)
+    const glpKg = parseFloat(String(formData.glpData?.total_kg_glp || 0)) || 0;
+    const isGlpExceedingPts = glpKg > 12480 || (formData.glpData?.classe_glp && ['Classe V', 'Classe VI', 'Classe VII', 'Classe ESPECIAL'].includes(formData.glpData.classe_glp));
+
+    if (isCnaeBlocked || isGlpExceedingPts) {
       return {
         sigla: 'PT',
         nome: 'Projeto Técnico (Completo)',
         badgeClass: 'badge-pt',
-        motivo: 'CNAE de alto risco com bloqueio mandatório para PTS (exige PT Completo)',
+        motivo: isCnaeBlocked
+          ? 'CNAE de alto risco com bloqueio mandatório para PTS (exige PT Completo)'
+          : 'Armazenamento de GLP acima de 12.480 kg (exige sistemas fixos e PT Completo)',
         suggestedCategory: 'pt' as const,
         suggestedLicense: 'AVCB' as const,
+        suggestedFormMode: 'pt' as const,
+        suggestedTipoProjetoId: 1,
         isPts: false
       };
     }
@@ -990,12 +879,14 @@ export function ProjectDraftModal({
         motivo: 'Edificação térrea com área total até 200 m²',
         suggestedCategory: 'pts' as const,
         suggestedLicense: 'CLCB' as const,
+        suggestedFormMode: 'pts' as const,
+        suggestedTipoProjetoId: 4,
         isPts: true
       };
     }
 
     if (totalArea <= 750 && floors <= 3) {
-      if (formData.license_type === 'AVCB') {
+      if (formData.license_type === 'AVCB' || formData.tipo_projeto_id === 6) {
         return {
           sigla: 'PTSAVCB',
           nome: 'PTS com Vistoria Prévia (AVCB)',
@@ -1003,6 +894,8 @@ export function ProjectDraftModal({
           motivo: 'Área até 750 m² e até 3 pavimentos com vistoria presencial do CBMBA',
           suggestedCategory: 'pts' as const,
           suggestedLicense: 'AVCB' as const,
+          suggestedFormMode: 'pts' as const,
+          suggestedTipoProjetoId: 6,
           isPts: true
         };
       }
@@ -1013,6 +906,8 @@ export function ProjectDraftModal({
         motivo: 'Área até 750 m² e até 3 pavimentos sem vistoria prévia',
         suggestedCategory: 'pts' as const,
         suggestedLicense: 'CLCB' as const,
+        suggestedFormMode: 'pts' as const,
+        suggestedTipoProjetoId: 5,
         isPts: true
       };
     }
@@ -1024,9 +919,11 @@ export function ProjectDraftModal({
       motivo: totalArea > 750 ? `Área total de ${totalArea.toLocaleString('pt-BR')} m² supera o limite de 750 m²` : `Nº de pavimentos (${floors}) superior a 3`,
       suggestedCategory: 'pt' as const,
       suggestedLicense: 'AVCB' as const,
+      suggestedFormMode: 'pt' as const,
+      suggestedTipoProjetoId: 1,
       isPts: false
     };
-  }, [calculatedTotalArea, formData.edification.number_floors, formData.institution.cnae, formData.license_type, domains]);
+  }, [calculatedTotalArea, formData.edification.number_floors, formData.institution.cnae, formData.license_type, formData.tipo_projeto_id, formData.glpData, domains]);
 
   // Lista de erros e validações locais do rascunho
   const localValidation = useMemo(() => {
@@ -1085,13 +982,20 @@ export function ProjectDraftModal({
     if (!formData.proprietario.email_proprietario.trim() || !formData.proprietario.email_proprietario.includes('@')) {
       errors.push('Etapa 2: E-mail de contato do proprietário é obrigatório.');
     }
-    if (!formData.n_art_rrt?.trim()) {
-      warnings.push('Etapa 2: Número de ART/RRT não informado. Será exigido antes do protocolo oficial.');
+    const isPtsClcb1SaidaDireta = formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false;
+    if (!isPtsClcb1SaidaDireta && !formData.n_art_rrt?.trim()) {
+      warnings.push('Etapa 2: Número de ART/RRT não informado. Será obrigatório para este tipo de projeto técnico antes do protocolo oficial.');
+    }
+
+    if ([2, 3, 7, 8].includes(formData.tipo_projeto_id || 0)) {
+      if (!formData.data_inicio || !formData.data_fim) {
+        errors.push('Etapa 2: Datas de início e término são obrigatórias para ocupações temporárias.');
+      }
     }
 
     // Alertas de coerência
-    if (enquadramento.sigla === 'PT' && formData.process_category === 'pts') {
-      warnings.push('Atenção: Os dados informados excedem os limites de PTS; o sistema enquadrará como PT.');
+    if (enquadramento.sigla === 'PT' && (formData.form_mode || formData.process_category) === 'pts') {
+      warnings.push('Atenção: Os dados informados excedem os limites de PTS; o CBMBA exige formulário de Projeto Técnico Completo.');
     }
 
     return {
@@ -1100,6 +1004,33 @@ export function ProjectDraftModal({
       warnings
     };
   }, [formData, calculatedTotalArea, enquadramento]);
+
+  // Modo de formulário atual derivado (PTS ou PT Completo)
+  const currentFormMode: 'pts' | 'pt' = formData.form_mode || enquadramento.suggestedFormMode || 'pts';
+
+  // Alternador dos 2 formulários oficiais Fênix CBMBA
+  const handleSwitchFormMode = (mode: 'pts' | 'pt') => {
+    setFormData((prev) => {
+      let nextTipo = prev.tipo_projeto_id;
+      if (mode === 'pts') {
+        if (!nextTipo || ![4, 5, 6, 7, 8].includes(nextTipo)) {
+          nextTipo = enquadramento.suggestedLicense === 'CLCB' ? 4 : 6;
+        }
+      } else {
+        if (!nextTipo || ![1, 2, 3].includes(nextTipo)) {
+          nextTipo = 1;
+        }
+      }
+      return {
+        ...prev,
+        form_mode: mode,
+        process_category: mode,
+        tipo_projeto_id: nextTipo,
+        securityMeasures: normalizeSecurityMeasures(prev.securityMeasures, mode === 'pts')
+      };
+    });
+    showToast(`Formulário alternado para ${mode === 'pts' ? 'Projeto Técnico Simplificado (PTS)' : 'Projeto Técnico Completo (PT)'}.`, 'info');
+  };
 
   // Ações de criação, carga de gabarito e seleção de rascunhos
   const handleNewDraft = () => {
@@ -1149,11 +1080,18 @@ export function ProjectDraftModal({
 
   const handleOpenDraft = (draft: DraftRecord) => {
     setCurrentDraft(draft);
-    setFormData({
+    const loadedData: ProjectDraftInput = {
       ...draft.data,
       id: draft.id,
       name: draft.name
-    });
+    };
+    if (!loadedData.form_mode) {
+      loadedData.form_mode = (loadedData.process_category === 'pt' || (loadedData.tipo_projeto_id && loadedData.tipo_projeto_id <= 3)) ? 'pt' : 'pts';
+    }
+    if (!loadedData.tipo_projeto_id) {
+      loadedData.tipo_projeto_id = loadedData.form_mode === 'pt' ? 1 : 5;
+    }
+    setFormData(loadedData);
     if (draft.lastSimulation) {
       setSimulationResult({
         ok: draft.lastSimulation.ok,
@@ -1189,10 +1127,17 @@ export function ProjectDraftModal({
   const handleSaveDraft = async (silent = false) => {
     setSaving(true);
     try {
+      const activeFormMode = formData.form_mode || enquadramento.suggestedFormMode || 'pts';
+      const activeTipoProjetoId = formData.tipo_projeto_id || enquadramento.suggestedTipoProjetoId || (activeFormMode === 'pt' ? 1 : 5);
+      const targetType = OFFICIAL_PROJECT_TYPES.find((t) => t.id === activeTipoProjetoId);
+
       const payload: ProjectDraftInput = {
         ...formData,
         id: currentDraft?.id || formData.id || crypto.randomUUID(),
-        process_category: enquadramento.suggestedCategory,
+        form_mode: activeFormMode,
+        tipo_projeto_id: activeTipoProjetoId,
+        process_category: targetType?.category || (activeFormMode === 'pt' ? 'pt' : 'pts'),
+        license_type: targetType?.license || (activeFormMode === 'pt' ? 'AVCB' : 'CLCB'),
         edification: {
           ...formData.edification,
           total_area: calculatedTotalArea
@@ -1205,7 +1150,12 @@ export function ProjectDraftModal({
       });
 
       setCurrentDraft(res.draft);
-      setFormData((prev) => ({ ...prev, id: res.draft.id }));
+      setFormData((prev) => ({
+        ...prev,
+        id: res.draft.id,
+        form_mode: activeFormMode,
+        tipo_projeto_id: activeTipoProjetoId
+      }));
       if (!silent) {
         showToast('Rascunho salvo com sucesso!', 'success');
       }
@@ -1427,18 +1377,20 @@ export function ProjectDraftModal({
       }
 
       setFormData((prev) => {
-        const nextMeasures: Record<string, number | boolean> = { ...prev.securityMeasures };
-        if (res.it14.mappedMeasures && Object.keys(res.it14.mappedMeasures).length > 0) {
-          Object.entries(res.it14.mappedMeasures).forEach(([k, v]) => {
-            nextMeasures[k] = v ? 1 : 0;
-          });
-        }
-
         const suggestedCat = res.it14.project_type_sugerido?.toLowerCase() === 'pt' ? 'pt' : 'pts';
         const suggestedLic = res.it14.tipo_processo_sugerido || (suggestedCat === 'pt' ? 'AVCB' : 'CLCB');
+        const activeFormMode = prev.form_mode || suggestedCat;
+        const isPts = activeFormMode === 'pts';
+
+        const nextMeasures = {
+          ...prev.securityMeasures,
+          ...normalizeSecurityMeasures(res.it14.mappedMeasures, isPts)
+        };
 
         return {
           ...prev,
+          form_mode: activeFormMode,
+          tipo_projeto_id: prev.tipo_projeto_id || (activeFormMode === 'pt' ? 1 : (calculatedTotalArea <= 200 ? 4 : 5)),
           edification: {
             ...prev.edification,
             reference_name: prev.edification.reference_name && prev.edification.reference_name !== 'Nova Edificação'
@@ -1477,8 +1429,8 @@ export function ProjectDraftModal({
             tel_proprietario: prev.proprietario.tel_proprietario || res.contact?.phone || '',
             email_proprietario: prev.proprietario.email_proprietario || res.contact?.email || ''
           },
-          process_category: suggestedCat,
-          license_type: suggestedLic,
+          process_category: prev.process_category || suggestedCat,
+          license_type: prev.license_type || suggestedLic,
           securityMeasures: nextMeasures
         };
       });
@@ -1541,25 +1493,6 @@ export function ProjectDraftModal({
 
     return () => clearTimeout(timer);
   }, [calculatedTotalArea, formData.edification.number_floors, formData.edification.height]);
-
-  // Sincronização inteligente em tempo real de categoria e vistoria
-  useEffect(() => {
-    const totalArea = calculatedTotalArea;
-    const floors = Number(formData.edification.number_floors) || 1;
-    const rawCnae = cleanDigits(formData.institution.cnae);
-    const blockedList = domains?.blockedPtsCnaes || BLOCKED_PTS_CNAES_DEFAULT;
-    const isCnaeBlocked = blockedList.includes(rawCnae);
-
-    if (totalArea > 750 || floors > 3 || isCnaeBlocked) {
-      if (formData.process_category !== 'pt' || formData.license_type !== 'AVCB') {
-        setFormData((prev) => ({
-          ...prev,
-          process_category: 'pt',
-          license_type: 'AVCB'
-        }));
-      }
-    }
-  }, [calculatedTotalArea, formData.edification.number_floors, formData.institution.cnae, domains]);
 
   // Reaproveitar edificação existente
   const handleSelectExistingBuilding = (bId: string) => {
@@ -1640,29 +1573,42 @@ export function ProjectDraftModal({
 
   // Marcar medidas recomendadas para o porte
   const handleAutoCheckMeasures = () => {
-    const area = calculatedTotalArea;
-    const isPt = !enquadramento.isPts || area > 750;
+    const isPts = (formData.form_mode || enquadramento.suggestedFormMode || 'pts') === 'pts';
+    const isBig = calculatedTotalArea > 750 || !isPts;
 
-    const newMeasures: Record<string, number | boolean> = {
+    const baseMeasures: Record<string, number> = {
       extintores: 1,
       iluminacao_emerg: 1,
       sinal_emerg: 1,
       saidas_emerg: 1,
-      brigada_incendio: area > 200 ? 1 : 0,
-      hidrante_mangot: isPt ? 1 : 0,
-      alarme_incendio: isPt ? 1 : 0,
-      deteccao_incendio: isPt ? 1 : 0,
-      acesso_viatura: isPt ? 1 : 0,
-      seguranca_estrutural: isPt ? 1 : 0,
-      chuveiros_auto: 0,
-      plano_emerg_incendio: isPt ? 1 : 0
+      brigada_incendio: calculatedTotalArea > 200 || !isPts ? 1 : 0,
+      control_mat_acab: 1
     };
+
+    if (!isPts) {
+      baseMeasures.hidrante_mangot = isBig ? 1 : 0;
+      baseMeasures.alarme_incendio = isBig ? 1 : 0;
+      baseMeasures.deteccao_incendio = calculatedTotalArea > 1200 ? 1 : 0;
+      baseMeasures.acesso_viatura = 1;
+      baseMeasures.seguranca_estrutural = 1;
+      baseMeasures.plano_emerg_incendio = isBig ? 1 : 0;
+      baseMeasures.sis_prot_cont_desc_elet = calculatedTotalArea > 750 ? 1 : 0;
+      baseMeasures.comp_horizontal = 0;
+      baseMeasures.comp_vertical = 0;
+      baseMeasures.separacao_edific = 0;
+      baseMeasures.resfriamento = 0;
+      baseMeasures.chuveiros_auto = 0;
+      baseMeasures.elevador_emerg = 0;
+      baseMeasures.control_fumaca = 0;
+      baseMeasures.espuma = 0;
+      baseMeasures.sis_fixo_gases = 0;
+    }
 
     setFormData((prev) => ({
       ...prev,
-      securityMeasures: newMeasures
+      securityMeasures: normalizeSecurityMeasures(baseMeasures, isPts)
     }));
-    showToast(`Medidas sugeridas para o enquadramento ${enquadramento.sigla} marcadas.`, 'info');
+    showToast(`Medidas oficiais Fênix CBMBA ajustadas para ${isPts ? 'PTS (6 básicas)' : 'PT (22 medidas)'}.`, 'success');
   };
 
   // Simular Dry-Run
@@ -2125,7 +2071,143 @@ export function ProjectDraftModal({
   // Conteúdo dos Steps de Formulário
   const renderStepPanels = () => (
     <>
-              {/* ETAPA 1: EDIFICAÇÃO & ENDEREÇO */}
+      {/* SELETOR DOS 2 FORMULÁRIOS OFICIAIS DO FÊNIX CBMBA */}
+      <div className="fenix-official-selector-wrap animate-fade-in" style={{ marginBottom: '1.25rem' }}>
+        <div className="fenix-selector-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <div className="fenix-selector-title">
+            <span className="section-kicker" style={{ display: 'block', fontSize: '0.72rem', letterSpacing: '0.08em', color: 'var(--color-primary, #0ea5e9)', fontWeight: 700, textTransform: 'uppercase' }}>
+              Cartões Oficiais de Entrada do Fênix CBMBA
+            </span>
+            <h4 style={{ margin: '0.2rem 0 0', fontSize: '1.05rem', fontWeight: 700 }}>Selecione o Tipo de Cadastro Oficial</h4>
+          </div>
+          <span className="badge-tag tag-purple" style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600 }}>
+            Paridade 1:1 com Fênix Oficial
+          </span>
+        </div>
+
+        <div className="fenix-form-cards-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '0.9rem' }}>
+          {/* Cartão 1: PT Completo */}
+          <div
+            className={`fenix-form-card ${currentFormMode === 'pt' ? 'selected' : ''}`}
+            onClick={() => handleSwitchFormMode('pt')}
+            role="button"
+            tabIndex={0}
+            style={{
+              padding: '1rem',
+              borderRadius: '12px',
+              border: currentFormMode === 'pt' ? '2px solid var(--color-primary, #0ea5e9)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+              background: currentFormMode === 'pt' ? 'rgba(14, 165, 233, 0.08)' : 'var(--bg-card, rgba(255,255,255,0.03))',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxShadow: currentFormMode === 'pt' ? '0 0 16px rgba(14, 165, 233, 0.2)' : 'none'
+            }}
+          >
+            <div className="fenix-card-badge-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span className="fenix-card-code" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
+                Cartão 1 · PT Completo
+              </span>
+              {currentFormMode === 'pt' && (
+                <span className="fenix-card-active-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', fontWeight: 700, background: '#0ea5e9', color: '#fff', padding: '2px 8px', borderRadius: '999px' }}>
+                  <Check size={12} /> Ativo
+                </span>
+              )}
+            </div>
+            <h5 style={{ margin: '0 0 0.4rem', fontSize: '0.95rem', fontWeight: 700 }}>Cadastrar Projeto Téc. Completo</h5>
+            <p style={{ margin: '0 0 0.6rem', fontSize: '0.8rem', opacity: 0.82, lineHeight: 1.45 }}>
+              Para edificações acima de 750 m², com mais de 3 pavimentos, riscos especiais elevados, sistemas hidráulicos ou eventos temporários de grande porte.
+            </p>
+            <div className="fenix-card-types-list" style={{ fontSize: '0.72rem', opacity: 0.75, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.5rem' }}>
+              <span>Opções no Fênix: </span>
+              <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PT (1)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTIOT (2)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTOTEP (3)</code>
+            </div>
+          </div>
+
+          {/* Cartão 2: PTS Simplificado */}
+          <div
+            className={`fenix-form-card ${currentFormMode === 'pts' ? 'selected' : ''}`}
+            onClick={() => handleSwitchFormMode('pts')}
+            role="button"
+            tabIndex={0}
+            style={{
+              padding: '1rem',
+              borderRadius: '12px',
+              border: currentFormMode === 'pts' ? '2px solid var(--color-teal, #14b8a6)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
+              background: currentFormMode === 'pts' ? 'rgba(20, 184, 166, 0.08)' : 'var(--bg-card, rgba(255,255,255,0.03))',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxShadow: currentFormMode === 'pts' ? '0 0 16px rgba(20, 184, 166, 0.2)' : 'none'
+            }}
+          >
+            <div className="fenix-card-badge-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span className="fenix-card-code" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#2dd4bf', textTransform: 'uppercase' }}>
+                Cartão 2 · PTS Simplificado
+              </span>
+              {currentFormMode === 'pts' && (
+                <span className="fenix-card-active-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', fontWeight: 700, background: '#14b8a6', color: '#fff', padding: '2px 8px', borderRadius: '999px' }}>
+                  <Check size={12} /> Ativo
+                </span>
+              )}
+            </div>
+            <h5 style={{ margin: '0 0 0.4rem', fontSize: '0.95rem', fontWeight: 700 }}>Cadastrar Projeto Téc. Simplificado</h5>
+            <p style={{ margin: '0 0 0.6rem', fontSize: '0.8rem', opacity: 0.82, lineHeight: 1.45 }}>
+              Para edificações até 750 m² e no máximo 3 pavimentos (altura ≤ 12m), sem riscos complexos. Emite CLCB (dispensa de vistoria prévia) ou AVCB simplificado.
+            </p>
+            <div className="fenix-card-types-list" style={{ fontSize: '0.72rem', opacity: 0.75, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.5rem' }}>
+              <span>Opções no Fênix: </span>
+              <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTSCLCB1 (4)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTSCLCB2 (5)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTSAVCB (6)</code>
+            </div>
+          </div>
+        </div>
+
+        {/* Alertas de Migração e Bloqueios Oficiais CBMBA */}
+        {currentFormMode === 'pts' && (calculatedTotalArea > 750 || Number(formData.edification.number_floors) > 3 || (formData.specialRisks?.gas_liquefeito_petroleo && Number(formData.glpData?.total_kg_glp) > 12480)) && (
+          <div className="fenix-migration-alert alert-warning animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <AlertTriangle size={20} className="text-amber" />
+              <div style={{ fontSize: '0.82rem', lineHeight: 1.4 }}>
+                <strong>Atenção: A edificação excede os limites de Projeto Técnico Simplificado (PTS)!</strong>
+                <div>
+                  Área ({calculatedTotalArea} m² {calculatedTotalArea > 750 ? '> 750 m²' : ''})
+                  {Number(formData.edification.number_floors) > 3 ? ' ou Pavimentos (> 3 pavimentos)' : ''}
+                  {formData.specialRisks?.gas_liquefeito_petroleo && Number(formData.glpData?.total_kg_glp) > 12480 ? ' ou GLP (> 12.480 kg)' : ''}. O CBMBA bloqueará a homologação em PTS.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="button button-outline button-xs"
+              style={{ whiteSpace: 'nowrap', borderColor: '#f59e0b', color: '#f59e0b' }}
+              onClick={() => handleSwitchFormMode('pt')}
+            >
+              <ArrowRight size={13} /> Migrar para PT Completo
+            </button>
+          </div>
+        )}
+
+        {currentFormMode === 'pt' && calculatedTotalArea > 0 && calculatedTotalArea <= 750 && Number(formData.edification.number_floors) <= 3 && (!formData.specialRisks?.gas_liquefeito_petroleo || Number(formData.glpData?.total_kg_glp) <= 12480) && formData.tipo_projeto_id === 1 && (
+          <div className="fenix-migration-alert alert-info animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: '10px', background: 'rgba(14, 165, 233, 0.12)', border: '1px solid rgba(14, 165, 233, 0.35)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <Info size={20} className="text-teal" />
+              <div style={{ fontSize: '0.82rem', lineHeight: 1.4 }}>
+                <strong>Aviso de Bloqueio Cadastral CBMBA (bloqueioCadastroPTSviaCardPT):</strong>
+                <div>
+                  Edificação possui ≤ 750 m² e até 3 pavimentos. O Fênix impede protocolar imóveis desse porte pelo cartão de Projeto Técnico Completo permanente.
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="button button-outline button-xs"
+              style={{ whiteSpace: 'nowrap', borderColor: '#0ea5e9', color: '#0ea5e9' }}
+              onClick={() => handleSwitchFormMode('pts')}
+            >
+              <ArrowRight size={13} /> Alternar para PTS Simplificado
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ETAPA 1: EDIFICAÇÃO & ENDEREÇO */}
               {step === 1 && (
                 <div className="step-panel animate-fade-in">
                   {/* 0. Card de Consulta Rápida por CNPJ + Enquadramento IT-14 */}
@@ -2693,56 +2775,94 @@ export function ProjectDraftModal({
                         <strong>{it14Result?.it14.divisao_code || formData.occupation.division_group_id ? `Divisão ${it14Result?.it14.divisao_code || ''} · ${formData.institution.risk ? `${formData.institution.risk} MJ/m²` : 'Risco Médio'}` : 'Conforme IT-14'}</strong>
                       </div>
                     </div>
+
+                    {/* Botão de aplicar sugestão se houver divergência com o sugerido pela IT-14 */}
+                    {(currentFormMode !== enquadramento.suggestedFormMode || formData.tipo_projeto_id !== enquadramento.suggestedTipoProjetoId) && (
+                      <div className="enquadramento-suggest-action animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginTop: '0.9rem', padding: '0.65rem 0.9rem', borderRadius: '8px', background: 'rgba(14, 165, 233, 0.12)', border: '1px solid rgba(14, 165, 233, 0.3)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem' }}>
+                          <Sparkles size={16} className="text-teal" />
+                          <span>
+                            A IT-14 sugere: <b>{enquadramento.suggestedFormMode.toUpperCase()} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === enquadramento.suggestedTipoProjetoId)?.sigla})</b>.
+                            Atual selecionado: <b>{currentFormMode.toUpperCase()} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === formData.tipo_projeto_id)?.sigla || 'Não definido'})</b>.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="button button-outline button-xs"
+                          style={{ borderColor: '#0ea5e9', color: '#0ea5e9', whiteSpace: 'nowrap' }}
+                          onClick={() => {
+                            handleSwitchFormMode(enquadramento.suggestedFormMode);
+                            setFormData(prev => ({ ...prev, tipo_projeto_id: enquadramento.suggestedTipoProjetoId }));
+                            showToast('Sugestão da IT-14 aplicada ao cadastro!', 'success');
+                          }}
+                        >
+                          <Check size={13} /> Aplicar Sugestão da IT-14
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Bloco de Dados do Projeto & Licença */}
+                  {/* Bloco de Dados Gerais do Projeto Técnico */}
                   <div className="editor-card">
                     <div className="card-heading">
                       <ClipboardList size={18} className="text-teal" />
-                      <h4>Dados Gerais do Projeto Técnico</h4>
+                      <h4>Dados Gerais do Projeto Técnico ({currentFormMode === 'pts' ? 'Cartão 2 · PTS' : 'Cartão 1 · PT'})</h4>
                     </div>
 
                     <div className="form-grid">
-                      {/* Categoria */}
-                      <div className="form-col-4">
+                      {/* Tipo Oficial de Projeto Técnico */}
+                      <div className="form-col-6">
                         <label className="field-label">
-                          <span>Categoria de Processo</span>
+                          <span>Tipo Oficial de Projeto Técnico (Fênix CBMBA) *</span>
                           <select
                             className="input-select"
-                            value={formData.process_category || 'pts'}
-                            onChange={(e) => setFormData((prev) => ({
-                              ...prev,
-                              process_category: e.target.value as 'pts' | 'pt'
-                            }))}
+                            value={formData.tipo_projeto_id || (currentFormMode === 'pts' ? 4 : 1)}
+                            onChange={(e) => {
+                              const tid = Number(e.target.value);
+                              setFormData((prev) => ({
+                                ...prev,
+                                tipo_projeto_id: tid,
+                                license_type: [4, 5].includes(tid) ? 'CLCB' : 'AVCB'
+                              }));
+                            }}
                           >
-                            <option value="pts">PTS - Projeto Técnico Simplificado</option>
-                            <option value="pt">PT - Projeto Técnico (Completo)</option>
+                            {OFFICIAL_PROJECT_TYPES.filter((t) => t.form_mode === currentFormMode).map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.id}: {t.sigla} — {t.descricao}
+                              </option>
+                            ))}
                           </select>
                         </label>
+                        <small className="field-hint">Filtrado estritamente pelas opções oficiais do cartão selecionado.</small>
                       </div>
 
-                      {/* Tipo de Licença */}
-                      <div className="form-col-4">
+                      {/* Isenção de Taxa */}
+                      <div className="form-col-3">
                         <label className="field-label">
-                          <span>Tipo de Licença Pretendida</span>
+                          <span>Isenção da Taxa CBMBA</span>
                           <select
                             className="input-select"
-                            value={formData.license_type || 'CLCB'}
-                            onChange={(e) => setFormData((prev) => ({
-                              ...prev,
-                              license_type: e.target.value as 'CLCB' | 'AVCB'
-                            }))}
+                            value={formData.isencao_id ? 1 : 0}
+                            onChange={(e) => setFormData((prev) => ({ ...prev, isencao_id: Number(e.target.value) || undefined }))}
                           >
-                            <option value="CLCB">CLCB - Certificado de Licença do Corpo de Bombeiros</option>
-                            <option value="AVCB">AVCB - Auto de Vistoria do Corpo de Bombeiros</option>
+                            <option value={0}>Não — Taxa Devida</option>
+                            <option value={1}>Sim — Isento de Taxa</option>
                           </select>
                         </label>
+                        <small className="field-hint">Órgãos públicos e entidades filantrópicas.</small>
                       </div>
 
-                      {/* ART / RRT */}
-                      <div className="form-col-4">
+                      {/* ART / RRT Geral */}
+                      <div className="form-col-3">
                         <label className="field-label">
-                          <span>Nº ART / RRT (Responsabilidade Técnica)</span>
+                          <div className="flex-between">
+                            <span>Nº ART / RRT</span>
+                            {formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false ? (
+                              <span className="badge-tag tag-green" style={{ fontSize: '0.65rem' }}>Dispensada no PTSCLCB1</span>
+                            ) : (
+                              <span className="badge-tag tag-amber" style={{ fontSize: '0.65rem' }}>Obrigatória</span>
+                            )}
+                          </div>
                           <input
                             type="text"
                             className="input-text"
@@ -2752,8 +2872,98 @@ export function ProjectDraftModal({
                             onChange={(e) => setFormData((prev) => ({ ...prev, n_art_rrt: e.target.value.toUpperCase() }))}
                           />
                         </label>
-                        <small className="field-hint">Anotação do CREA ou CAU do responsável técnico.</small>
+                        <small className="field-hint">Registro no CREA / CAU / CFT.</small>
                       </div>
+
+                      {/* Bloco de Datas do Evento se for Temporário */}
+                      {[2, 3, 7, 8].includes(formData.tipo_projeto_id || 0) && (
+                        <div className="form-col-12 temporary-dates-box" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.15)' }}>
+                          <span style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-primary, #0ea5e9)', marginBottom: '0.5rem' }}>
+                            Período do Evento / Ocupação Temporária (Obrigatório para este Tipo de Projeto)
+                          </span>
+                          <div className="form-grid">
+                            <div className="form-col-6">
+                              <label className="field-label">
+                                <span>Data de Início do Evento *</span>
+                                <input
+                                  type="date"
+                                  className="input-text"
+                                  value={formData.data_inicio || ''}
+                                  onChange={(e) => setFormData((prev) => ({ ...prev, data_inicio: e.target.value }))}
+                                />
+                              </label>
+                            </div>
+                            <div className="form-col-6">
+                              <label className="field-label">
+                                <span>Data de Término do Evento *</span>
+                                <input
+                                  type="date"
+                                  className="input-text"
+                                  value={formData.data_fim || ''}
+                                  onChange={(e) => setFormData((prev) => ({ ...prev, data_fim: e.target.value }))}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                          {formData.data_inicio && formData.data_fim && (() => {
+                            const dStart = new Date(formData.data_inicio);
+                            const dEnd = new Date(formData.data_fim);
+                            const diffDays = Math.ceil((dEnd.getTime() - dStart.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                            const isPtsTemp = [7, 8].includes(formData.tipo_projeto_id || 0);
+                            return (
+                              <div className="temporary-duration-badge" style={{ marginTop: '0.5rem', fontSize: '0.8rem' }}>
+                                <span>Duração prevista do evento: <b>{diffDays > 0 ? `${diffDays} dias` : 'Data de término inválida!'}</b></span>
+                                {isPtsTemp && diffDays > 180 && (
+                                  <div className="text-danger" style={{ marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <AlertTriangle size={14} /> Alerta CBMBA: O limite máximo para eventos em PTS é de 180 dias!
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      {/* Projeto Anterior */}
+                      <div className="form-col-12 mt-1">
+                        <ToggleSlider
+                          checked={Boolean(formData.projeto_anterior)}
+                          onChange={(checked) => setFormData((prev) => ({ ...prev, projeto_anterior: checked }))}
+                          label="Esta edificação possui Projeto Técnico anterior aprovado no CBMBA?"
+                          description="Marque caso a edificação já possua protocolo aprovado ou processo sob decreto estadual anterior."
+                        />
+                      </div>
+
+                      {formData.projeto_anterior && (
+                        <>
+                          <div className="form-col-6 animate-fade-in">
+                            <label className="field-label">
+                              <span>Nº do Projeto Técnico Anterior</span>
+                              <input
+                                type="text"
+                                className="input-text"
+                                placeholder="Ex: PT-00452/2018"
+                                value={formData.n_projeto_anterior || ''}
+                                onChange={(e) => setFormData((prev) => ({ ...prev, n_projeto_anterior: e.target.value }))}
+                              />
+                            </label>
+                          </div>
+                          <div className="form-col-6 animate-fade-in">
+                            <label className="field-label">
+                              <span>Decreto Estadual Adotado</span>
+                              <select
+                                className="input-select"
+                                value={formData.decreto_estadual_adotado_id || 1}
+                                onChange={(e) => setFormData((prev) => ({ ...prev, decreto_estadual_adotado_id: Number(e.target.value) || 1 }))}
+                              >
+                                <option value={1}>Decreto Estadual nº 16.302/2015 (Vigente)</option>
+                                <option value={2}>Decreto Estadual nº 13.963/2012</option>
+                                <option value={3}>Decreto Estadual nº 2.115/1974 (Legado)</option>
+                              </select>
+                            </label>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -2839,23 +3049,39 @@ export function ProjectDraftModal({
                         </label>
                       </div>
 
-                      {/* Natureza Jurídica */}
+                      {/* Porte / Natureza Jurídica Oficial */}
                       <div className="form-col-6">
                         <label className="field-label">
-                          <span>Natureza Jurídica</span>
-                          <input
-                            type="text"
-                            className="input-text"
-                            maxLength={80}
-                            placeholder="Ex: Empresa de Pequeno Porte (EPP), MEI, LTDA"
-                            value={formData.institution.natureza_juridica || ''}
+                          <span>Porte / Natureza Jurídica (Oficial Fênix) *</span>
+                          <select
+                            className="input-select"
+                            value={formData.institution.natureza_juridica || 'Empresa de Pequeno Porte (EPP)'}
                             onChange={(e) => setFormData((prev) => ({
                               ...prev,
                               institution: { ...prev.institution, natureza_juridica: e.target.value }
                             }))}
-                          />
+                          >
+                            {PORTES_INSTITUICAO.map((p) => (
+                              <option key={p} value={p}>{p}</option>
+                            ))}
+                          </select>
                         </label>
                       </div>
+
+                      {formData.institution.natureza_juridica === 'Outros' && (
+                        <div className="form-col-6 animate-fade-in">
+                          <label className="field-label">
+                            <span>Especifique a Natureza Jurídica *</span>
+                            <input
+                              type="text"
+                              className="input-text"
+                              placeholder="Especifique o tipo societário ou porte"
+                              value={formData.porte_outros || ''}
+                              onChange={(e) => setFormData((prev) => ({ ...prev, porte_outros: e.target.value }))}
+                            />
+                          </label>
+                        </div>
+                      )}
 
                       {/* CNAE com Consulta Fênix */}
                       <div className="form-col-4">
@@ -2917,10 +3143,20 @@ export function ProjectDraftModal({
                           />
                         </label>
                       </div>
+
+                      {/* CNAE não consta na IT-14 (Assemelhação) */}
+                      <div className="form-col-12 mt-1">
+                        <ToggleSlider
+                          checked={Boolean(formData.cnae_not_in_it14)}
+                          onChange={(checked) => setFormData((prev) => ({ ...prev, cnae_not_in_it14: checked }))}
+                          label="CNAE não consta explicitamente na Tabela 1 da IT-14 (Enquadramento por Assemelhação Técnica)"
+                          description="Marque caso a atividade econômica seja atípica e dependa de assemelhação técnica pelos peritos do CBMBA."
+                        />
+                      </div>
                     </div>
 
                     {cnaeNotice && (
-                      <div className={`cnae-banner banner-${cnaeNotice.type}`}>
+                      <div className={`cnae-banner banner-${cnaeNotice.type} mt-2`}>
                         {cnaeNotice.type === 'warning' ? <ShieldAlert size={18} /> : <CheckCircle2 size={18} />}
                         <div>
                           <strong>{cnaeNotice.type === 'warning' ? 'Atenção ao Risco Especial do CNAE:' : 'Classificação CNAE:'}</strong>
@@ -2952,7 +3188,6 @@ export function ProjectDraftModal({
                                 occupation: {
                                   ...prev.occupation,
                                   occupation_group_id: gid,
-                                  // Reseta divisão caso não pertença ao novo grupo
                                   division_group_id: null
                                 }
                               }));
@@ -3011,6 +3246,74 @@ export function ProjectDraftModal({
                         </label>
                       </div>
 
+                      {/* População / Pessoas */}
+                      <div className="form-col-4">
+                        <label className="field-label">
+                          <span>População / Qtde. Pessoas</span>
+                          <input
+                            type="number"
+                            min={0}
+                            className="input-text"
+                            placeholder="0"
+                            value={formData.qtde_pessoas ?? ''}
+                            onChange={(e) => setFormData((prev) => ({ ...prev, qtde_pessoas: Number(e.target.value) || 0 }))}
+                          />
+                        </label>
+                        {formData.occupation.occupation_group_id === 6 && (
+                          <small className="field-hint text-teal">★ Grupo F: Reunião de Público (Lotação define saídas de emergência).</small>
+                        )}
+                      </div>
+
+                      {/* Qtde Leitos (Grupo H) */}
+                      {formData.occupation.occupation_group_id === 8 && (
+                        <div className="form-col-4 animate-fade-in">
+                          <label className="field-label">
+                            <span>Quantidade de Leitos (Grupo H - Saúde)</span>
+                            <input
+                              type="number"
+                              min={0}
+                              className="input-text"
+                              placeholder="0"
+                              value={formData.qtde_leitos ?? ''}
+                              onChange={(e) => setFormData((prev) => ({ ...prev, qtde_leitos: Number(e.target.value) || 0 }))}
+                            />
+                          </label>
+                        </div>
+                      )}
+
+                      {/* Qtde Funcionários */}
+                      <div className="form-col-4">
+                        <label className="field-label">
+                          <span>Quantidade de Funcionários</span>
+                          <input
+                            type="number"
+                            min={0}
+                            className="input-text"
+                            placeholder="0"
+                            value={formData.qtde_funcionarios ?? ''}
+                            onChange={(e) => setFormData((prev) => ({ ...prev, qtde_funcionarios: Number(e.target.value) || 0 }))}
+                          />
+                        </label>
+                        {currentFormMode === 'pts' && Number(formData.qtde_funcionarios || 0) > 100 && (
+                          <small className="field-hint text-amber">Atenção: Divisões com &gt; 100 funcionários podem exigir brigada avançada.</small>
+                        )}
+                      </div>
+
+                      {/* Área Comum */}
+                      <div className="form-col-4">
+                        <label className="field-label">
+                          <span>Área Comum (m²)</span>
+                          <input
+                            type="text"
+                            className="input-text"
+                            placeholder="0.00"
+                            value={formData.area_comum ?? ''}
+                            onChange={(e) => setFormData((prev) => ({ ...prev, area_comum: e.target.value }))}
+                          />
+                        </label>
+                        <small className="field-hint">Opcional para shopping ou condomínio.</small>
+                      </div>
+
                       {/* Switch Slider de Subsolo */}
                       <div className="form-col-12 mt-1">
                         <ToggleSlider
@@ -3021,10 +3324,287 @@ export function ProjectDraftModal({
                           }))}
                           label="A edificação possui subsolo ocupado ou com atividades comerciais?"
                           description={formData.occupation.has_underground
-                            ? "Subsolo ativo: informe o Grupo e Divisão específicos do subsolo abaixo."
+                            ? "Subsolo ativo: informe abaixo as características e restrições do subsolo."
                             : "Desativado: o CBMBA considerará o registro padrão sem atividades no subsolo (Grupo 0 / Divisão 0)."
                           }
                         />
+                      </div>
+
+                      {formData.occupation.has_underground && (
+                        <div className="form-col-12 animate-fade-in">
+                          <ToggleSlider
+                            checked={Boolean(formData.subsolo_maior_50m)}
+                            onChange={(checked) => setFormData((prev) => ({ ...prev, subsolo_maior_50m: checked }))}
+                            label="Subsolo possui área superior a 50 m²?"
+                            description="Subsolos maiores que 50 m² exigem controle de fumaça e medidas específicas pelo CBMBA."
+                          />
+                        </div>
+                      )}
+
+                      {/* Cobertura FSPS superior a 200 m² */}
+                      <div className="form-col-12 mt-1">
+                        <ToggleSlider
+                          checked={Boolean(formData.cobertura_fsps_sup200)}
+                          onChange={(checked) => setFormData((prev) => ({ ...prev, cobertura_fsps_sup200: checked }))}
+                          label="Cobertura estrutural (FSPS) superior a 200 m²?"
+                          description="Indique se há cobertura metálica ou de lona de grande porte na edificação."
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bloco de Questionário Técnico CBMBA */}
+                  <div className="editor-card">
+                    <div className="card-heading">
+                      <HelpCircle size={18} className="text-teal" />
+                      <h4>Questionário Técnico CBMBA (Acesso & Regularização)</h4>
+                    </div>
+
+                    <div className="form-grid">
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={formData.questionario?.edf_saida_direta !== false}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            questionario: { ...prev.questionario, edf_saida_direta: checked }
+                          }))}
+                          label="A edificação possui saída direta para a via pública?"
+                          description="Se o estabelecimento estiver dentro de um shopping, galeria ou condomínio comercial, desative esta opção."
+                        />
+                      </div>
+
+                      {formData.questionario?.edf_saida_direta === false && (
+                        <div className="form-col-12 animate-fade-in" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                          <ToggleSlider
+                            checked={Boolean(formData.questionario?.edf_regularizada_certificado)}
+                            onChange={(checked) => setFormData((prev) => ({
+                              ...prev,
+                              questionario: { ...prev.questionario, edf_regularizada_certificado: checked }
+                            }))}
+                            label="A edificação maior (shopping/galeria) possui certificado regularizado no CBMBA?"
+                            description="Edificações sem saída direta exigem que o prédio principal esteja regularizado no Corpo de Bombeiros."
+                          />
+
+                          {formData.questionario?.edf_regularizada_certificado && (
+                            <div className="form-grid mt-2">
+                              <div className="form-col-6">
+                                <label className="field-label">
+                                  <span>Tipo de Certificado da Edificação Maior</span>
+                                  <select
+                                    className="input-select"
+                                    value={formData.questionario?.tipo_certificado || 'AVCB'}
+                                    onChange={(e) => setFormData((prev) => ({
+                                      ...prev,
+                                      questionario: { ...prev.questionario, tipo_certificado: e.target.value as 'AVCB' | 'CLCB' }
+                                    }))}
+                                  >
+                                    <option value="AVCB">AVCB - Auto de Vistoria do Corpo de Bombeiros</option>
+                                    <option value="CLCB">CLCB - Certificado de Licença</option>
+                                  </select>
+                                </label>
+                              </div>
+                              <div className="form-col-6">
+                                <label className="field-label">
+                                  <span>Nº do Certificado no CBMBA</span>
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder="Ex: AVCB-2024-00129"
+                                    value={formData.questionario?.n_certificado || ''}
+                                    onChange={(e) => setFormData((prev) => ({
+                                      ...prev,
+                                      questionario: { ...prev.questionario, n_certificado: e.target.value }
+                                    }))}
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          )}
+
+                          {currentFormMode === 'pts' && !formData.questionario?.edf_regularizada_certificado && (
+                            <div className="text-danger mt-1" style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <AlertTriangle size={14} /> Atenção Fênix: Estabelecimentos sem saída direta só podem tramitar por PTS se a edificação-mãe possuir certificado válido!
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {currentFormMode === 'pts' && (
+                        <div className="form-col-12 mt-1">
+                          <ToggleSlider
+                            checked={Boolean(formData.questionario?.renovacao_sap)}
+                            onChange={(checked) => setFormData((prev) => ({
+                              ...prev,
+                              questionario: { ...prev.questionario, renovacao_sap: checked }
+                            }))}
+                            label="Renovação de SAP (Sistema de Atendimento Presencial / Processo Legado)"
+                            description="Marque apenas se o imóvel possuir processo físico anterior a ser migrado para o Fênix digital."
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Bloco de Riscos Especiais & GLP */}
+                  <div className="editor-card">
+                    <div className="card-heading flex-between">
+                      <div className="flex-row items-center gap-2">
+                        <AlertTriangle size={18} className="text-amber" />
+                        <h4>Riscos Especiais & GLP (Gás Liquefeito de Petróleo)</h4>
+                      </div>
+                      <span className="badge-tag">Controle de Riscos CBMBA</span>
+                    </div>
+
+                    <p className="field-hint">
+                      Indique se o estabelecimento armazena ou manipula substâncias ou instalações que apresentem risco especial segundo as Instruções Técnicas do CBMBA.
+                    </p>
+
+                    <div className="form-grid">
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.liquidos_inflamaveis)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, liquidos_inflamaveis: checked }
+                          }))}
+                          label="Líquidos combustíveis ou inflamáveis (> 250 L)"
+                          description="Armazenamento ou manipulação de diesel, gasolina, solventes ou tintas."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.gas_liquefeito_petroleo)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, gas_liquefeito_petroleo: checked }
+                          }))}
+                          label="Gás Liquefeito de Petróleo (GLP - Central ou Botijões)"
+                          description="Utilização de recipientes de gás para cocção, caldeiras ou processos industriais."
+                        />
+                      </div>
+
+                      {/* Sub-bloco GLP se gas_liquefeito_petroleo estiver ativo */}
+                      {formData.specialRisks?.gas_liquefeito_petroleo && (
+                        <div className="form-col-12 animate-fade-in" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: '#f59e0b', fontWeight: 600, fontSize: '0.85rem' }}>
+                            <Flame size={16} /> Detalhamento da Central de GLP (IT-28 CBMBA)
+                          </div>
+
+                          <div className="form-grid">
+                            <div className="form-col-4">
+                              <label className="field-label">
+                                <span>Quantidade Total de GLP (kg) *</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.1"
+                                  className="input-text"
+                                  placeholder="Ex: 90"
+                                  value={formData.glpData?.total_kg_glp || ''}
+                                  onChange={(e) => {
+                                    const kg = e.target.value;
+                                    const num = Number(kg) || 0;
+                                    let autoClass = formData.glpData?.classe_glp || 'Classe I';
+                                    if (num <= 26) autoClass = 'Classe I';
+                                    else if (num <= 135) autoClass = 'Classe II';
+                                    else if (num <= 520) autoClass = 'Classe III';
+                                    else if (num <= 1560) autoClass = 'Classe IV';
+                                    else if (num <= 6240) autoClass = 'Classe V';
+                                    else if (num <= 12480) autoClass = 'Classe VI';
+                                    else if (num <= 24960) autoClass = 'Classe VII';
+                                    else autoClass = 'Classe VIII';
+
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      glpData: {
+                                        ...prev.glpData,
+                                        total_kg_glp: kg,
+                                        classe_glp: autoClass
+                                      }
+                                    }));
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            <div className="form-col-8">
+                              <label className="field-label">
+                                <span>Classe Oficial de GLP (Tabela 1 IT-28)</span>
+                                <select
+                                  className="input-select"
+                                  value={formData.glpData?.classe_glp || 'Classe I'}
+                                  onChange={(e) => setFormData((prev) => ({
+                                    ...prev,
+                                    glpData: { ...prev.glpData, classe_glp: e.target.value }
+                                  }))}
+                                >
+                                  {GLP_CLASSES.map((c) => (
+                                    <option key={c.id} value={c.id}>{c.label} ({c.limit})</option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+
+                          {Number(formData.glpData?.total_kg_glp) > 12480 && (
+                            <div className="text-danger mt-2" style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <AlertTriangle size={15} /> <b>Atenção:</b> Capacidade de GLP superior a 12.480 kg (Classe VII e VIII) exige obrigatoriamente Projeto Técnico Completo (PT) com sistema fixo.
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.produtos_perigosos)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, produtos_perigosos: checked }
+                          }))}
+                          label="Produtos Perigosos ou Tóxicos"
+                          description="Substâncias químicas oxidantes, corrosivas ou perigosas à saúde humana."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.fogos_artificio)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, fogos_artificio: checked }
+                          }))}
+                          label="Fogos de artifício ou artefatos pirotécnicos"
+                          description="Armazenamento, venda ou queima controlada de pirotecnia."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.vaso_pressao)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, vaso_pressao: checked }
+                          }))}
+                          label="Caldeiras e vasos sob pressão"
+                          description="Compressores industriais, autoclaves ou reservatórios de ar comprimido."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <label className="field-label">
+                          <span>Outros Riscos Especiais (Descrição livre)</span>
+                          <input
+                            type="text"
+                            className="input-text"
+                            placeholder="Opcional. Ex: Cabine primária de alta tensão, gerador diesel 150 kVA..."
+                            value={formData.specialRisks?.outros || ''}
+                            onChange={(e) => setFormData((prev) => ({
+                              ...prev,
+                              specialRisks: { ...prev.specialRisks, outros: e.target.value }
+                            }))}
+                          />
+                        </label>
                       </div>
                     </div>
                   </div>
@@ -3047,8 +3627,26 @@ export function ProjectDraftModal({
                     </div>
 
                     <div className="form-grid">
-                      {/* Dados do Proprietário */}
-                      <div className="form-col-6">
+                      {/* Tipo Pessoa Proprietário */}
+                      <div className="form-col-3">
+                        <label className="field-label">
+                          <span>Tipo Pessoa Proprietário</span>
+                          <select
+                            className="input-select"
+                            value={formData.proprietario.tipo_pessoa_prop || 'PJ'}
+                            onChange={(e) => setFormData((prev) => ({
+                              ...prev,
+                              proprietario: { ...prev.proprietario, tipo_pessoa_prop: e.target.value as 'PJ' | 'PF' }
+                            }))}
+                          >
+                            <option value="PJ">Pessoa Jurídica (PJ)</option>
+                            <option value="PF">Pessoa Física (PF)</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      {/* Nome do Proprietário */}
+                      <div className="form-col-5">
                         <label className="field-label">
                           <span>Nome do Proprietário *</span>
                           <input
@@ -3065,7 +3663,7 @@ export function ProjectDraftModal({
                         </label>
                       </div>
 
-                      <div className="form-col-6">
+                      <div className="form-col-4">
                         <label className="field-label">
                           <span>CPF / CNPJ do Proprietário *</span>
                           <input
@@ -3149,7 +3747,24 @@ export function ProjectDraftModal({
                       {/* Se não for igual, exibe campos do responsável */}
                       {!formData.responsavel.responsavel_uso_igual_prop && (
                         <>
-                          <div className="form-col-6">
+                          <div className="form-col-3 animate-fade-in">
+                            <label className="field-label">
+                              <span>Tipo Pessoa Resp. Uso</span>
+                              <select
+                                className="input-select"
+                                value={formData.responsavel.tipo_pessoa_resp || 'PJ'}
+                                onChange={(e) => setFormData((prev) => ({
+                                  ...prev,
+                                  responsavel: { ...prev.responsavel, tipo_pessoa_resp: e.target.value as 'PJ' | 'PF' }
+                                }))}
+                              >
+                                <option value="PJ">Pessoa Jurídica</option>
+                                <option value="PF">Pessoa Física</option>
+                              </select>
+                            </label>
+                          </div>
+
+                          <div className="form-col-5 animate-fade-in">
                             <label className="field-label">
                               <span>Nome do Responsável pelo Uso *</span>
                               <input
@@ -3164,7 +3779,7 @@ export function ProjectDraftModal({
                             </label>
                           </div>
 
-                          <div className="form-col-6">
+                          <div className="form-col-4 animate-fade-in">
                             <label className="field-label">
                               <span>CPF / CNPJ do Responsável</span>
                               <input
@@ -3181,9 +3796,264 @@ export function ProjectDraftModal({
                               />
                             </label>
                           </div>
+
+                          <div className="form-col-6 animate-fade-in">
+                            <label className="field-label">
+                              <span>E-mail do Responsável pelo Uso</span>
+                              <input
+                                type="email"
+                                className="input-text"
+                                value={formData.responsavel.email_responsavel_uso || ''}
+                                onChange={(e) => setFormData((prev) => ({
+                                  ...prev,
+                                  responsavel: { ...prev.responsavel, email_responsavel_uso: e.target.value }
+                                }))}
+                              />
+                            </label>
+                          </div>
+
+                          <div className="form-col-6 animate-fade-in">
+                            <label className="field-label">
+                              <span>Telefone do Responsável pelo Uso</span>
+                              <input
+                                type="text"
+                                className="input-text"
+                                value={formatPhone(formData.responsavel.tel_responsavel_uso)}
+                                onChange={(e) => {
+                                  const digits = cleanDigits(e.target.value);
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    responsavel: { ...prev.responsavel, tel_responsavel_uso: digits }
+                                  }));
+                                }}
+                              />
+                            </label>
+                          </div>
                         </>
                       )}
                     </div>
+                  </div>
+
+                  {/* Bloco de Responsável Técnico */}
+                  <div className="editor-card">
+                    <div className="card-heading flex-between">
+                      <div className="flex-row items-center gap-2">
+                        <HardHat size={18} className="text-teal" />
+                        <h4>Responsável Técnico pelo Projeto (RT / ART / RRT)</h4>
+                      </div>
+                      {formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false ? (
+                        <span className="badge-tag tag-green">Dispensado no PTSCLCB1 com Saída Direta</span>
+                      ) : (
+                        <span className="badge-tag tag-amber">Obrigatório no CBMBA</span>
+                      )}
+                    </div>
+
+                    {formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false && (
+                      <div className="form-col-12 mb-2">
+                        <ToggleSlider
+                          checked={Boolean(formData.incluir_rt_opcional)}
+                          onChange={(checked) => setFormData((prev) => ({ ...prev, incluir_rt_opcional: checked }))}
+                          label="Deseja cadastrar Responsável Técnico neste processo?"
+                          description="O CBMBA dispensa ART/RRT para PTSCLCB1 com saída direta à rua, mas você pode cadastrar o RT opcionalmente para registro de autoria técnica."
+                        />
+                      </div>
+                    )}
+
+                    {(formData.tipo_projeto_id !== 4 || formData.questionario?.edf_saida_direta === false || formData.incluir_rt_opcional) && (
+                      <div className="rt-list animate-fade-in">
+                        {(formData.responsaveis_tecnicos || []).map((rt, idx) => (
+                          <div key={idx} className="rt-card-item" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', marginBottom: '0.75rem' }}>
+                            <div className="rt-card-head flex-between" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                              <span className="rt-index-badge" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8' }}>
+                                Responsável Técnico #{idx + 1}
+                              </span>
+                              {(formData.responsaveis_tecnicos || []).length > 1 && (
+                                <button
+                                  type="button"
+                                  className="button button-outline button-xs text-danger"
+                                  onClick={() => {
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      responsaveis_tecnicos: (prev.responsaveis_tecnicos || []).filter((_, i) => i !== idx)
+                                    }));
+                                  }}
+                                >
+                                  <Trash2 size={13} /> Remover RT
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="form-grid">
+                              <div className="form-col-6">
+                                <label className="field-label">
+                                  <span>Nome Completo do Profissional *</span>
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder="Ex: ENG. MARCOS VINICIUS ALMEIDA"
+                                    value={rt.nome_tecnico}
+                                    onChange={(e) => {
+                                      const val = e.target.value.toUpperCase();
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], nome_tecnico: val };
+                                        return { ...prev, responsaveis_tecnicos: list };
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+
+                              <div className="form-col-6">
+                                <label className="field-label">
+                                  <span>CPF / CNPJ do RT *</span>
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder="000.000.000-00"
+                                    value={formatCnpjCpf(rt.cpf_cnpj_tecnico)}
+                                    onChange={(e) => {
+                                      const val = cleanDigits(e.target.value);
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], cpf_cnpj_tecnico: val };
+                                        return { ...prev, responsaveis_tecnicos: list };
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+
+                              <div className="form-col-4">
+                                <label className="field-label">
+                                  <span>Conselho Profissional *</span>
+                                  <select
+                                    className="input-select"
+                                    value={rt.conselho}
+                                    onChange={(e) => {
+                                      const val = e.target.value as 'CREA' | 'CAU' | 'CFT';
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], conselho: val };
+                                        return { ...prev, responsaveis_tecnicos: list };
+                                      });
+                                    }}
+                                  >
+                                    <option value="CREA">CREA (Engenharia e Agronomia)</option>
+                                    <option value="CAU">CAU (Arquitetura e Urbanismo)</option>
+                                    <option value="CFT">CFT (Técnicos Industriais)</option>
+                                  </select>
+                                </label>
+                              </div>
+
+                              <div className="form-col-4">
+                                <label className="field-label">
+                                  <span>Nº Registro no Conselho *</span>
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder="Ex: 05189283-BA"
+                                    value={rt.n_registro_conselho}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], n_registro_conselho: val };
+                                        return { ...prev, responsaveis_tecnicos: list };
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+
+                              <div className="form-col-4">
+                                <label className="field-label">
+                                  <span>Nº ART / RRT / TRT *</span>
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder="Ex: BA20261628773"
+                                    value={rt.n_art_rrt}
+                                    onChange={(e) => {
+                                      const val = e.target.value.toUpperCase();
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], n_art_rrt: val };
+                                        return { ...prev, responsaveis_tecnicos: list, n_art_rrt: val };
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+
+                              <div className="form-col-6">
+                                <label className="field-label">
+                                  <span>E-mail do Responsável Técnico</span>
+                                  <input
+                                    type="email"
+                                    className="input-text"
+                                    placeholder="engenheiro@email.com"
+                                    value={rt.email_tecnico || ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], email_tecnico: val };
+                                        return { ...prev, responsaveis_tecnicos: list };
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+
+                              <div className="form-col-6">
+                                <label className="field-label">
+                                  <span>Telefone do Responsável Técnico</span>
+                                  <input
+                                    type="text"
+                                    className="input-text"
+                                    placeholder="(71) 99999-9999"
+                                    value={formatPhone(rt.telefone_tecnico)}
+                                    onChange={(e) => {
+                                      const val = cleanDigits(e.target.value);
+                                      setFormData((prev) => {
+                                        const list = [...(prev.responsaveis_tecnicos || [])];
+                                        list[idx] = { ...list[idx], telefone_tecnico: val };
+                                        return { ...prev, responsaveis_tecnicos: list };
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          className="button button-outline button-sm mt-1"
+                          onClick={() => {
+                            setFormData((prev) => ({
+                              ...prev,
+                              responsaveis_tecnicos: [
+                                ...(prev.responsaveis_tecnicos || []),
+                                {
+                                  nome_tecnico: '',
+                                  cpf_cnpj_tecnico: '',
+                                  conselho: 'CREA',
+                                  n_registro_conselho: '',
+                                  n_art_rrt: '',
+                                  email_tecnico: '',
+                                  telefone_tecnico: ''
+                                }
+                              ]
+                            }));
+                          }}
+                        >
+                          <Plus size={14} /> Adicionar Outro Responsável Técnico
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Bloco de Medidas de Segurança Contra Incêndio */}
@@ -3191,7 +4061,7 @@ export function ProjectDraftModal({
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <Flame size={18} className="text-teal" />
-                        <h4>Medidas de Segurança Contra Incêndio</h4>
+                        <h4>Medidas de Segurança Contra Incêndio ({currentFormMode === 'pts' ? '6 Medidas Básicas do PTS' : '22 Medidas Oficiais do PT'})</h4>
                       </div>
                       <button
                         type="button"
@@ -3203,8 +4073,17 @@ export function ProjectDraftModal({
                       </button>
                     </div>
 
+                    {currentFormMode === 'pts' && (
+                      <div className="pts-measures-notice animate-fade-in mb-3" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.9rem', borderRadius: '8px', background: 'rgba(20, 184, 166, 0.08)', border: '1px solid rgba(20, 184, 166, 0.25)', fontSize: '0.82rem' }}>
+                        <Info size={16} className="text-teal" />
+                        <p style={{ margin: 0, lineHeight: 1.45 }}>
+                          No <b>Projeto Técnico Simplificado (PTS)</b>, o Corpo de Bombeiros analisa exclusivamente as <b>6 medidas básicas</b> abaixo. As 16 medidas avançadas (hidrantes, chuveiros automáticos, detecção, controle de fumaça, etc.) são exclusivas de Projeto Técnico Completo (PT).
+                        </p>
+                      </div>
+                    )}
+
                     <div className="measures-grid">
-                      {SECURITY_MEASURES_CATALOG.map((measure) => {
+                      {OFFICIAL_FENIX_MEASURES.filter((m) => currentFormMode === 'pt' || m.basic).map((measure) => {
                         const isChecked = Boolean(formData.securityMeasures?.[measure.key]);
                         return (
                           <div key={measure.key} className={`measure-slider-card ${isChecked ? 'selected' : ''}`}>
@@ -3220,7 +4099,7 @@ export function ProjectDraftModal({
                                 }));
                               }}
                               label={measure.label}
-                              badge={measure.basic ? <span className="tag-basic">Básica</span> : undefined}
+                              badge={measure.basic ? <span className="tag-basic">Básica</span> : <span className="tag-advanced" style={{ background: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', padding: '1px 6px', borderRadius: '4px', fontSize: '0.68rem', fontWeight: 600 }}>Avançada (PT)</span>}
                               description={measure.desc}
                             />
                           </div>
@@ -3234,6 +4113,101 @@ export function ProjectDraftModal({
               {/* ETAPA 3: VALIDAÇÃO, SIMULAÇÃO DRY-RUN & ENVIO */}
               {step === 3 && (
                 <div className="step-panel animate-fade-in">
+                  {/* Card Informativo de Documentos Exigidos pelo Fênix pós-protocolo */}
+                  <div className="editor-card official-docs-checklist-card animate-fade-in" style={{ borderLeft: '4px solid #14b8a6' }}>
+                    <div className="card-heading flex-between">
+                      <div className="flex-row items-center gap-2">
+                        <FileText size={18} className="text-teal" />
+                        <h4>Documentos que o Fênix solicitará após gerar o protocolo</h4>
+                      </div>
+                      <span className="badge-tag tag-teal">
+                        Tipo de Projeto #{formData.tipo_projeto_id || (currentFormMode === 'pts' ? 4 : 1)} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === (formData.tipo_projeto_id || (currentFormMode === 'pts' ? 4 : 1)))?.sigla})
+                      </span>
+                    </div>
+
+                    <p className="field-hint" style={{ marginBottom: '0.75rem' }}>
+                      Ao concluir o protocolo no Fênix CBMBA, a plataforma governamental disponibilizará o upload dos seguintes anexos obrigatórios para este tipo de processo:
+                    </p>
+
+                    <div className="required-docs-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.65rem' }}>
+                      {formData.tipo_projeto_id === 4 && (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Documento de Identificação com Foto do Proprietário/Responsável (RG / CNH)</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Comprovante de Endereço ou Espelho do IPTU do Imóvel</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Cartão CNPJ atualizado da Receita Federal</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Declaração de Ciência e Atendimento às Normas CBMBA (assinada no Fênix)</span>
+                          </div>
+                          {formData.incluir_rt_opcional && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                              <CheckCircle2 size={16} className="text-teal" /><span>ART / RRT de Responsabilidade Técnica quitada (opcional cadastrado)</span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {[5, 6].includes(formData.tipo_projeto_id || 0) && (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Documento de Identificação com Foto do Proprietário e Responsável</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Comprovante de Endereço / IPTU da Edificação</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>ART / RRT de Responsabilidade Técnica quitada e assinada</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Croqui / Planta de Localização e Implantação das Saídas e Extintores</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Certificado da Brigada de Incêndio (se área &gt; 200 m²)</span>
+                          </div>
+                        </>
+                      )}
+                      {[7, 8].includes(formData.tipo_projeto_id || 0) && (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Autorização / Alvará Municipal para o Evento Temporário</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>ART / RRT de Montagem de Estruturas Provisórias (palcos, tendas, gradis)</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Planta de Evacuação Rápida e Dimensionamento de Lotação</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Termo de Compromisso de Segurança do Organizador do Evento</span>
+                          </div>
+                        </>
+                      )}
+                      {[1, 2, 3].includes(formData.tipo_projeto_id || (currentFormMode === 'pt' ? 1 : 0)) && (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Pranchas Completas do Projeto de Segurança Contra Incêndio (PSCIP em DWG/PDF)</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>ART / RRT de Elaboração de Projeto e Execução quitada</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Memorial Descritivo e Memória de Cálculo Hidráulico (Bombas, Hidrantes e Chuveiros)</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>Laudo de Estanqueidade e Testes de Pressão da Rede de GLP (se houver central)</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            <CheckCircle2 size={16} className="text-teal" /><span>DAE da Taxa de Análise de Projeto Técnico emitida e comprovante de quitação</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Resumo de Validação do Rascunho */}
                   <div className="editor-card">
                     <div className="card-heading">

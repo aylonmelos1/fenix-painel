@@ -492,3 +492,87 @@ Antes de disparar a requisição contra o Fênix, o backend do `fenix-painel` de
    - `Cookie: cookiesession1=...; XSRF-TOKEN=...; fenix_cbmba_session=...`
    - `X-XSRF-TOKEN: <unquoted_token>`
    - `Referer: https://fenix.cbm.ba.gov.br/`
+
+---
+
+## 7. Comparativo Completo dos 2 Formulários Oficiais do Fênix
+
+Engenharia reversa dos dois cards de entrada no Fênix CBMBA (`app.204b8f23.js`):
+
+| Característica | Formulário 1: "Cadastrar Projeto Téc. Completo" (`mode: 'pt'`) | Formulário 2: "Cadastrar Projeto Téc. Simplificado" (`mode: 'pts'`) |
+|---|---|---|
+| **Público-Alvo** | Edificações complexas, área > 750 m², > 3 pavimentos ou alto risco | Edificações simples, área <= 750 m², até 3 pavimentos e baixo/médio risco |
+| **Enum Nu Permitidos** | `1` (PT), `2` (PTIOT), `3` (PTOTEP) | `4` (PTSCLCB1), `5` (PTSCLCB2), `6` (PTSAVCB), `7` (PTSAVCBPTIOT), `8` (PTSAVCBPTOTEP) |
+| **BoxExemption (`isencao_id`)** | Exibido (1: Não Isento, 2: Órgão Público, 3: Entidade Filantrópica, 4: MEI) | Exibido com regras de isenção simplificadas (MEI automático) |
+| **BoxTechnicalManager** | **Múltiplos Responsáveis Técnicos**: array `responsaveis_tecnicos` com CREA/CAU/CFT, CPF/CNPJ, e-mail e telefone | **Responsável Único**: dispensado no PTSCLCB1 com saída direta para a via pública (`rtOptional: true`) |
+| **BoxQuestions (Questionário)** | Perguntas estruturais e histórico de projetos anteriores | Perguntas de triagem rápida: saída direta, regularização prévia |
+| **BoxSpecialRisks** | Todos os 5 riscos especiais com campos detalhados de GLP e vasos | Bloqueio de riscos severos (GLP > 12.480 kg força migração para PT) |
+| **BoxGlpData (8 Classes)** | Classes B a H completas e revenda de GLP | Revenda de GLP bloqueia CLCB; restrito a classes domésticas/comerciais leves |
+| **Medidas de Segurança** | **Todas as 22 medidas** oficiais disponíveis para seleção | **Apenas 6 medidas básicas** permitidas; 16 medidas avançadas forçadas a `0` |
+| **Bloqueio Inverso** | Se imóvel qualificar para PTS, emite warning de bloqueio `bloqueioCadastroPTSviaCardPT` | Se exceder 750 m² ou 3 pavimentos, bloqueia envio e orienta PT |
+
+### 7.1 As 22 Medidas de Segurança Oficiais (`BoxSecurityMeasures`)
+
+O componente `BoxSecurityMeasures` do Fênix CBMBA controla a visibilidade com a propriedade `hideToProjectType: [4, 5, 6, 7, 8]`:
+
+| Chave Oficial no Payload | Nome Oficial no Fênix | Permitida em PTS? | Comportamento no PTS |
+|---|---|---|---|
+| `iluminacao_emerg` | Iluminação de Emergência | ✅ Sim (`ptsAllowed: true`) | Selecionável |
+| `brigada_incendio` | Brigada de Incêndio | ✅ Sim (`ptsAllowed: true`) | Selecionável |
+| `sinal_emerg` | Sinalização de Emergência | ✅ Sim (`ptsAllowed: true`) | Selecionável |
+| `extintores` | Extintores de Incêndio | ✅ Sim (`ptsAllowed: true`) | Selecionável |
+| `saidas_emerg` | Saídas de Emergência | ✅ Sim (`ptsAllowed: true`) | Selecionável |
+| `control_mat_acab` | Controle de Materiais de Acabamento | ✅ Sim (`ptsAllowed: true`) | Selecionável |
+| `acesso_viatura` | Acesso de Viatura do Corpo de Bombeiros | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `comp_horizontal` | Compartimentação Horizontal | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `comp_vertical` | Compartimentação Vertical | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `separacao_edific` | Separação entre Edificações | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `resfriamento` | Resfriamento | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `hidrante_mangot` | Hidrantes e Mangotinhos | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `deteccao_incendio` | Detecção de Incêndio | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `chuveiros_auto` | Chuveiros Automáticos (Sprinklers) | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `elevador_emerg` | Elevador de Emergência | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `seguranca_estrutural` | Segurança Estrutural contra Incêndio | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `control_fumaca` | Controle de Fumaça | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `espuma` | Espuma para Extinção | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `plano_emerg_incendio` | Plano de Emergência contra Incêndio | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `sis_fixo_gases` | Sistema Fixo de Gases Limpos / CO2 | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `alarme_incendio` | Alarme de Incêndio | ❌ Não (Oculta em PTS) | Forçada para `0` |
+| `sis_prot_cont_desc_elet` | SPDA (Proteção contra Descargas Atmosféricas) | ❌ Não (Oculta em PTS) | Forçada para `0` |
+
+### 7.2 Regras Oficiais para Eventos Temporários (Tipos 2, 3, 7 e 8)
+- **PTS Temporário (`PTSAVCBPTIOT` ID 7 e `PTSAVCBPTOTEP` ID 8)**:
+  - Duração máxima estrita: **180 dias (6 meses)** entre `data_inicio` e `data_fim`. Se ultrapassar, a validação rejeita o envio.
+- **PT Temporário (`PTIOT` ID 2 e `PTOTEP` ID 3)**:
+  - Antecedência mínima: A data de início deve ter no mínimo **15 dias de antecedência** da data de submissão. O backend emite warning oficial orientando o projetista sobre o prazo de análise do CBMBA.
+
+### 7.3 Composição Oficial do Campo `registration_zip_code`
+Na base de dados do Fênix CBMBA, o campo `registration_zip_code` é indexado como:
+- Com inscrição municipal informada: `"${registration}-${zip_code}"` (ex: `"12345-45355000"`)
+- Sem inscrição municipal (nulo ou vazio): `"-${zip_code}"` (ex: `"-45355000"`). Nunca enviar `"null-45355000"`.
+
+---
+
+## 8. Copiloto IA: Streaming em Tempo Real via SSE
+
+O `fenix-painel` disponibiliza um endpoint de streaming baseado em Server-Sent Events (SSE) para renderização progressiva do raciocínio e das alterações do formulário em tempo real:
+
+### 8.1 Endpoint `POST /api/drafts/ai-assistant/stream`
+- **Protocolo**: HTTP/1.1 com cabeçalho `Content-Type: text/event-stream; charset=utf-8`
+- **Segurança**: Sessão obrigatória, rate-limiting individual, `Cache-Control: no-cache`, `Connection: keep-alive`
+- **Cancelamento Atômico**: Ao desconectar a aba do navegador (`req.on('close')`), um `AbortController` cancela imediatamente as requisições ativas downstream sem vazamento de sockets ou goroutines.
+
+### 8.2 Protocolo de Eventos SSE
+```
+event: thinking
+data: {"type":"thinking","step":"Consultando histórico técnico e enquadramento..."}
+
+event: delta
+data: {"type":"delta","text":"Preenchi os "}
+
+event: delta
+data: {"type":"delta","text":"campos de endereço e ativei as medidas recomendadas."}
+
+event: done
+data: {"type":"done","reply":"...","thinkingSteps":[...],"formPatch":{...},"appliedChangesSummary":[...]}
+```

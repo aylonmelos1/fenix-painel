@@ -2102,6 +2102,7 @@
   min-height: 0;
   max-height: none !important;
   overflow-y: auto;
+  scroll-behavior: smooth;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2117,6 +2118,11 @@
   border-radius: 10px;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.copilot-message .message-text {
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .copilot-message.message-user {
@@ -2343,11 +2349,292 @@
 }
 
 .copilot-sidebar-footer {
-  padding: 12px 16px;
+  padding: 10px 14px;
   background: #ffffff;
   border-top: 1px solid #f1f5f9;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
+
+/* ==========================================================================
+   HorizonX AI Prompt Composer (.copilot-sidebar-composer)
+   Design com mola suave cubic-bezier(0.32, 0.72, 0, 1) + Pílula Polimórfica
+   ========================================================================== */
+
+.copilot-sidebar-composer {
+  position: relative;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 4px 18px -2px rgba(15, 23, 42, 0.06);
+  transition: all 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* 1. Pílula Compacta em Repouso */
+.copilot-sidebar-composer.collapsed {
+  border-radius: 999px;
+  min-height: 44px;
+  padding: 4px 8px 4px 14px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0fdfa 100%);
+  border-color: rgba(13, 148, 136, 0.28);
+}
+
+.copilot-sidebar-composer.collapsed:hover {
+  border-color: #0d9488;
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdfa 100%);
+  box-shadow: 0 6px 20px -3px rgba(13, 148, 136, 0.2);
+  transform: translateY(-1px);
+}
+
+.copilot-composer-pill-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  user-select: none;
+  outline: none;
+}
+
+.copilot-composer-pill-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.copilot-composer-sparkle {
+  color: #0d9488;
+  flex-shrink: 0;
+  animation: sparkleRotate 3s ease-in-out infinite alternate;
+}
+
+@keyframes sparkleRotate {
+  0% { transform: scale(0.92) rotate(-6deg); }
+  100% { transform: scale(1.08) rotate(6deg); }
+}
+
+.copilot-composer-typewriter-text {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+}
+
+.composer-typewriter-cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: #0d9488;
+  font-weight: 700;
+  animation: typewriterBlink 0.9s infinite;
+}
+
+@keyframes typewriterBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.copilot-composer-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+/* 2. Estado Expandido com Mola Suave */
+.copilot-sidebar-composer.expanded {
+  border-radius: 20px;
+  padding: 12px 14px 10px;
+  background: #ffffff;
+  border-color: #0d9488;
+  box-shadow: 0 10px 28px -4px rgba(13, 148, 136, 0.16), 0 0 0 1px rgba(13, 148, 136, 0.35);
+}
+
+.copilot-composer-form {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.copilot-composer-input-area {
+  width: 100%;
+}
+
+.copilot-composer-input-area textarea {
+  width: 100%;
+  min-height: 38px;
+  max-height: 120px;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #0f172a;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+.copilot-composer-input-area textarea::placeholder {
+  color: #94a3b8;
+  font-size: 12.5px;
+}
+
+.copilot-composer-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.copilot-composer-context-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.composer-pill-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.composer-pill-tag.tag-primary {
+  background: #f0fdfa;
+  color: #0f766e;
+  border: 1px solid #ccfbf1;
+}
+
+.composer-pill-tag.tag-secondary {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.copilot-composer-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.button-composer-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.button-composer-send {
+  width: 32px;
+  background: linear-gradient(135deg, #0d9488 0%, #0284c7 100%);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.35);
+}
+
+.button-composer-send:hover:not(:disabled) {
+  transform: scale(1.08);
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.5);
+}
+
+.button-composer-send:disabled {
+  background: #e2e8f0;
+  color: #94a3b8;
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Botão Polimórfico de Parar ■ com Anel Pulsante */
+.button-composer-stop {
+  padding: 0 12px;
+  background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+  color: #ffffff;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+  animation: stopRingPulse 1.6s infinite;
+}
+
+.button-composer-stop:hover {
+  background: linear-gradient(135deg, #dc2626 0%, #ea580c 100%);
+  transform: scale(1.04);
+}
+
+@keyframes stopRingPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+/* Cursor Luminoso Animado ▍ na Bolha de Resposta (Streaming Real) */
+.copilot-streaming-caret {
+  display: inline-block;
+  margin-left: 2px;
+  color: #0d9488;
+  font-weight: 900;
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: baseline;
+  animation: caretGlowPulse 0.75s ease-in-out infinite alternate;
+  text-shadow: 0 0 8px rgba(13, 148, 136, 0.7);
+}
+
+@keyframes caretGlowPulse {
+  0% {
+    opacity: 0.2;
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
 
 .copilot-toast-applied {
   display: flex;

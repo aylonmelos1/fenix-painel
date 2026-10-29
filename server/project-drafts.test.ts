@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   acquireDraftSubmissionLock,
+  attachLegacyMeasureAliases,
   buildAndValidateFenixProjectPayload,
   deleteProjectDraft,
+  FENIX_22_SECURITY_MEASURES,
+  FENIX_LEGACY_MEASURE_ALIASES,
   getFenixDomains,
   getProjectDraft,
   listProjectDrafts,
@@ -11,9 +14,11 @@ import {
   mapIt14MeasuresToFenix,
   runDraftAiAssistant,
   simulateProjectDraft,
+  streamDraftAiAssistant,
   updateDraftSimulation,
   updateDraftSubmission,
   upsertProjectDraft,
+  type DraftAiStreamEvent,
   type ProjectDraftInput
 } from './project-drafts.js';
 import { db } from './store.js';
@@ -366,21 +371,29 @@ test('mapIt14MeasuresToFenix maps Decreto 16.302 BA real names to Fenix keys', (
 
   const mapped = mapIt14MeasuresToFenix(rawMeasures);
 
-  assert.equal(Object.keys(mapped).length, 28);
+  // 22 chaves oficiais do Fênix
+  assert.equal(Object.keys(mapped).length, 22);
+  assert.equal(mapped.saidas_emerg, true);
+  assert.equal(mapped.iluminacao_emerg, true);
+  assert.equal(mapped.sinal_emerg, true);
+  assert.equal(mapped.extintores, true);
+  assert.equal(mapped.brigada_incendio, true);
+  assert.equal(mapped.hidrante_mangot, true);
+  assert.equal(mapped.acesso_viatura, true);
+
+  // Compatibilidade legada via aliases não-enumeráveis
   assert.equal(mapped.saidas_emergencia, true);
   assert.equal(mapped.iluminacao_emergencia, true);
   assert.equal(mapped.sinalizacao_emergencia, true);
-  assert.equal(mapped.extintores, true);
-  assert.equal(mapped.brigada_incendio, true);
   assert.equal(mapped.hidrante_mangotinhos, true);
   assert.equal(mapped.acesso_viatura_edificacao, true);
 
   // Não selecionadas
-  assert.equal(mapped.chuveiros_automaticos, false);
+  assert.equal(mapped.chuveiros_auto, false);
   assert.equal(mapped.resfriamento, false);
   assert.equal(mapped.espuma, false);
-  assert.equal(mapped.sistema_fixo_gases_limpos, false);
-  assert.equal(mapped.spda, false);
+  assert.equal(mapped.sis_fixo_gases, false);
+  assert.equal(mapped.sis_prot_cont_desc_elet, false);
 });
 
 test('lookupCnpjAndIt14 validates CNPJ length and consults IT14 ABA API', async () => {
@@ -807,5 +820,295 @@ test('runDraftAiAssistant diagnostica falha de consulta / sessão Fênix e orien
   assert.equal(res.reply.includes('assinatura digital final do Comando dos Bombeiros'), false);
   assert.equal(res.formPatch, undefined);
   assert.deepEqual(res.appliedChangesSummary, []);
+});
+
+test('Enum Nu: 8 tipos de projeto e enquadramentos oficiais do Fênix CBMBA', () => {
+  const domains = getFenixDomains();
+  assert.equal(domains.projectTypes.length, 8);
+  const typeIds = domains.projectTypes.map((t) => t.id).sort((a, b) => a - b);
+  assert.deepEqual(typeIds, [1, 2, 3, 4, 5, 6, 7, 8]);
+
+  // PT (1)
+  const pt = domains.projectTypes.find((t) => t.id === 1)!;
+  assert.equal(pt.code, 'PT');
+  assert.equal(pt.mode, 'pt');
+  assert.equal(pt.temporary, false);
+
+  // PTIOT (2)
+  const ptiot = domains.projectTypes.find((t) => t.id === 2)!;
+  assert.equal(ptiot.code, 'PTIOT');
+  assert.equal(ptiot.temporary, true);
+
+  // PTOTEP (3)
+  const ptotep = domains.projectTypes.find((t) => t.id === 3)!;
+  assert.equal(ptotep.code, 'PTOTEP');
+  assert.equal(ptotep.temporary, true);
+
+  // PTSCLCB1 (4)
+  const ptsclcb1 = domains.projectTypes.find((t) => t.id === 4)!;
+  assert.equal(ptsclcb1.code, 'PTSCLCB1');
+  assert.equal(ptsclcb1.mode, 'pts');
+
+  // PTSCLCB2 (5)
+  const ptsclcb2 = domains.projectTypes.find((t) => t.id === 5)!;
+  assert.equal(ptsclcb2.code, 'PTSCLCB2');
+
+  // PTSAVCB (6)
+  const ptsavcb = domains.projectTypes.find((t) => t.id === 6)!;
+  assert.equal(ptsavcb.code, 'PTSAVCB');
+
+  // PTSAVCBPTIOT (7)
+  const pts7 = domains.projectTypes.find((t) => t.id === 7)!;
+  assert.equal(pts7.code, 'PTSAVCBPTIOT');
+  assert.equal(pts7.temporary, true);
+
+  // PTSAVCBPTOTEP (8)
+  const pts8 = domains.projectTypes.find((t) => t.id === 8)!;
+  assert.equal(pts8.code, 'PTSAVCBPTOTEP');
+  assert.equal(pts8.temporary, true);
+});
+
+test('Validação de eventos temporários: duração <= 180 dias em PTS e antecedência em PT', () => {
+  // PTSAVCBPTIOT (7) válido (duração 30 dias <= 180)
+  const baseTempPts: ProjectDraftInput = {
+    reference_name: 'Circo Temporário',
+    tipo_projeto_id: 7,
+    form_mode: 'pts',
+    building_area: 500,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355000', public_place: 'Praça Central', number: 'S/N', municipio_id: 22 },
+    institution: { cnae: '9001901' },
+    questionario: {
+      data_inicio_evento: '2026-12-01',
+      data_termino_evento: '2026-12-30', // 29 dias
+      publico_estimado: 300
+    }
+  };
+
+  const validTempPts = buildAndValidateFenixProjectPayload(baseTempPts, 123);
+  assert.equal(validTempPts.tipoProjetoId, 7);
+  assert.equal(validTempPts.valid, true);
+
+  // PTSAVCBPTIOT (7) inválido: duração > 180 dias
+  const invalidTempPts: ProjectDraftInput = {
+    ...baseTempPts,
+    questionario: {
+      data_inicio_evento: '2026-01-01',
+      data_termino_evento: '2026-07-15', // 195 dias > 180
+      publico_estimado: 300
+    }
+  };
+
+  const resInvalidTemp = buildAndValidateFenixProjectPayload(invalidTempPts, 123);
+  assert.equal(resInvalidTemp.valid, false);
+  assert.ok(resInvalidTemp.errors.some((e) => e.includes('180 dias')));
+
+  // PTSAVCBPTOTEP (8) inválido: duração > 180 dias
+  const invalidTemp8: ProjectDraftInput = {
+    ...baseTempPts,
+    tipo_projeto_id: 8,
+    questionario: {
+      data_inicio_evento: '2026-01-01',
+      data_termino_evento: '2026-08-01', // > 180 dias
+      publico_estimado: 500
+    }
+  };
+  const resInvalid8 = buildAndValidateFenixProjectPayload(invalidTemp8, 123);
+  assert.equal(resInvalid8.valid, false);
+  assert.ok(resInvalid8.errors.some((e) => e.includes('180 dias')));
+
+  // PTIOT (2) com antecedência menor que 15 dias: gera warning
+  const today = new Date();
+  const soon = new Date(today.getTime() + 5 * 24 * 60 * 60 * 1000); // 5 dias à frente
+  const farEnd = new Date(today.getTime() + 20 * 24 * 60 * 60 * 1000);
+
+  const ptiotInput: ProjectDraftInput = {
+    reference_name: 'Festival de Música',
+    tipo_projeto_id: 2,
+    form_mode: 'pt',
+    building_area: 2500,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355000', public_place: 'Parque de Exposições', number: '1', municipio_id: 22 },
+    institution: { cnae: '9001901' },
+    responsaveis_tecnicos: [
+      { nome: 'Engenheiro Teste', crea_cau: '12345/BA', email: 'eng@teste.com', telefone: '71999999999', art_rrt: 'ART123' }
+    ],
+    questionario: {
+      data_inicio_evento: soon.toISOString().split('T')[0],
+      data_termino_evento: farEnd.toISOString().split('T')[0],
+      publico_estimado: 5000
+    }
+  };
+
+  const resPtiot = buildAndValidateFenixProjectPayload(ptiotInput, 123);
+  assert.equal(resPtiot.tipoProjetoId, 2);
+  assert.ok(resPtiot.warnings.some((w) => w.includes('15 dias')));
+});
+
+test('22 Medidas de Segurança: 6 básicas ativas em PTS e 16 avançadas zeradas vs todas permitidas em PT', () => {
+  // Teste PTS: todas as 22 medidas marcadas no input
+  const allMeasures: Record<string, boolean> = {};
+  for (const m of FENIX_22_SECURITY_MEASURES) {
+    allMeasures[m] = true;
+  }
+
+  const ptsInput: ProjectDraftInput = {
+    reference_name: 'Mercadinho do Bairro',
+    building_area: 180,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355000', public_place: 'Rua Comercial', number: '10', municipio_id: 22 },
+    institution: { cnae: '4712100' },
+    securityMeasures: allMeasures
+  };
+
+  const resPts = buildAndValidateFenixProjectPayload(ptsInput, 123);
+  assert.equal(resPts.tipoProjetoId, 4); // PTSCLCB1
+  const payloadPtsMeasures = (resPts.fenixPayload as any).medida_seguranca;
+
+  // As 6 básicas permitidas em PTS devem ser 1
+  assert.equal(payloadPtsMeasures.iluminacao_emerg, 1);
+  assert.equal(payloadPtsMeasures.brigada_incendio, 1);
+  assert.equal(payloadPtsMeasures.sinal_emerg, 1);
+  assert.equal(payloadPtsMeasures.extintores, 1);
+  assert.equal(payloadPtsMeasures.saidas_emerg, 1);
+  assert.equal(payloadPtsMeasures.control_mat_acab, 1);
+
+  // As 16 medidas avançadas restritas a PT devem ser forçadas para 0 em PTS
+  assert.equal(payloadPtsMeasures.acesso_viatura, 0);
+  assert.equal(payloadPtsMeasures.hidrante_mangot, 0);
+  assert.equal(payloadPtsMeasures.chuveiros_auto, 0);
+  assert.equal(payloadPtsMeasures.deteccao_incendio, 0);
+  assert.equal(payloadPtsMeasures.alarme_incendio, 0);
+  assert.equal(payloadPtsMeasures.control_fumaca, 0);
+  assert.equal(payloadPtsMeasures.resfriamento, 0);
+  assert.equal(payloadPtsMeasures.espuma, 0);
+  assert.equal(payloadPtsMeasures.sis_fixo_gases, 0);
+  assert.equal(payloadPtsMeasures.sis_prot_cont_desc_elet, 0);
+  assert.equal(payloadPtsMeasures.comp_horizontal, 0);
+  assert.equal(payloadPtsMeasures.comp_vertical, 0);
+  assert.equal(payloadPtsMeasures.separacao_edific, 0);
+  assert.equal(payloadPtsMeasures.elevador_emerg, 0);
+  assert.equal(payloadPtsMeasures.seguranca_estrutural, 0);
+  assert.equal(payloadPtsMeasures.plano_emerg_incendio, 0);
+
+  // Teste PT Completo: todas as 22 medidas podem ser 1
+  const ptInput: ProjectDraftInput = {
+    reference_name: 'Edifício Comercial Grande',
+    building_area: 3000,
+    number_floors: 5,
+    height: 'Média = 12,00 m < H <= 23,00 m',
+    address: { zip_code: '45355000', public_place: 'Av Central', number: '100', municipio_id: 22 },
+    institution: { cnae: '6821801' },
+    responsaveis_tecnicos: [
+      { nome: 'Engenheiro Responsável', crea_cau: '54321/BA', email: 'eng@obra.com', telefone: '71988888888', art_rrt: 'ART999' }
+    ],
+    securityMeasures: allMeasures
+  };
+
+  const resPt = buildAndValidateFenixProjectPayload(ptInput, 123);
+  assert.equal(resPt.tipoProjetoId, 1); // PT
+  const payloadPtMeasures = (resPt.fenixPayload as any).medida_seguranca;
+
+  // Em PT, todas as 22 medidas ativadas no input devem ser 1
+  for (const m of FENIX_22_SECURITY_MEASURES) {
+    assert.equal(payloadPtMeasures[m], 1, `Medida ${m} deveria ser 1 em PT`);
+  }
+});
+
+test('Formatos oficiais do payload: registration_zip_code, subsolo dummy e warning de bloqueio PTS via tela PT', () => {
+  // 1. registration nulo -> registration_zip_code deve ser "-45355000"
+  const draftNullReg: ProjectDraftInput = {
+    reference_name: 'Imóvel Sem Inscrição',
+    registration: null,
+    building_area: 120,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355-000', public_place: 'Rua Sem Inscrição', number: '5', municipio_id: 22 },
+    institution: { cnae: '4754701' }
+  };
+
+  const resNullReg = buildAndValidateFenixProjectPayload(draftNullReg, 123);
+  assert.equal((resNullReg.fenixPayload as any).registration_zip_code, '-45355000');
+
+  // 2. registration preenchido -> registration_zip_code deve ser "12345-45355000"
+  const draftWithReg: ProjectDraftInput = {
+    ...draftNullReg,
+    registration: '12345'
+  };
+  const resWithReg = buildAndValidateFenixProjectPayload(draftWithReg, 123);
+  assert.equal((resWithReg.fenixPayload as any).registration_zip_code, '12345-45355000');
+
+  // 3. Subsolo dummy automático no occupations_divisions quando não há subsolo
+  const divisions = (resNullReg.fenixPayload as any).occupations_divisions as any[];
+  assert.ok(divisions.length >= 2);
+  const underground = divisions.find((d) => d.underground === true);
+  assert.ok(underground);
+  assert.equal(underground.occupation_group_id, 13);
+  assert.equal(underground.division_group_id, 58);
+  assert.equal(underground.principal, false);
+
+  // 4. Warning bloqueioCadastroPTSviaCardPT quando imóvel se enquadra em PTS mas usuário selecionou tela PT
+  const draftPtsInPtForm: ProjectDraftInput = {
+    ...draftNullReg,
+    form_mode: 'pt' // Tentando cadastrar na tela de PT Completo
+  };
+  const resBlockedWarning = buildAndValidateFenixProjectPayload(draftPtsInPtForm, 123);
+  assert.ok(
+    resBlockedWarning.warnings.some((w) =>
+      w.includes('bloqueia o cadastro de Projetos Técnicos Simplificados (PTS) através da tela de PT Completo')
+    )
+  );
+});
+
+test('streamDraftAiAssistant emite eventos de progresso SSE (thinking, delta, done) e suporta abort', async () => {
+  const req = {
+    message: 'Preencha o rascunho com comércio de 300 m² e 2 pavimentos em Salvador',
+    currentDraft: {
+      reference_name: 'Loja Salvador',
+      address: { zip_code: '40000000', public_place: 'Av Sete', number: '100' }
+    }
+  };
+
+  const events: DraftAiStreamEvent[] = [];
+  const finalResponse = await streamDraftAiAssistant(req, (event) => {
+    events.push(event);
+  });
+
+  assert.ok(finalResponse.reply);
+  assert.ok(events.length > 0);
+
+  // Deve haver eventos thinking, delta e done
+  const thinkingEvents = events.filter((e) => e.type === 'thinking');
+  const deltaEvents = events.filter((e) => e.type === 'delta');
+  const doneEvents = events.filter((e) => e.type === 'done');
+
+  assert.ok(thinkingEvents.length >= 1);
+  assert.ok(deltaEvents.length >= 1);
+  assert.equal(doneEvents.length, 1);
+
+  // O evento done deve conter reply, formPatch e thinkingSteps
+  const done = doneEvents[0] as Extract<DraftAiStreamEvent, { type: 'done' }>;
+  assert.equal(done.reply, finalResponse.reply);
+  assert.ok(done.thinkingSteps.length > 0);
+  assert.ok(done.formPatch);
+  assert.equal(done.formPatch?.edification?.building_area, 300);
+  assert.equal(done.formPatch?.edification?.number_floors, 2);
+
+  // Teste de abort signal
+  const controller = new AbortController();
+  controller.abort(); // já cancelado
+  const abortEvents: DraftAiStreamEvent[] = [];
+  await streamDraftAiAssistant(
+    req,
+    (event) => {
+      abortEvents.push(event);
+    },
+    controller.signal
+  );
+  // Não deve quebrar o processo e para graciosamente
+  assert.ok(abortEvents.length <= 2);
 });
 

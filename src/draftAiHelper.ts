@@ -1,15 +1,47 @@
 // Funções e tipos compartilhados do Copiloto IA de Cadastro CBMBA
 // Mantido em arquivo modular para permitir code-splitting sob demanda (React.lazy) do editor principal.
 
+export interface TechnicalManagerItem {
+  tipo_numero?: 'CREA' | 'CAU' | 'CFT' | string;
+  conselho?: 'CREA' | 'CAU' | 'CFT' | string;
+  crea_cau?: string;
+  n_registro_conselho?: string;
+  name?: string;
+  nome_tecnico?: string;
+  cpf_cnpj?: string;
+  cpf_cnpj_tecnico?: string;
+  phone?: string;
+  telefone_tecnico?: string;
+  email?: string;
+  email_tecnico?: string;
+  art?: string;
+  n_art_rrt?: string;
+}
+
 export interface ProjectDraftInput {
   id?: string;
   name?: string;
   edificacao_mode?: 'new' | 'existing';
   edificacao_id?: number | null;
+  form_mode?: 'pts' | 'pt';
+  tipo_projeto_id?: number;
   process_category?: 'pts' | 'pt';
   license_type?: 'CLCB' | 'AVCB';
   isencao_id?: number;
   n_art_rrt?: string;
+  data_inicio?: string;
+  data_fim?: string;
+  projeto_anterior?: boolean;
+  n_projeto_anterior?: string;
+  decreto_estadual_adotado_id?: number;
+  cnae_not_in_it14?: boolean;
+  porte_outros?: string;
+  qtde_pessoas?: number | string;
+  qtde_leitos?: number | string;
+  qtde_funcionarios?: number | string;
+  area_comum?: number | string;
+  subsolo_maior_50m?: boolean;
+  cobertura_fsps_sup200?: boolean;
   edification: {
     reference_name: string;
     registration?: string;
@@ -70,8 +102,116 @@ export interface ProjectDraftInput {
     telephone?: string;
     email?: string;
   };
-  questionario?: Record<string, boolean>;
-  securityMeasures: Record<string, number>;
+  responsaveis_tecnicos?: TechnicalManagerItem[];
+  incluir_rt_opcional?: boolean;
+  questionario?: {
+    edf_saida_direta?: boolean;
+    edf_regularizada_certificado?: boolean;
+    tipo_certificado?: 'AVCB' | 'CLCB';
+    n_certificado?: string;
+    renovacao_sap?: boolean;
+    lotacao_max_pessoas?: boolean;
+    existe_gases_inflamaveis?: boolean;
+    existe_liquidos_inflamaveis?: boolean;
+    glp_12480kg?: boolean;
+    gas_glp?: boolean;
+    armazena_produtos_perigosos?: boolean;
+    local_reuniao_publico?: boolean;
+    subsolo_maior_50m_pt?: boolean;
+    cobertura_fibras_sape?: boolean;
+    [key: string]: boolean | string | undefined;
+  };
+  specialRisks?: {
+    liquidos_inflamaveis?: boolean;
+    gas_liquefeito_petroleo?: boolean;
+    produtos_perigosos?: boolean;
+    fogos_artificio?: boolean;
+    vaso_pressao?: boolean;
+    outros?: string;
+  };
+  glpData?: {
+    total_kg_glp?: number | string;
+    classe_glp?: string;
+  };
+  securityMeasures: Record<string, number | boolean>;
+}
+
+export interface OfficialSecurityMeasure {
+  key: string;
+  label: string;
+  desc: string;
+  basic: boolean;
+}
+
+export const OFFICIAL_FENIX_MEASURES: OfficialSecurityMeasure[] = [
+  // 6 Medidas Básicas (exibidas TANTO no Simplificado PTS quanto no Completo PT)
+  { key: 'iluminacao_emerg', label: 'Iluminação de Emergência', desc: 'Blocos autônomos ou sistema centralizado de iluminação', basic: true },
+  { key: 'brigada_incendio', label: 'Brigada de incêndio', desc: 'Pessoal capacitado para combate inicial e primeiros socorros', basic: true },
+  { key: 'sinal_emerg', label: 'Sinalização de Emergência', desc: 'Placas fotoluminescentes de orientação e salvamento', basic: true },
+  { key: 'extintores', label: 'Extintores', desc: 'Extintores portáteis e sobrerrodas para combate imediato', basic: true },
+  { key: 'saidas_emerg', label: 'Saídas de emergência', desc: 'Rotas de fuga, corredores e portas desobstruídas', basic: true },
+  { key: 'control_mat_acab', label: 'Controle de material de acabamento', desc: 'Materiais de revestimento e acabamento com baixa propagação', basic: true },
+  // 16 Medidas Avançadas de Engenharia (exibidas APENAS no Projeto Téc. Completo form_mode === 'pt')
+  { key: 'comp_horizontal', label: 'Compartimentação horizontal', desc: 'Paredes e portas corta-fogo para contenção de chamas', basic: false },
+  { key: 'comp_vertical', label: 'Compartimentação vertical', desc: 'Fechamentos de poços, fachadas e escadas de emergência', basic: false },
+  { key: 'separacao_edific', label: 'Separação entre as edificações', desc: 'Distanciamento seguro e barreiras de irradiação térmica', basic: false },
+  { key: 'acesso_viatura', label: 'Acesso de viatura do Corpo de Bombeiros', desc: 'Vias e portões com gabarito livre para viaturas operacionais', basic: false },
+  { key: 'resfriamento', label: 'Resfriamento', desc: 'Sistema fixo de aspersores de água para tanques e esferas', basic: false },
+  { key: 'hidrante_mangot', label: 'Hidrantes e mangotinhos', desc: 'Rede hidráulica pressurizada sob comando', basic: false },
+  { key: 'deteccao_incendio', label: 'Detecção de incêndio', desc: 'Detectores automáticos pontuais de fumaça, calor ou chama', basic: false },
+  { key: 'chuveiros_auto', label: 'Chuveiros automáticos', desc: 'Rede de sprinklers para controle automático de incêndio', basic: false },
+  { key: 'elevador_emerg', label: 'Elevador de emergência', desc: 'Elevador prioritário com alimentação elétrica protegida', basic: false },
+  { key: 'seguranca_estrutural', label: 'Segurança estrutural nas edificações', desc: 'Tempo Requerido de Resistência ao Fogo (TRRF) estrutural', basic: false },
+  { key: 'control_fumaca', label: 'Controle de fumaça', desc: 'Exaustores mecânicos e aberturas para despressurização de fumaça', basic: false },
+  { key: 'espuma', label: 'Espuma', desc: 'Sistemas proporcionadores de espuma para líquidos inflamáveis', basic: false },
+  { key: 'plano_emerg_incendio', label: 'Plano de emergência contra incêndio', desc: 'Procedimento tático e operacional de abandono e socorro', basic: false },
+  { key: 'sis_fixo_gases', label: 'Sistema fixo de gases limpos e CO2', desc: 'Inundação total para salas elétricas e data centers', basic: false },
+  { key: 'alarme_incendio', label: 'Alarme de incêndio', desc: 'Botoeiras manuais e sinalizadores acústico-visuais', basic: false },
+  { key: 'sis_prot_cont_desc_elet', label: 'Sistema de proteção contra descargas elétricas', desc: 'SPDA / Para-raios e aterramento elétrico', basic: false }
+];
+
+export const FENIX_MEASURE_SYNONYMS: Record<string, string> = {
+  iluminacao_emergencia: 'iluminacao_emerg',
+  sinalizacao_emergencia: 'sinal_emerg',
+  saidas_emergencia: 'saidas_emerg',
+  hidrante_mangotinhos: 'hidrante_mangot',
+  hidrantes_e_mangotinhos: 'hidrante_mangot',
+  acesso_viatura_edificacao: 'acesso_viatura',
+  seguranca_estrutural_contra_incendio: 'seguranca_estrutural',
+  chuveiros_automaticos: 'chuveiros_auto',
+  plano_emergencia: 'plano_emerg_incendio',
+  controle_materiais_acabamento: 'control_mat_acab',
+  compartimentacao_horizontal: 'comp_horizontal',
+  compartimentacao_vertical: 'comp_vertical',
+  separacao_entre_edificacoes: 'separacao_edific',
+  elevador_emergencia: 'elevador_emerg',
+  controle_fumaca: 'control_fumaca',
+  sistema_fixo_gases_limpos: 'sis_fixo_gases',
+  spda: 'sis_prot_cont_desc_elet',
+  protecao_contra_descargas_eletricas: 'sis_prot_cont_desc_elet'
+};
+
+export function normalizeSecurityMeasures(
+  raw: Record<string, any> | undefined | null,
+  isPts: boolean
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!raw) return result;
+
+  const basicKeys = new Set(OFFICIAL_FENIX_MEASURES.filter((m) => m.basic).map((m) => m.key));
+  const validKeys = new Set(OFFICIAL_FENIX_MEASURES.map((m) => m.key));
+
+  for (const [k, v] of Object.entries(raw)) {
+    const canonicalKey = FENIX_MEASURE_SYNONYMS[k] || k;
+    if (validKeys.has(canonicalKey)) {
+      if (isPts && !basicKeys.has(canonicalKey)) {
+        continue;
+      }
+      result[canonicalKey] = v ? 1 : 0;
+    }
+  }
+
+  return result;
 }
 
 export interface DraftAiAssistantResponse {
@@ -81,10 +221,17 @@ export interface DraftAiAssistantResponse {
   formPatch?: {
     step?: 1 | 2 | 3;
     name?: string;
+    form_mode?: 'pts' | 'pt';
+    tipo_projeto_id?: number;
     edification?: Partial<ProjectDraftInput['edification']>;
     address?: Partial<ProjectDraftInput['address']>;
+    institution?: Partial<ProjectDraftInput['institution']>;
     occupation?: Partial<ProjectDraftInput['occupation']>;
+    proprietario?: Partial<ProjectDraftInput['proprietario']>;
     responsavel?: Partial<ProjectDraftInput['responsavel']>;
+    technical?: Partial<ProjectDraftInput['technical']>;
+    questionario?: Record<string, boolean>;
+    specialRisks?: Record<string, boolean>;
     securityMeasures?: Record<string, boolean>;
   };
   suggestions: string[];
@@ -94,14 +241,27 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
   name: 'Novo Rascunho de Projeto',
   edificacao_mode: 'new',
   edificacao_id: null,
+  form_mode: 'pts',
+  tipo_projeto_id: 5,
   process_category: 'pts',
   license_type: 'CLCB',
   isencao_id: 1,
   n_art_rrt: '',
+  projeto_anterior: false,
+  n_projeto_anterior: '',
+  decreto_estadual_adotado_id: 2,
+  cnae_not_in_it14: false,
+  porte_outros: '',
+  qtde_pessoas: '',
+  qtde_leitos: '',
+  qtde_funcionarios: '',
+  area_comum: '',
+  subsolo_maior_50m: false,
+  cobertura_fsps_sup200: false,
   edification: {
     reference_name: '',
     registration: '',
-    height: 'Baixa = H <= 6,00 m',
+    height: 'Térrea = Um pavimento',
     number_floors: 1,
     building_area: 250,
     area_to_be_built: 0,
@@ -111,7 +271,7 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     zip_code: '',
     public_place: '',
     number: '',
-    complement: '',
+    complement: '***',
     district: '',
     county: 'SALVADOR',
     municipio_id: 323,
@@ -123,7 +283,7 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     cnpj_cpf: '',
     razao_social: '',
     nome_fantasia: '',
-    natureza_juridica: 'Sociedade Empresária Limitada',
+    natureza_juridica: 'ME',
     cnae: '',
     atividade_economica: '',
     risk: 300
@@ -139,16 +299,16 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     tipo_pessoa_prop: 'PJ',
     cpf_cnpj_prop: '',
     nome_proprietario: '',
-    email_proprietario: '',
-    tel_proprietario: ''
+    email_proprietario: 'engenharia@abaincendio.com.br',
+    tel_proprietario: '(71) 4000-2895'
   },
   responsavel: {
     responsavel_uso_igual_prop: true,
     tipo_pessoa_resp: 'PJ',
     cpf_cnpj_resp: '',
     nome_responsavel: '',
-    email_responsavel_uso: '',
-    tel_responsavel_uso: ''
+    email_responsavel_uso: 'engenharia@abaincendio.com.br',
+    tel_responsavel_uso: '(71) 4000-2895'
   },
   technical: {
     cpf: '',
@@ -157,17 +317,44 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     telephone: '(71) 4000-2895',
     email: 'engenharia@abaincendio.com.br'
   },
+  responsaveis_tecnicos: [
+    {
+      tipo_numero: 'CREA',
+      crea_cau: 'BA20261628773',
+      name: 'ABA Incêndio - Engenharia e Projetos',
+      cpf_cnpj: '00000000000',
+      phone: '(71) 4000-2895',
+      email: 'engenharia@abaincendio.com.br'
+    }
+  ],
+  incluir_rt_opcional: false,
   questionario: {
     edf_saida_direta: true,
+    edf_regularizada_certificado: false,
+    tipo_certificado: 'AVCB',
+    n_certificado: '',
+    renovacao_sap: false,
+    lotacao_max_pessoas: false,
     existe_gases_inflamaveis: false,
     existe_liquidos_inflamaveis: false,
     glp_12480kg: false,
     gas_glp: false,
     armazena_produtos_perigosos: false,
     local_reuniao_publico: false,
-    lotacao_max_pessoas: false,
     subsolo_maior_50m_pt: false,
     cobertura_fibras_sape: false
+  },
+  specialRisks: {
+    liquidos_inflamaveis: false,
+    gas_liquefeito_petroleo: false,
+    produtos_perigosos: false,
+    fogos_artificio: false,
+    vaso_pressao: false,
+    outros: ''
+  },
+  glpData: {
+    total_kg_glp: '',
+    classe_glp: 'Classe I'
   },
   securityMeasures: {
     iluminacao_emerg: 1,
@@ -175,13 +362,7 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     extintores: 1,
     saidas_emerg: 1,
     brigada_incendio: 0,
-    acesso_viatura: 0,
-    hidrante_mangot: 0,
-    alarme_incendio: 0,
-    deteccao_incendio: 0,
-    seguranca_estrutural: 0,
-    chuveiros_auto: 0,
-    plano_emerg_incendio: 0
+    control_mat_acab: 0
   }
 };
 
@@ -380,6 +561,7 @@ export function generateLocalAiAssistantFallback(
       reply: 'Apliquei o exemplo de um Galpão Comercial de 620 m² em Feira de Santana, divisão C-2 com medidas de segurança da IT-14 ajustadas.',
       thinkingSteps: ['Identificada intenção de carregar caso prático', 'Calculando medidas mínimas CBMBA para 620 m²', 'Definindo município Feira de Santana (ID 108)'],
       appliedChangesSummary: [
+        'Formulário → Projeto Técnico Simplificado (PTSCLCB2)',
         'Área construída → 620 m²',
         'Município → FEIRA DE SANTANA (ID 108)',
         'Pavimentos → 1 (Térrea)',
@@ -389,6 +571,8 @@ export function generateLocalAiAssistantFallback(
       formPatch: {
         step: 1,
         name: 'Galpão Comercial - Feira de Santana',
+        form_mode: 'pts',
+        tipo_projeto_id: 5,
         edification: {
           reference_name: 'GALPÃO COMERCIAL NORTE',
           building_area: 620,
@@ -423,6 +607,7 @@ export function generateLocalAiAssistantFallback(
       reply: 'Configurei os parâmetros para uma Pizzaria/Restaurante de 120 m² em Feira de Santana (Divisão F-8), com enquadramento automático em PTS (CLCB).',
       thinkingSteps: ['Classificação Divisão F-8 (Locais de Refeição)', 'Área menor que 200 m² → CLCB sem taxa ou simplificado'],
       appliedChangesSummary: [
+        'Formulário → Projeto Técnico Simplificado (PTSCLCB1)',
         'Nome → Pizzaria Forno a Lenha FSA',
         'Área → 120 m²',
         'Município → FEIRA DE SANTANA (108)',
@@ -431,6 +616,8 @@ export function generateLocalAiAssistantFallback(
       formPatch: {
         step: 1,
         name: 'Pizzaria Forno a Lenha FSA',
+        form_mode: 'pts',
+        tipo_projeto_id: 4,
         edification: {
           reference_name: 'PIZZARIA FORNO A LENHA',
           building_area: 120,

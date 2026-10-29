@@ -9,7 +9,7 @@ import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSetting, getSetting, getUserFenixSession, markUserFenixSessionExpired, resolveSession, seal, setSetting, unseal } from './store.js';
 import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
-import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type DraftAiAssistantRequest } from './project-drafts.js';
+import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, streamDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type DraftAiAssistantRequest } from './project-drafts.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
@@ -1174,181 +1174,223 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
   }
 });
 
+async function resolveAiAssistantRequest(req: Request, res: Response): Promise<DraftAiAssistantRequest> {
+  const message = String(req.body?.message || '').trim();
+  const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
+  const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
+
+  let systemContext = (req.body?.systemContext || {}) as NonNullable<DraftAiAssistantRequest['systemContext']>;
+  const currentView = req.body?.currentView || systemContext.currentView || (req.body?.buildingId ? 'buildings' : undefined);
+  const activeTab = req.body?.activeTab || systemContext.activeTab;
+
+  try {
+    const sourceUserIds = dataUserIds(res.locals.user.id);
+    const allBuildings = buildingRows(sourceUserIds);
+    const allProcesses = deduplicateProcesses(processRows(sourceUserIds));
+    const inAnalysis = allProcesses.filter((p) => /an[aá]lise/i.test(`${p.status} ${p.stage}`)).length;
+    const notified = allProcesses.filter((p) => /notific/i.test(`${p.status} ${p.stage}`)).length;
+    const stopped = allProcesses.filter((p) => /rascunho|pendente|parad/i.test(`${p.status} ${p.stage}`)).length;
+
+    const metricsSummary = {
+      totalBuildings: allBuildings.length,
+      inAnalysis,
+      notified,
+      stopped
+    };
+
+    const buildingsOverview = allBuildings.slice(0, 25).map((b) => {
+      const bProcesses = allProcesses.filter((p) => p.building_id === b.id);
+      const latest = bProcesses[0];
+      return {
+        id: b.id,
+        reference: b.reference,
+        municipality: b.municipality,
+        latestProtocol: latest?.protocol || '—',
+        latestStatus: latest?.status || 'Sem processo',
+        latestStage: latest?.stage || '—'
+      };
+    });
+
+    const requestedId = String(req.body?.buildingId || systemContext.activeBuilding?.id || '').trim();
+    const requestedRef = String(systemContext.activeBuilding?.reference || '').trim().toLowerCase();
+    const normalizedMsg = message.toLowerCase();
+
+    let found = null;
+    if (requestedId) {
+      found = allBuildings.find((b) => String(b.id) === requestedId || String(b.remote_id) === requestedId) ||
+              ownedBuilding(res.locals.user.id, requestedId);
+    }
+    if (!found && requestedRef) {
+      found = allBuildings.find((b) => b.reference?.trim().toLowerCase() === requestedRef);
+    }
+    if (!found) {
+      found = allBuildings.find((b) => b.reference && b.reference.trim().length >= 4 && normalizedMsg.includes(b.reference.trim().toLowerCase()));
+    }
+    if (!found && allBuildings.length === 1) {
+      found = allBuildings[0];
+    }
+
+    let activeBuilding = systemContext.activeBuilding || null;
+
+    if (found) {
+      const bProcesses = allProcesses.filter((p) => p.building_id === found.id);
+      const frontendProcesses = systemContext.activeBuilding?.processes || [];
+
+      const mergedProcesses = (bProcesses.length > 0 ? bProcesses : [{
+        id: found.id,
+        protocol: (found as any).protocol || '—',
+        type: (found as any).processType || 'Processo',
+        status: (found as any).status || 'Em tramitação',
+        stage: (found as any).stage || '—',
+        updated_at: (found as any).lastUpdated || '',
+        payload: '{}'
+      } as any]).map((p) => {
+        const matchingFrontendProc = frontendProcesses.find((fp) => fp.protocol === p.protocol || String(fp.id) === String(p.id));
+
+        let payloadDocs: Array<{ name?: string; type?: string; status?: string; available?: boolean; error?: string }> = [];
+        try {
+          const parsed = JSON.parse(p.payload || '{}');
+          const rawDocs = parsed?.documents || parsed?.documentos || parsed?.files || [];
+          if (Array.isArray(rawDocs)) {
+            payloadDocs = rawDocs.map((d: any) => ({
+              name: d.name || d.nome || d.descricao || 'Documento',
+              type: d.type || d.tipo || 'Anexo',
+              status: d.status || (d.available ? 'Disponível' : 'Indisponível'),
+              available: Boolean(d.available),
+              error: d.error || d.availabilityMessage || d.message
+            }));
+          }
+        } catch {}
+
+        if (payloadDocs.length === 0 && !matchingFrontendProc?.documents) {
+          payloadDocs = [
+            { name: 'Metadados de DAE', type: 'Taxa / DAE', status: 'Indisponível', available: false, error: 'DAE não retornado pelo Fênix ou exige consulta na SEFAZ-BA' },
+            { name: 'Comprovante de protocolo', type: 'Protocolo', status: 'Indisponível', available: false, error: 'Falha ao consultar ou documento não disponibilizado pelo Fênix' },
+            { name: 'Certificado de aprovação', type: 'Certificado', status: 'Indisponível', available: false, error: 'Falha ao consultar ou documento não disponibilizado pelo Fênix' }
+          ];
+        }
+
+        let timeline: Array<{ date?: string; stage?: string; description?: string }> = [];
+        try {
+          const hist = db.prepare('SELECT timeline_json FROM process_histories WHERE user_id=? AND process_id=?').get(res.locals.user.id, p.id) as { timeline_json: string } | undefined;
+          if (hist?.timeline_json) {
+            const parsedTimeline = JSON.parse(hist.timeline_json);
+            if (Array.isArray(parsedTimeline)) {
+              timeline = parsedTimeline.map((t: any) => ({
+                date: t.date || t.data,
+                stage: t.stage || t.label || t.etapa,
+                description: t.description || t.descricao || t.label
+              }));
+            }
+          }
+        } catch {}
+
+        return {
+          id: p.id,
+          protocol: p.protocol || matchingFrontendProc?.protocol || '—',
+          type: p.type || matchingFrontendProc?.type || 'Processo',
+          status: p.status || matchingFrontendProc?.status || 'Em tramitação',
+          stage: p.stage || matchingFrontendProc?.stage || '—',
+          updatedAt: p.updated_at || matchingFrontendProc?.updatedAt || '',
+          notes: p.notified_by || matchingFrontendProc?.notes || '',
+          documents: matchingFrontendProc?.documents?.length ? matchingFrontendProc.documents.map((d: any) => ({
+            name: d.name || 'Documento',
+            type: d.type || 'Anexo',
+            status: d.status || (d.available ? 'Disponível' : 'Indisponível'),
+            available: Boolean(d.available),
+            error: d.error || d.availabilityMessage || d.message
+          })) : payloadDocs,
+          timeline: matchingFrontendProc?.timeline?.length ? matchingFrontendProc.timeline : timeline
+        };
+      });
+
+      activeBuilding = {
+        id: found.id,
+        reference: found.reference,
+        municipality: found.municipality || systemContext.activeBuilding?.municipality,
+        address: found.address || systemContext.activeBuilding?.address,
+        area: found.area ? String(found.area) : systemContext.activeBuilding?.area,
+        floors: found.floors ? String(found.floors) : systemContext.activeBuilding?.floors,
+        height: found.height ? String(found.height) : systemContext.activeBuilding?.height,
+        occupation: (found as any).use || systemContext.activeBuilding?.occupation,
+        processes: mergedProcesses
+      };
+    }
+
+    systemContext = {
+      currentView,
+      activeTab,
+      activeBuilding: activeBuilding || systemContext.activeBuilding || null,
+      metricsSummary: metricsSummary || systemContext.metricsSummary || null,
+      buildingsOverview: buildingsOverview.length > 0 ? buildingsOverview : systemContext.buildingsOverview
+    };
+  } catch {
+    // Ignora falhas de enriquecimento do contexto
+  }
+
+  const openaiApiKey = getSetting('openai_api_key');
+  const openaiModel = getSetting('openai_model') || 'gpt-4o-mini';
+
+  return {
+    message,
+    currentDraft,
+    history,
+    systemContext,
+    openaiApiKey,
+    openaiModel
+  };
+}
+
 app.post('/api/drafts/ai-assistant', requireSession, draftAiRateLimiter, async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
     if (!message) {
       return res.status(400).json({ error: 'Envie uma mensagem para o copiloto de IA.' });
     }
-    const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
-    const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
-
-    let systemContext = (req.body?.systemContext || {}) as NonNullable<DraftAiAssistantRequest['systemContext']>;
-    const currentView = req.body?.currentView || systemContext.currentView || (req.body?.buildingId ? 'buildings' : undefined);
-    const activeTab = req.body?.activeTab || systemContext.activeTab;
-
-    try {
-      const sourceUserIds = dataUserIds(res.locals.user.id);
-      const allBuildings = buildingRows(sourceUserIds);
-      const allProcesses = deduplicateProcesses(processRows(sourceUserIds));
-      const inAnalysis = allProcesses.filter((p) => /an[aá]lise/i.test(`${p.status} ${p.stage}`)).length;
-      const notified = allProcesses.filter((p) => /notific/i.test(`${p.status} ${p.stage}`)).length;
-      const stopped = allProcesses.filter((p) => /rascunho|pendente|parad/i.test(`${p.status} ${p.stage}`)).length;
-
-      const metricsSummary = {
-        totalBuildings: allBuildings.length,
-        inAnalysis,
-        notified,
-        stopped
-      };
-
-      const buildingsOverview = allBuildings.slice(0, 25).map((b) => {
-        const bProcesses = allProcesses.filter((p) => p.building_id === b.id);
-        const latest = bProcesses[0];
-        return {
-          id: b.id,
-          reference: b.reference,
-          municipality: b.municipality,
-          latestProtocol: latest?.protocol || '—',
-          latestStatus: latest?.status || 'Sem processo',
-          latestStage: latest?.stage || '—'
-        };
-      });
-
-      // Localização da edificação ativa por id, referência ou citação na mensagem
-      const requestedId = String(req.body?.buildingId || systemContext.activeBuilding?.id || '').trim();
-      const requestedRef = String(systemContext.activeBuilding?.reference || '').trim().toLowerCase();
-      const normalizedMsg = message.toLowerCase();
-
-      let found = null;
-      if (requestedId) {
-        found = allBuildings.find((b) => String(b.id) === requestedId || String(b.remote_id) === requestedId) ||
-                ownedBuilding(res.locals.user.id, requestedId);
-      }
-      if (!found && requestedRef) {
-        found = allBuildings.find((b) => b.reference?.trim().toLowerCase() === requestedRef);
-      }
-      if (!found) {
-        found = allBuildings.find((b) => b.reference && b.reference.trim().length >= 4 && normalizedMsg.includes(b.reference.trim().toLowerCase()));
-      }
-      if (!found && allBuildings.length === 1) {
-        found = allBuildings[0];
-      }
-
-      let activeBuilding = systemContext.activeBuilding || null;
-
-      if (found) {
-        const bProcesses = allProcesses.filter((p) => p.building_id === found.id);
-        const frontendProcesses = systemContext.activeBuilding?.processes || [];
-
-        const mergedProcesses = (bProcesses.length > 0 ? bProcesses : [{
-          id: found.id,
-          protocol: (found as any).protocol || '—',
-          type: (found as any).processType || 'Processo',
-          status: (found as any).status || 'Em tramitação',
-          stage: (found as any).stage || '—',
-          updated_at: (found as any).lastUpdated || '',
-          payload: '{}'
-        } as any]).map((p) => {
-          const matchingFrontendProc = frontendProcesses.find((fp) => fp.protocol === p.protocol || String(fp.id) === String(p.id));
-
-          let payloadDocs: Array<{ name?: string; type?: string; status?: string; available?: boolean; error?: string }> = [];
-          try {
-            const parsed = JSON.parse(p.payload || '{}');
-            const rawDocs = parsed?.documents || parsed?.documentos || parsed?.files || [];
-            if (Array.isArray(rawDocs)) {
-              payloadDocs = rawDocs.map((d: any) => ({
-                name: d.name || d.nome || d.descricao || 'Documento',
-                type: d.type || d.tipo || 'Anexo',
-                status: d.status || (d.available ? 'Disponível' : 'Indisponível'),
-                available: Boolean(d.available),
-                error: d.error || d.availabilityMessage || d.message
-              }));
-            }
-          } catch {}
-
-          if (payloadDocs.length === 0 && !matchingFrontendProc?.documents) {
-            payloadDocs = [
-              { name: 'Metadados de DAE', type: 'Taxa / DAE', status: 'Indisponível', available: false, error: 'DAE não retornado pelo Fênix ou exige consulta na SEFAZ-BA' },
-              { name: 'Comprovante de protocolo', type: 'Protocolo', status: 'Indisponível', available: false, error: 'Falha ao consultar ou documento não disponibilizado pelo Fênix' },
-              { name: 'Certificado de aprovação', type: 'Certificado', status: 'Indisponível', available: false, error: 'Falha ao consultar ou documento não disponibilizado pelo Fênix' }
-            ];
-          }
-
-          let timeline: Array<{ date?: string; stage?: string; description?: string }> = [];
-          try {
-            const hist = db.prepare('SELECT timeline_json FROM process_histories WHERE user_id=? AND process_id=?').get(res.locals.user.id, p.id) as { timeline_json: string } | undefined;
-            if (hist?.timeline_json) {
-              const parsedTimeline = JSON.parse(hist.timeline_json);
-              if (Array.isArray(parsedTimeline)) {
-                timeline = parsedTimeline.map((t: any) => ({
-                  date: t.date || t.data,
-                  stage: t.stage || t.label || t.etapa,
-                  description: t.description || t.descricao || t.label
-                }));
-              }
-            }
-          } catch {}
-
-          return {
-            id: p.id,
-            protocol: p.protocol || matchingFrontendProc?.protocol || '—',
-            type: p.type || matchingFrontendProc?.type || 'Processo',
-            status: p.status || matchingFrontendProc?.status || 'Em tramitação',
-            stage: p.stage || matchingFrontendProc?.stage || '—',
-            updatedAt: p.updated_at || matchingFrontendProc?.updatedAt || '',
-            notes: p.notified_by || matchingFrontendProc?.notes || '',
-            documents: matchingFrontendProc?.documents?.length ? matchingFrontendProc.documents.map((d: any) => ({
-              name: d.name || 'Documento',
-              type: d.type || 'Anexo',
-              status: d.status || (d.available ? 'Disponível' : 'Indisponível'),
-              available: Boolean(d.available),
-              error: d.error || d.availabilityMessage || d.message
-            })) : payloadDocs,
-            timeline: matchingFrontendProc?.timeline?.length ? matchingFrontendProc.timeline : timeline
-          };
-        });
-
-        activeBuilding = {
-          id: found.id,
-          reference: found.reference,
-          municipality: found.municipality || systemContext.activeBuilding?.municipality,
-          address: found.address || systemContext.activeBuilding?.address,
-          area: found.area ? String(found.area) : systemContext.activeBuilding?.area,
-          floors: found.floors ? String(found.floors) : systemContext.activeBuilding?.floors,
-          height: found.height ? String(found.height) : systemContext.activeBuilding?.height,
-          occupation: (found as any).use || systemContext.activeBuilding?.occupation,
-          processes: mergedProcesses
-        };
-      }
-
-      systemContext = {
-        currentView,
-        activeTab,
-        activeBuilding: activeBuilding || systemContext.activeBuilding || null,
-        metricsSummary: metricsSummary || systemContext.metricsSummary || null,
-        buildingsOverview: buildingsOverview.length > 0 ? buildingsOverview : systemContext.buildingsOverview
-      };
-    } catch {
-      // Ignora falhas de enriquecimento do contexto
-    }
-
-    const openaiApiKey = getSetting('openai_api_key');
-    const openaiModel = getSetting('openai_model') || 'gpt-4o-mini';
-
-    const result = await runDraftAiAssistant({
-      message,
-      currentDraft,
-      history,
-      systemContext,
-      openaiApiKey,
-      openaiModel
-    });
-
+    const aiReq = await resolveAiAssistantRequest(req, res);
+    const result = await runDraftAiAssistant(aiReq);
     res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Falha ao processar solicitação no copiloto de IA.';
     res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/drafts/ai-assistant/stream', requireSession, draftAiRateLimiter, async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  if (!message) {
+    return res.status(400).json({ error: 'Envie uma mensagem para o copiloto de IA.' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders?.();
+
+  const abortController = new AbortController();
+  req.on('close', () => {
+    abortController.abort();
+  });
+
+  const sendEvent = (event: unknown) => {
+    if (res.writableEnded || res.closed) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    (res as any).flush?.();
+  };
+
+  try {
+    const aiReq = await resolveAiAssistantRequest(req, res);
+    await streamDraftAiAssistant(aiReq, sendEvent, abortController.signal);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Falha ao processar streaming no copiloto de IA.';
+    sendEvent({ type: 'error', error: errorMsg });
+  } finally {
+    if (!res.writableEnded) {
+      res.end();
+    }
   }
 });
 
