@@ -1,0 +1,3127 @@
+{
+  "counties": [
+    {
+      "id": 1,
+      "municipio": "ABAIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900108
+    },
+    {
+      "id": 2,
+      "municipio": "ABARE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900207
+    },
+    {
+      "id": 3,
+      "municipio": "ACAJUTIBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900306
+    },
+    {
+      "id": 4,
+      "municipio": "ADUSTINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900355
+    },
+    {
+      "id": 5,
+      "municipio": "AGUA FRIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900405
+    },
+    {
+      "id": 6,
+      "municipio": "AIQUARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900603
+    },
+    {
+      "id": 7,
+      "municipio": "ALAGOINHAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900702
+    },
+    {
+      "id": 8,
+      "municipio": "ALCOBACA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900801
+    },
+    {
+      "id": 9,
+      "municipio": "ALMADINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900900
+    },
+    {
+      "id": 10,
+      "municipio": "AMARGOSA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901007
+    },
+    {
+      "id": 11,
+      "municipio": "AMELIA RODRIGUES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901106
+    },
+    {
+      "id": 12,
+      "municipio": "AMERICA DOURADA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901155
+    },
+    {
+      "id": 13,
+      "municipio": "ANAGE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901205
+    },
+    {
+      "id": 14,
+      "municipio": "ANDARAI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901304
+    },
+    {
+      "id": 15,
+      "municipio": "ANDORINHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901353
+    },
+    {
+      "id": 16,
+      "municipio": "ANGICAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901403
+    },
+    {
+      "id": 17,
+      "municipio": "ANGUERA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901502
+    },
+    {
+      "id": 18,
+      "municipio": "ANTAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901601
+    },
+    {
+      "id": 19,
+      "municipio": "ANTONIO CARDOSO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901700
+    },
+    {
+      "id": 20,
+      "municipio": "ANTONIO GONCALVES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901809
+    },
+    {
+      "id": 21,
+      "municipio": "APORA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901908
+    },
+    {
+      "id": 22,
+      "municipio": "APUAREMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2901957
+    },
+    {
+      "id": 23,
+      "municipio": "ARACAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902054
+    },
+    {
+      "id": 24,
+      "municipio": "ARACATU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902005
+    },
+    {
+      "id": 25,
+      "municipio": "ARACI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902104
+    },
+    {
+      "id": 26,
+      "municipio": "ARAMARI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902203
+    },
+    {
+      "id": 27,
+      "municipio": "ARATACA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902252
+    },
+    {
+      "id": 28,
+      "municipio": "ARATUIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902302
+    },
+    {
+      "id": 29,
+      "municipio": "AURELINO LEAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902401
+    },
+    {
+      "id": 30,
+      "municipio": "BAIANOPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902500
+    },
+    {
+      "id": 31,
+      "municipio": "BAIXA GRANDE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902609
+    },
+    {
+      "id": 32,
+      "municipio": "BANZAE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902658
+    },
+    {
+      "id": 33,
+      "municipio": "BARRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902708
+    },
+    {
+      "id": 34,
+      "municipio": "BARRA DA ESTIVA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902807
+    },
+    {
+      "id": 35,
+      "municipio": "BARRA DO CHOCA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2902906
+    },
+    {
+      "id": 36,
+      "municipio": "BARRA DO MENDES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903003
+    },
+    {
+      "id": 37,
+      "municipio": "BARRA DO ROCHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903102
+    },
+    {
+      "id": 38,
+      "municipio": "BARREIRAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903201
+    },
+    {
+      "id": 39,
+      "municipio": "BARRO ALTO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903235
+    },
+    {
+      "id": 40,
+      "municipio": "BARRO PRETO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903300
+    },
+    {
+      "id": 41,
+      "municipio": "BARROCAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903276
+    },
+    {
+      "id": 42,
+      "municipio": "BELMONTE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903409
+    },
+    {
+      "id": 43,
+      "municipio": "BELO CAMPO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903508
+    },
+    {
+      "id": 44,
+      "municipio": "BIRITINGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903607
+    },
+    {
+      "id": 45,
+      "municipio": "BOA NOVA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903706
+    },
+    {
+      "id": 46,
+      "municipio": "BOA VISTA DO TUPIM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903805
+    },
+    {
+      "id": 47,
+      "municipio": "BOM JESUS DA LAPA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903904
+    },
+    {
+      "id": 48,
+      "municipio": "BOM JESUS DA SERRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2903953
+    },
+    {
+      "id": 49,
+      "municipio": "BONINAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904001
+    },
+    {
+      "id": 50,
+      "municipio": "BONITO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904050
+    },
+    {
+      "id": 51,
+      "municipio": "BOQUIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904100
+    },
+    {
+      "id": 52,
+      "municipio": "BOTUPORA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904209
+    },
+    {
+      "id": 53,
+      "municipio": "BREJOES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904308
+    },
+    {
+      "id": 54,
+      "municipio": "BREJOLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904407
+    },
+    {
+      "id": 55,
+      "municipio": "BROTAS DE MACAUBAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904506
+    },
+    {
+      "id": 56,
+      "municipio": "BRUMADO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904605
+    },
+    {
+      "id": 57,
+      "municipio": "BUERAREMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904704
+    },
+    {
+      "id": 58,
+      "municipio": "BURITIRAMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904753
+    },
+    {
+      "id": 59,
+      "municipio": "CAATIBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904803
+    },
+    {
+      "id": 60,
+      "municipio": "CABACEIRAS DO PARAGUACU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904852
+    },
+    {
+      "id": 61,
+      "municipio": "CACHOEIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2904902
+    },
+    {
+      "id": 62,
+      "municipio": "CACULE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905008
+    },
+    {
+      "id": 63,
+      "municipio": "CAEM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905107
+    },
+    {
+      "id": 64,
+      "municipio": "CAETANOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905156
+    },
+    {
+      "id": 65,
+      "municipio": "CAETITE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905206
+    },
+    {
+      "id": 66,
+      "municipio": "CAFARNAUM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905305
+    },
+    {
+      "id": 67,
+      "municipio": "CAIRU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905404
+    },
+    {
+      "id": 68,
+      "municipio": "CALDEIRAO GRANDE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905503
+    },
+    {
+      "id": 69,
+      "municipio": "CAMACAN",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905602
+    },
+    {
+      "id": 70,
+      "municipio": "CAMACARI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905701
+    },
+    {
+      "id": 71,
+      "municipio": "CAMAMU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905800
+    },
+    {
+      "id": 72,
+      "municipio": "CAMPO ALEGRE DE LOURDES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2905909
+    },
+    {
+      "id": 73,
+      "municipio": "CAMPO FORMOSO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906006
+    },
+    {
+      "id": 74,
+      "municipio": "CANAPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906105
+    },
+    {
+      "id": 75,
+      "municipio": "CANARANA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906204
+    },
+    {
+      "id": 76,
+      "municipio": "CANAVIEIRAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906303
+    },
+    {
+      "id": 77,
+      "municipio": "CANDEAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906402
+    },
+    {
+      "id": 78,
+      "municipio": "CANDEIAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906501
+    },
+    {
+      "id": 79,
+      "municipio": "CANDIBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906600
+    },
+    {
+      "id": 80,
+      "municipio": "CANDIDO SALES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906709
+    },
+    {
+      "id": 81,
+      "municipio": "CANSANCAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906808
+    },
+    {
+      "id": 82,
+      "municipio": "CANUDOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906824
+    },
+    {
+      "id": 83,
+      "municipio": "CAPELA DO ALTO ALEGRE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906857
+    },
+    {
+      "id": 84,
+      "municipio": "CAPIM GROSSO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906873
+    },
+    {
+      "id": 85,
+      "municipio": "CARAIBAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906899
+    },
+    {
+      "id": 86,
+      "municipio": "CARAVELAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2906907
+    },
+    {
+      "id": 87,
+      "municipio": "CARDEAL DA SILVA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907004
+    },
+    {
+      "id": 88,
+      "municipio": "CARINHANHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907103
+    },
+    {
+      "id": 89,
+      "municipio": "CASA NOVA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907202
+    },
+    {
+      "id": 90,
+      "municipio": "CASTRO ALVES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907301
+    },
+    {
+      "id": 91,
+      "municipio": "CATOLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907400
+    },
+    {
+      "id": 92,
+      "municipio": "CATU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907509
+    },
+    {
+      "id": 93,
+      "municipio": "CATURAMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907558
+    },
+    {
+      "id": 94,
+      "municipio": "CENTRAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907608
+    },
+    {
+      "id": 95,
+      "municipio": "CHORROCHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907707
+    },
+    {
+      "id": 96,
+      "municipio": "CICERO DANTAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907806
+    },
+    {
+      "id": 97,
+      "municipio": "CIPO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2907905
+    },
+    {
+      "id": 98,
+      "municipio": "COARACI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908002
+    },
+    {
+      "id": 99,
+      "municipio": "COCOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908101
+    },
+    {
+      "id": 100,
+      "municipio": "CONCEICAO DA FEIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908200
+    },
+    {
+      "id": 101,
+      "municipio": "CONCEICAO DO ALMEIDA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908309
+    },
+    {
+      "id": 102,
+      "municipio": "CONCEICAO DO COITE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908408
+    },
+    {
+      "id": 103,
+      "municipio": "CONCEICAO DO JACUIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908507
+    },
+    {
+      "id": 104,
+      "municipio": "CONDE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908606
+    },
+    {
+      "id": 105,
+      "municipio": "CONDEUBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908705
+    },
+    {
+      "id": 106,
+      "municipio": "CONTENDAS DO SINCORA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908804
+    },
+    {
+      "id": 107,
+      "municipio": "CORACAO DE MARIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2908903
+    },
+    {
+      "id": 108,
+      "municipio": "CORDEIROS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909000
+    },
+    {
+      "id": 109,
+      "municipio": "CORIBE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909109
+    },
+    {
+      "id": 110,
+      "municipio": "CORONEL JOAO SA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909208
+    },
+    {
+      "id": 111,
+      "municipio": "CORRENTINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909307
+    },
+    {
+      "id": 112,
+      "municipio": "COTEGIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909406
+    },
+    {
+      "id": 113,
+      "municipio": "CRAVOLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909505
+    },
+    {
+      "id": 114,
+      "municipio": "CRISOPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909604
+    },
+    {
+      "id": 115,
+      "municipio": "CRISTOPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909703
+    },
+    {
+      "id": 116,
+      "municipio": "CRUZ DAS ALMAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909802
+    },
+    {
+      "id": 117,
+      "municipio": "CURACA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2909901
+    },
+    {
+      "id": 118,
+      "municipio": "DARIO MEIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910008
+    },
+    {
+      "id": 119,
+      "municipio": "DIAS D AVILA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910057
+    },
+    {
+      "id": 120,
+      "municipio": "DOM BASILIO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910107
+    },
+    {
+      "id": 121,
+      "municipio": "DOM MACEDO COSTA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910206
+    },
+    {
+      "id": 122,
+      "municipio": "ELISIO MEDRADO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910305
+    },
+    {
+      "id": 123,
+      "municipio": "ENCRUZILHADA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910404
+    },
+    {
+      "id": 124,
+      "municipio": "ENTRE RIOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910503
+    },
+    {
+      "id": 125,
+      "municipio": "ERICO CARDOSO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2900504
+    },
+    {
+      "id": 126,
+      "municipio": "ESPLANADA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910602
+    },
+    {
+      "id": 127,
+      "municipio": "EUCLIDES DA CUNHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910701
+    },
+    {
+      "id": 128,
+      "municipio": "EUNAPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910727
+    },
+    {
+      "id": 129,
+      "municipio": "FATIMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910750
+    },
+    {
+      "id": 130,
+      "municipio": "FEIRA DA MATA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910776
+    },
+    {
+      "id": 131,
+      "municipio": "FEIRA DE SANTANA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910800
+    },
+    {
+      "id": 132,
+      "municipio": "FILADELFIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910859
+    },
+    {
+      "id": 133,
+      "municipio": "FIRMINO ALVES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2910909
+    },
+    {
+      "id": 134,
+      "municipio": "FLORESTA AZUL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911006
+    },
+    {
+      "id": 135,
+      "municipio": "FORMOSA DO RIO PRETO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911105
+    },
+    {
+      "id": 136,
+      "municipio": "GANDU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911204
+    },
+    {
+      "id": 137,
+      "municipio": "GAVIAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911253
+    },
+    {
+      "id": 138,
+      "municipio": "GENTIO DO OURO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911303
+    },
+    {
+      "id": 139,
+      "municipio": "GLORIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911402
+    },
+    {
+      "id": 140,
+      "municipio": "GONGOGI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911501
+    },
+    {
+      "id": 141,
+      "municipio": "GOVERNADOR MANGABEIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911600
+    },
+    {
+      "id": 142,
+      "municipio": "GUAJERU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911659
+    },
+    {
+      "id": 143,
+      "municipio": "GUANAMBI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911709
+    },
+    {
+      "id": 144,
+      "municipio": "GUARATINGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911808
+    },
+    {
+      "id": 145,
+      "municipio": "HELIOPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911857
+    },
+    {
+      "id": 146,
+      "municipio": "IACU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2911907
+    },
+    {
+      "id": 147,
+      "municipio": "IBIASSUCE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912004
+    },
+    {
+      "id": 148,
+      "municipio": "IBICARAI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912103
+    },
+    {
+      "id": 149,
+      "municipio": "IBICOARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912202
+    },
+    {
+      "id": 150,
+      "municipio": "IBICUI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912301
+    },
+    {
+      "id": 151,
+      "municipio": "IBIPEBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912400
+    },
+    {
+      "id": 152,
+      "municipio": "IBIPITANGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912509
+    },
+    {
+      "id": 153,
+      "municipio": "IBIQUERA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912608
+    },
+    {
+      "id": 154,
+      "municipio": "IBIRAPITANGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912707
+    },
+    {
+      "id": 155,
+      "municipio": "IBIRAPUA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912806
+    },
+    {
+      "id": 156,
+      "municipio": "IBIRATAIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2912905
+    },
+    {
+      "id": 157,
+      "municipio": "IBITIARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913002
+    },
+    {
+      "id": 158,
+      "municipio": "IBITITA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913101
+    },
+    {
+      "id": 159,
+      "municipio": "IBOTIRAMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913200
+    },
+    {
+      "id": 160,
+      "municipio": "ICHU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913309
+    },
+    {
+      "id": 161,
+      "municipio": "IGAPORA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913408
+    },
+    {
+      "id": 162,
+      "municipio": "IGRAPIUNA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913457
+    },
+    {
+      "id": 163,
+      "municipio": "IGUAI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913507
+    },
+    {
+      "id": 164,
+      "municipio": "ILHEUS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913606
+    },
+    {
+      "id": 165,
+      "municipio": "INHAMBUPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913705
+    },
+    {
+      "id": 166,
+      "municipio": "IPECAETA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913804
+    },
+    {
+      "id": 167,
+      "municipio": "IPIAU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2913903
+    },
+    {
+      "id": 168,
+      "municipio": "IPIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914000
+    },
+    {
+      "id": 169,
+      "municipio": "IPUPIARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914109
+    },
+    {
+      "id": 170,
+      "municipio": "IRAJUBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914208
+    },
+    {
+      "id": 171,
+      "municipio": "IRAMAIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914307
+    },
+    {
+      "id": 172,
+      "municipio": "IRAQUARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914406
+    },
+    {
+      "id": 173,
+      "municipio": "IRARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914505
+    },
+    {
+      "id": 174,
+      "municipio": "IRECE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914604
+    },
+    {
+      "id": 175,
+      "municipio": "ITABELA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914653
+    },
+    {
+      "id": 176,
+      "municipio": "ITABERABA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914703
+    },
+    {
+      "id": 177,
+      "municipio": "ITABUNA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914802
+    },
+    {
+      "id": 178,
+      "municipio": "ITACARE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2914901
+    },
+    {
+      "id": 179,
+      "municipio": "ITAETE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915007
+    },
+    {
+      "id": 180,
+      "municipio": "ITAGI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915106
+    },
+    {
+      "id": 181,
+      "municipio": "ITAGIBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915205
+    },
+    {
+      "id": 182,
+      "municipio": "ITAGIMIRIM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915304
+    },
+    {
+      "id": 183,
+      "municipio": "ITAGUACU DA BAHIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915353
+    },
+    {
+      "id": 184,
+      "municipio": "ITAJU DO COLONIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915403
+    },
+    {
+      "id": 185,
+      "municipio": "ITAJUIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915502
+    },
+    {
+      "id": 186,
+      "municipio": "ITAMARAJU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915601
+    },
+    {
+      "id": 187,
+      "municipio": "ITAMARI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915700
+    },
+    {
+      "id": 188,
+      "municipio": "ITAMBE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915809
+    },
+    {
+      "id": 189,
+      "municipio": "ITANAGRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2915908
+    },
+    {
+      "id": 190,
+      "municipio": "ITANHEM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916005
+    },
+    {
+      "id": 191,
+      "municipio": "ITAPARICA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916104
+    },
+    {
+      "id": 192,
+      "municipio": "ITAPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916203
+    },
+    {
+      "id": 193,
+      "municipio": "ITAPEBI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916302
+    },
+    {
+      "id": 194,
+      "municipio": "ITAPETINGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916401
+    },
+    {
+      "id": 195,
+      "municipio": "ITAPICURU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916500
+    },
+    {
+      "id": 196,
+      "municipio": "ITAPITANGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916609
+    },
+    {
+      "id": 197,
+      "municipio": "ITAQUARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916708
+    },
+    {
+      "id": 198,
+      "municipio": "ITARANTIM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916807
+    },
+    {
+      "id": 199,
+      "municipio": "ITATIM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916856
+    },
+    {
+      "id": 200,
+      "municipio": "ITIRUCU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2916906
+    },
+    {
+      "id": 201,
+      "municipio": "ITIUBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917003
+    },
+    {
+      "id": 202,
+      "municipio": "ITORORO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917102
+    },
+    {
+      "id": 203,
+      "municipio": "ITUACU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917201
+    },
+    {
+      "id": 204,
+      "municipio": "ITUBERA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917300
+    },
+    {
+      "id": 205,
+      "municipio": "IUIU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917334
+    },
+    {
+      "id": 206,
+      "municipio": "JABORANDI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917359
+    },
+    {
+      "id": 207,
+      "municipio": "JACARACI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917409
+    },
+    {
+      "id": 208,
+      "municipio": "JACOBINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917508
+    },
+    {
+      "id": 209,
+      "municipio": "JAGUAQUARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917607
+    },
+    {
+      "id": 210,
+      "municipio": "JAGUARARI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917706
+    },
+    {
+      "id": 211,
+      "municipio": "JAGUARIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917805
+    },
+    {
+      "id": 212,
+      "municipio": "JANDAIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2917904
+    },
+    {
+      "id": 213,
+      "municipio": "JEQUIE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918001
+    },
+    {
+      "id": 214,
+      "municipio": "JEREMOABO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918100
+    },
+    {
+      "id": 215,
+      "municipio": "JIQUIRICA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918209
+    },
+    {
+      "id": 216,
+      "municipio": "JITAUNA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918308
+    },
+    {
+      "id": 217,
+      "municipio": "JOAO DOURADO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918357
+    },
+    {
+      "id": 218,
+      "municipio": "JUAZEIRO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918407
+    },
+    {
+      "id": 219,
+      "municipio": "JUCURUCU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918456
+    },
+    {
+      "id": 220,
+      "municipio": "JUSSARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918506
+    },
+    {
+      "id": 221,
+      "municipio": "JUSSARI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918555
+    },
+    {
+      "id": 222,
+      "municipio": "JUSSIAPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918605
+    },
+    {
+      "id": 223,
+      "municipio": "LAFAIETE COUTINHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918704
+    },
+    {
+      "id": 224,
+      "municipio": "LAGEDO DO TABOCAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919058
+    },
+    {
+      "id": 225,
+      "municipio": "LAGOA REAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918753
+    },
+    {
+      "id": 226,
+      "municipio": "LAJE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918803
+    },
+    {
+      "id": 227,
+      "municipio": "LAJEDAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2918902
+    },
+    {
+      "id": 228,
+      "municipio": "LAJEDINHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919009
+    },
+    {
+      "id": 229,
+      "municipio": "LAMARAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919108
+    },
+    {
+      "id": 230,
+      "municipio": "LAPAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919157
+    },
+    {
+      "id": 231,
+      "municipio": "LAURO DE FREITAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919207
+    },
+    {
+      "id": 232,
+      "municipio": "LENCOIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919306
+    },
+    {
+      "id": 233,
+      "municipio": "LICINIO DE ALMEIDA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919405
+    },
+    {
+      "id": 234,
+      "municipio": "LIVRAMENTO DE NOSSA SENHORA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919504
+    },
+    {
+      "id": 235,
+      "municipio": "LUIS EDUARDO MAGALHAES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919553
+    },
+    {
+      "id": 236,
+      "municipio": "MACAJUBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919603
+    },
+    {
+      "id": 237,
+      "municipio": "MACARANI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919702
+    },
+    {
+      "id": 238,
+      "municipio": "MACAUBAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919801
+    },
+    {
+      "id": 239,
+      "municipio": "MACURURE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919900
+    },
+    {
+      "id": 240,
+      "municipio": "MADRE DE DEUS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919926
+    },
+    {
+      "id": 241,
+      "municipio": "MAETINGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2919959
+    },
+    {
+      "id": 242,
+      "municipio": "MAIQUINIQUE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920007
+    },
+    {
+      "id": 243,
+      "municipio": "MAIRI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920106
+    },
+    {
+      "id": 244,
+      "municipio": "MALHADA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920205
+    },
+    {
+      "id": 245,
+      "municipio": "MALHADA DE PEDRAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920304
+    },
+    {
+      "id": 246,
+      "municipio": "MANOEL VITORINO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920403
+    },
+    {
+      "id": 247,
+      "municipio": "MANSIDAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920452
+    },
+    {
+      "id": 248,
+      "municipio": "MARACAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920502
+    },
+    {
+      "id": 249,
+      "municipio": "MARAGOGIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920601
+    },
+    {
+      "id": 250,
+      "municipio": "MARAU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920700
+    },
+    {
+      "id": 251,
+      "municipio": "MARCIONILIO SOUZA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920809
+    },
+    {
+      "id": 252,
+      "municipio": "MASCOTE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2920908
+    },
+    {
+      "id": 253,
+      "municipio": "MATA DE SAO JOAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921005
+    },
+    {
+      "id": 254,
+      "municipio": "MATINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921054
+    },
+    {
+      "id": 255,
+      "municipio": "MEDEIROS NETO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921104
+    },
+    {
+      "id": 256,
+      "municipio": "MIGUEL CALMON",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921203
+    },
+    {
+      "id": 257,
+      "municipio": "MILAGRES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921302
+    },
+    {
+      "id": 258,
+      "municipio": "MIRANGABA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921401
+    },
+    {
+      "id": 259,
+      "municipio": "MIRANTE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921450
+    },
+    {
+      "id": 260,
+      "municipio": "MONTE SANTO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921500
+    },
+    {
+      "id": 261,
+      "municipio": "MORPARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921609
+    },
+    {
+      "id": 262,
+      "municipio": "MORRO DO CHAPEU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921708
+    },
+    {
+      "id": 263,
+      "municipio": "MORTUGABA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921807
+    },
+    {
+      "id": 264,
+      "municipio": "MUCUGE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2921906
+    },
+    {
+      "id": 265,
+      "municipio": "MUCURI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922003
+    },
+    {
+      "id": 266,
+      "municipio": "MULUNGU DO MORRO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922052
+    },
+    {
+      "id": 267,
+      "municipio": "MUNDO NOVO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922102
+    },
+    {
+      "id": 268,
+      "municipio": "MUNIZ FERREIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922201
+    },
+    {
+      "id": 269,
+      "municipio": "MUQUEM DE SAO FRANCISCO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922250
+    },
+    {
+      "id": 270,
+      "municipio": "MURITIBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922300
+    },
+    {
+      "id": 271,
+      "municipio": "MUTUIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922409
+    },
+    {
+      "id": 272,
+      "municipio": "NAZARE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922508
+    },
+    {
+      "id": 273,
+      "municipio": "NILO PECANHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922607
+    },
+    {
+      "id": 274,
+      "municipio": "NORDESTINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922656
+    },
+    {
+      "id": 275,
+      "municipio": "NOVA CANAA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922706
+    },
+    {
+      "id": 276,
+      "municipio": "NOVA FATIMA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922730
+    },
+    {
+      "id": 277,
+      "municipio": "NOVA IBIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922755
+    },
+    {
+      "id": 278,
+      "municipio": "NOVA ITARANA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922805
+    },
+    {
+      "id": 279,
+      "municipio": "NOVA REDENCAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922854
+    },
+    {
+      "id": 280,
+      "municipio": "NOVA SOURE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2922904
+    },
+    {
+      "id": 281,
+      "municipio": "NOVA VICOSA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923001
+    },
+    {
+      "id": 282,
+      "municipio": "NOVO HORIZONTE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923035
+    },
+    {
+      "id": 283,
+      "municipio": "NOVO TRIUNFO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923050
+    },
+    {
+      "id": 284,
+      "municipio": "OLINDINA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923100
+    },
+    {
+      "id": 285,
+      "municipio": "OLIVEIRA DOS BREJINHOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923209
+    },
+    {
+      "id": 286,
+      "municipio": "OURICANGAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923308
+    },
+    {
+      "id": 287,
+      "municipio": "OUROLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923357
+    },
+    {
+      "id": 288,
+      "municipio": "PALMAS DE MONTE ALTO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923407
+    },
+    {
+      "id": 289,
+      "municipio": "PALMEIRAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923506
+    },
+    {
+      "id": 290,
+      "municipio": "PARAMIRIM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923605
+    },
+    {
+      "id": 291,
+      "municipio": "PARATINGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923704
+    },
+    {
+      "id": 292,
+      "municipio": "PARIPIRANGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923803
+    },
+    {
+      "id": 293,
+      "municipio": "PAU BRASIL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2923902
+    },
+    {
+      "id": 294,
+      "municipio": "PAULO AFONSO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924009
+    },
+    {
+      "id": 295,
+      "municipio": "PE DE SERRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924058
+    },
+    {
+      "id": 296,
+      "municipio": "PEDRAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924108
+    },
+    {
+      "id": 297,
+      "municipio": "PEDRO ALEXANDRE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924207
+    },
+    {
+      "id": 298,
+      "municipio": "PIATA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924306
+    },
+    {
+      "id": 299,
+      "municipio": "PILAO ARCADO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924405
+    },
+    {
+      "id": 300,
+      "municipio": "PINDAI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924504
+    },
+    {
+      "id": 301,
+      "municipio": "PINDOBACU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924603
+    },
+    {
+      "id": 302,
+      "municipio": "PINTADAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924652
+    },
+    {
+      "id": 303,
+      "municipio": "PIRAI DO NORTE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924678
+    },
+    {
+      "id": 304,
+      "municipio": "PIRIPA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924702
+    },
+    {
+      "id": 305,
+      "municipio": "PIRITIBA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924801
+    },
+    {
+      "id": 306,
+      "municipio": "PLANALTINO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2924900
+    },
+    {
+      "id": 307,
+      "municipio": "PLANALTO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925006
+    },
+    {
+      "id": 308,
+      "municipio": "POCOES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925105
+    },
+    {
+      "id": 309,
+      "municipio": "POJUCA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925204
+    },
+    {
+      "id": 310,
+      "municipio": "PONTO NOVO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925253
+    },
+    {
+      "id": 311,
+      "municipio": "PORTO SEGURO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925303
+    },
+    {
+      "id": 312,
+      "municipio": "POTIRAGUA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925402
+    },
+    {
+      "id": 313,
+      "municipio": "PRADO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925501
+    },
+    {
+      "id": 314,
+      "municipio": "PRESIDENTE DUTRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925600
+    },
+    {
+      "id": 315,
+      "municipio": "PRESIDENTE JANIO QUADROS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925709
+    },
+    {
+      "id": 316,
+      "municipio": "PRESIDENTE TANCREDO NEVES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925758
+    },
+    {
+      "id": 317,
+      "municipio": "QUEIMADAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925808
+    },
+    {
+      "id": 318,
+      "municipio": "QUIJINGUE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925907
+    },
+    {
+      "id": 319,
+      "municipio": "QUIXABEIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925931
+    },
+    {
+      "id": 320,
+      "municipio": "RAFAEL JAMBEIRO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2925956
+    },
+    {
+      "id": 321,
+      "municipio": "REMANSO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926004
+    },
+    {
+      "id": 322,
+      "municipio": "RETIROLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926103
+    },
+    {
+      "id": 323,
+      "municipio": "RIACHAO DAS NEVES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926202
+    },
+    {
+      "id": 324,
+      "municipio": "RIACHAO DO JACUIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926301
+    },
+    {
+      "id": 325,
+      "municipio": "RIACHO DE SANTANA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926400
+    },
+    {
+      "id": 326,
+      "municipio": "RIBEIRA DO AMPARO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926509
+    },
+    {
+      "id": 327,
+      "municipio": "RIBEIRA DO POMBAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926608
+    },
+    {
+      "id": 328,
+      "municipio": "RIBEIRAO DO LARGO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926657
+    },
+    {
+      "id": 329,
+      "municipio": "RIO DE CONTAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926707
+    },
+    {
+      "id": 330,
+      "municipio": "RIO DO ANTONIO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926806
+    },
+    {
+      "id": 331,
+      "municipio": "RIO DO PIRES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2926905
+    },
+    {
+      "id": 332,
+      "municipio": "RIO REAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927002
+    },
+    {
+      "id": 333,
+      "municipio": "RODELAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927101
+    },
+    {
+      "id": 334,
+      "municipio": "RUY BARBOSA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927200
+    },
+    {
+      "id": 335,
+      "municipio": "SALINAS DA MARGARIDA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927309
+    },
+    {
+      "id": 336,
+      "municipio": "SALVADOR",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927408
+    },
+    {
+      "id": 337,
+      "municipio": "SANTA BARBARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927507
+    },
+    {
+      "id": 338,
+      "municipio": "SANTA BRIGIDA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927606
+    },
+    {
+      "id": 339,
+      "municipio": "SANTA CRUZ CABRALIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927705
+    },
+    {
+      "id": 340,
+      "municipio": "SANTA CRUZ DA VITORIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927804
+    },
+    {
+      "id": 341,
+      "municipio": "SANTA INES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2927903
+    },
+    {
+      "id": 342,
+      "municipio": "SANTA LUZIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928059
+    },
+    {
+      "id": 343,
+      "municipio": "SANTA MARIA DA VITORIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928109
+    },
+    {
+      "id": 344,
+      "municipio": "SANTA RITA DE CASSIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928406
+    },
+    {
+      "id": 345,
+      "municipio": "SANTA TERESINHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928505
+    },
+    {
+      "id": 346,
+      "municipio": "SANTALUZ",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928000
+    },
+    {
+      "id": 347,
+      "municipio": "SANTANA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928208
+    },
+    {
+      "id": 348,
+      "municipio": "SANTANOPOLIS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928307
+    },
+    {
+      "id": 349,
+      "municipio": "SANTO AMARO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928604
+    },
+    {
+      "id": 350,
+      "municipio": "SANTO ANTONIO DE JESUS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928703
+    },
+    {
+      "id": 351,
+      "municipio": "SANTO ESTEVAO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928802
+    },
+    {
+      "id": 352,
+      "municipio": "SAO DESIDERIO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928901
+    },
+    {
+      "id": 353,
+      "municipio": "SAO DOMINGOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2928950
+    },
+    {
+      "id": 354,
+      "municipio": "SAO FELIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929107
+    },
+    {
+      "id": 355,
+      "municipio": "SAO FELIX",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929008
+    },
+    {
+      "id": 356,
+      "municipio": "SAO FELIX DO CORIBE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929057
+    },
+    {
+      "id": 357,
+      "municipio": "SAO FRANCISCO DO CONDE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929206
+    },
+    {
+      "id": 358,
+      "municipio": "SAO GABRIEL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929255
+    },
+    {
+      "id": 359,
+      "municipio": "SAO GONCALO DOS CAMPOS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929305
+    },
+    {
+      "id": 360,
+      "municipio": "SAO JOSE DA VITORIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929354
+    },
+    {
+      "id": 361,
+      "municipio": "SAO JOSE DO JACUIPE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929370
+    },
+    {
+      "id": 362,
+      "municipio": "SAO MIGUEL DAS MATAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929404
+    },
+    {
+      "id": 363,
+      "municipio": "SAO SEBASTIAO DO PASSE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929503
+    },
+    {
+      "id": 364,
+      "municipio": "SAPEACU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929602
+    },
+    {
+      "id": 365,
+      "municipio": "SATIRO DIAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929701
+    },
+    {
+      "id": 366,
+      "municipio": "SAUBARA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929750
+    },
+    {
+      "id": 367,
+      "municipio": "SAUDE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929800
+    },
+    {
+      "id": 368,
+      "municipio": "SEABRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2929909
+    },
+    {
+      "id": 369,
+      "municipio": "SEBASTIAO LARANJEIRAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930006
+    },
+    {
+      "id": 370,
+      "municipio": "SENHOR DO BONFIM",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930105
+    },
+    {
+      "id": 371,
+      "municipio": "SENTO SE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930204
+    },
+    {
+      "id": 372,
+      "municipio": "SERRA DO RAMALHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930154
+    },
+    {
+      "id": 373,
+      "municipio": "SERRA DOURADA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930303
+    },
+    {
+      "id": 374,
+      "municipio": "SERRA PRETA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930402
+    },
+    {
+      "id": 375,
+      "municipio": "SERRINHA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930501
+    },
+    {
+      "id": 376,
+      "municipio": "SERROLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930600
+    },
+    {
+      "id": 377,
+      "municipio": "SIMOES FILHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930709
+    },
+    {
+      "id": 378,
+      "municipio": "SITIO DO MATO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930758
+    },
+    {
+      "id": 379,
+      "municipio": "SITIO DO QUINTO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930766
+    },
+    {
+      "id": 380,
+      "municipio": "SOBRADINHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930774
+    },
+    {
+      "id": 381,
+      "municipio": "SOUTO SOARES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930808
+    },
+    {
+      "id": 382,
+      "municipio": "TABOCAS DO BREJO VELHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2930907
+    },
+    {
+      "id": 383,
+      "municipio": "TANHACU",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931004
+    },
+    {
+      "id": 384,
+      "municipio": "TANQUE NOVO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931053
+    },
+    {
+      "id": 385,
+      "municipio": "TANQUINHO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931103
+    },
+    {
+      "id": 386,
+      "municipio": "TAPEROA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931202
+    },
+    {
+      "id": 387,
+      "municipio": "TAPIRAMUTA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931301
+    },
+    {
+      "id": 388,
+      "municipio": "TEIXEIRA DE FREITAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931350
+    },
+    {
+      "id": 389,
+      "municipio": "TEODORO SAMPAIO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931400
+    },
+    {
+      "id": 390,
+      "municipio": "TEOFILANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931509
+    },
+    {
+      "id": 391,
+      "municipio": "TEOLANDIA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931608
+    },
+    {
+      "id": 392,
+      "municipio": "TERRA NOVA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931707
+    },
+    {
+      "id": 393,
+      "municipio": "TREMEDAL",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931806
+    },
+    {
+      "id": 394,
+      "municipio": "TUCANO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2931905
+    },
+    {
+      "id": 395,
+      "municipio": "UAUA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932002
+    },
+    {
+      "id": 396,
+      "municipio": "UBAIRA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932101
+    },
+    {
+      "id": 397,
+      "municipio": "UBAITABA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932200
+    },
+    {
+      "id": 398,
+      "municipio": "UBATA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932309
+    },
+    {
+      "id": 399,
+      "municipio": "UIBAI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932408
+    },
+    {
+      "id": 400,
+      "municipio": "UMBURANAS",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932457
+    },
+    {
+      "id": 401,
+      "municipio": "UNA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932507
+    },
+    {
+      "id": 402,
+      "municipio": "URANDI",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932606
+    },
+    {
+      "id": 403,
+      "municipio": "URUCUCA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932705
+    },
+    {
+      "id": 404,
+      "municipio": "UTINGA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932804
+    },
+    {
+      "id": 405,
+      "municipio": "VALENCA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2932903
+    },
+    {
+      "id": 406,
+      "municipio": "VALENTE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933000
+    },
+    {
+      "id": 407,
+      "municipio": "VARZEA DA ROCA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933059
+    },
+    {
+      "id": 408,
+      "municipio": "VARZEA DO POCO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933109
+    },
+    {
+      "id": 409,
+      "municipio": "VARZEA NOVA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933158
+    },
+    {
+      "id": 410,
+      "municipio": "VARZEDO",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933174
+    },
+    {
+      "id": 411,
+      "municipio": "VERA CRUZ",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933208
+    },
+    {
+      "id": 412,
+      "municipio": "VEREDA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933257
+    },
+    {
+      "id": 413,
+      "municipio": "VITORIA DA CONQUISTA",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933307
+    },
+    {
+      "id": 414,
+      "municipio": "WAGNER",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933406
+    },
+    {
+      "id": 415,
+      "municipio": "WANDERLEY",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933455
+    },
+    {
+      "id": 416,
+      "municipio": "WENCESLAU GUIMARAES",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933505
+    },
+    {
+      "id": 417,
+      "municipio": "XIQUE-XIQUE",
+      "habilitar": true,
+      "cod_municipio_ibge": 2933604
+    }
+  ],
+  "occupationGroups": [
+    {
+      "id": 13,
+      "group": "0",
+      "occupation_use": "Nenhuma ocupação"
+    },
+    {
+      "id": 14,
+      "group": "1",
+      "occupation_use": "Exclusivo p/ estacionamento"
+    },
+    {
+      "id": 1,
+      "group": "A",
+      "occupation_use": "Residencial"
+    },
+    {
+      "id": 2,
+      "group": "B",
+      "occupation_use": "Serviço de Hospedagem"
+    },
+    {
+      "id": 3,
+      "group": "C",
+      "occupation_use": "Comercial"
+    },
+    {
+      "id": 4,
+      "group": "D",
+      "occupation_use": "Serviço profissional"
+    },
+    {
+      "id": 5,
+      "group": "E",
+      "occupation_use": "Educacional e cultura física"
+    },
+    {
+      "id": 6,
+      "group": "F",
+      "occupation_use": "Local de Reunião de Público"
+    },
+    {
+      "id": 7,
+      "group": "G",
+      "occupation_use": "Serviço automotivo e assemelhados"
+    },
+    {
+      "id": 8,
+      "group": "H",
+      "occupation_use": "Serviço de saúde e institucional"
+    },
+    {
+      "id": 9,
+      "group": "I",
+      "occupation_use": "Indústria"
+    },
+    {
+      "id": 10,
+      "group": "J",
+      "occupation_use": "Depósito"
+    },
+    {
+      "id": 11,
+      "group": "L",
+      "occupation_use": "Explosivos"
+    },
+    {
+      "id": 12,
+      "group": "M",
+      "occupation_use": "Especial"
+    },
+    {
+      "id": 15,
+      "group": "N",
+      "occupation_use": "Setor primário"
+    }
+  ],
+  "divisionGroups": [
+    {
+      "id": 1,
+      "division": "A-1",
+      "description": "Habitação unifamiliar",
+      "typification": "Condomínios de casas térreas ou assobradadas isoladas e assemelhados.",
+      "group_occupation_id": 1
+    },
+    {
+      "id": 2,
+      "division": "A-2",
+      "description": "Habitação multifamiliar",
+      "typification": "Condomínios de casas térreas ou assobradadas não isoladas, edifícios de apartamentos em geral e condomínios verticais e assemelhados.",
+      "group_occupation_id": 1
+    },
+    {
+      "id": 3,
+      "division": "A-3",
+      "description": "Habitação coletiva",
+      "typification": "Pensionatos, internatos, alojamentos, mosteiros, conventos, residências geriátricas com capacidade máxima de 16 leitos e assemelhados.",
+      "group_occupation_id": 1
+    },
+    {
+      "id": 4,
+      "division": "B-1",
+      "description": "Hotel e assemelhado",
+      "typification": "Hotéis, motéis, pensões, hospedarias, pousadas, albergues, casas de cômodos e divisão A3 com mais de 16 leitos e assemelhados.",
+      "group_occupation_id": 2
+    },
+    {
+      "id": 5,
+      "division": "B-2",
+      "description": "Hotel residencial",
+      "typification": "Hotéis e assemelhados com cozinha própria nos apartamentos (incluem-se apart-hotéis, flats, hotéis residenciais) e assemelhados.",
+      "group_occupation_id": 2
+    },
+    {
+      "id": 6,
+      "division": "C-1",
+      "description": "Comércio com baixa carga de incêndio",
+      "typification": "Armarinhos, artigos de metal, louças, artigos hospitalares e outros.",
+      "group_occupation_id": 3
+    },
+    {
+      "id": 7,
+      "division": "C-2",
+      "description": "Comércio com média e alta carga de incêndio",
+      "typification": "Edifícios de lojas de departamentos, magazines, galerias comerciais, supermercados em geral, mercados e outros.",
+      "group_occupation_id": 3
+    },
+    {
+      "id": 8,
+      "division": "C-3",
+      "description": "Shoppings centers",
+      "typification": "Centro de compras em geral, feiras permanentes, shopping centers e outros. .",
+      "group_occupation_id": 3
+    },
+    {
+      "id": 9,
+      "division": "D-1",
+      "description": "Local para prestação de serviço profissional ou condução de negócios",
+      "typification": "Escritórios administrativos ou técnicos, instituições financeiras (que não estejam incluídas em D-2), repartições públicas, cabeleireiros, centros profissionais e assemelhados.",
+      "group_occupation_id": 4
+    },
+    {
+      "id": 10,
+      "division": "D-2",
+      "description": "Agência bancária",
+      "typification": "Agências bancárias e assemelhados.",
+      "group_occupation_id": 4
+    },
+    {
+      "id": 11,
+      "division": "D-3",
+      "description": "Serviço de reparação (exceto os classificados em G-4)",
+      "typification": "Lavanderias, assistência técnica, reparação e manutenção de aparelhos eletrodomésticos, chaveiros, pintura de letreiros e outros.",
+      "group_occupation_id": 4
+    },
+    {
+      "id": 12,
+      "division": "D-4",
+      "description": "Laboratório",
+      "typification": "Laboratórios de análises clínicas sem internação, laboratórios químicos, fotográficos e assemelhados",
+      "group_occupation_id": 4
+    },
+    {
+      "id": 13,
+      "division": "E-1",
+      "description": "Escola em geral",
+      "typification": "Escolas de primeiro, segundo e terceiro graus, cursos supletivos, pré-universitários e assemelhados",
+      "group_occupation_id": 5
+    },
+    {
+      "id": 14,
+      "division": "E-2",
+      "description": "Escola especial",
+      "typification": "Escolas de artes e artesanato, de línguas, de cultura geral, de cultura estrangeira, escolas religiosas e assemelhados.",
+      "group_occupation_id": 5
+    },
+    {
+      "id": 15,
+      "division": "E-3",
+      "description": "Espaço para cultura física",
+      "typification": "Locais de ensino e/ou práticas de artes marciais, ginásticas (artística, dança, musculação e outros) esportes coletivos (tênis, futebol e outros que não estejam incluídos em F-3), sauna, casas de fisioterapia e assemelhados.",
+      "group_occupation_id": 5
+    },
+    {
+      "id": 16,
+      "division": "E-4",
+      "description": "Centro de treinamento profissional",
+      "typification": "Escolas profissionais em geral",
+      "group_occupation_id": 5
+    },
+    {
+      "id": 17,
+      "division": "E-5",
+      "description": "Pré-escola",
+      "typification": "Creches, escolas maternais e de educação infantil e assemelhados",
+      "group_occupation_id": 5
+    },
+    {
+      "id": 18,
+      "division": "E-6",
+      "description": "Escola para portadores de deficiências",
+      "typification": "Escolas para excepcionais, deficientes visuais e auditivos e assemelhados.",
+      "group_occupation_id": 5
+    },
+    {
+      "id": 19,
+      "division": "F-1",
+      "description": "Local onde há objeto de valor inestimável",
+      "typification": "Museus, centro de documentos históricos, bibliotecas e assemelhados.",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 20,
+      "division": "F-2",
+      "description": "Local religioso e velório",
+      "typification": "Igrejas, capelas, sinagogas, mesquitas, templos, cemitérios, crematórios, necrotérios, salas de funerais e assemelhados.",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 21,
+      "division": "F-3",
+      "description": "Centro esportivo e de exibição",
+      "typification": "Estádios, ginásios e piscinas com arquibancadas, rodeios, autódromos, sambódromos, arenas em geral, pista de patinação e assemelhados.",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 22,
+      "division": "F-4",
+      "description": "Estação e terminal de passageiro",
+      "typification": "Estações rodoferroviárias, metrô, aeroportos, heliponto, estações de transbordo em geral e assemelhados",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 23,
+      "division": "F-5",
+      "description": "Arte cênica e auditório",
+      "typification": "Teatros em geral, cinemas, óperas, auditórios de estúdios de rádio e televisão, auditórios em geral e assemelhados.",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 24,
+      "division": "F-6",
+      "description": "Clubes sociais e de Diversão",
+      "typification": "Boates, clubes em geral, salões de baile, restaurantes dançantes, clubes sociais, bingo, bilhares, tiro ao alvo, boliche e assemelhados.",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 25,
+      "division": "F-7",
+      "description": "Eventos Temporários",
+      "typification": "Eventos temporários com concentração de público",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 26,
+      "division": "F-8",
+      "description": "Local para refeição",
+      "typification": "Restaurantes, lanchonetes, bares, cafés, refeitórios, cantinas e assemelhados",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 27,
+      "division": "F-9",
+      "description": "Recreação pública",
+      "typification": "Jardim zoológico, parques recreativos e assemelhados, instalados em",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 28,
+      "division": "F-10",
+      "description": "Exposição de objetos e animais",
+      "typification": "Salões e salas de exposição de objetos e animais, show-room, galerias de arte, aquários, planetários e assemelhados em edificações permanentes",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 65,
+      "division": "F-11",
+      "description": "Clubes sociais e Salões de Festas",
+      "typification": "Salões de Festas (buffet), clubes em geral, bingo, bilhares, tiro ao alvo, boliche e assemelhados.",
+      "group_occupation_id": 6
+    },
+    {
+      "id": 29,
+      "division": "G-1",
+      "description": "Garagem sem acesso de público e sem abastecimento de combustível",
+      "typification": "Garagens automáticas",
+      "group_occupation_id": 7
+    },
+    {
+      "id": 30,
+      "division": "G-2",
+      "description": "Garagem com acesso de público e sem abastecimento de combustível",
+      "typification": "Garagens coletivas sem automação, em geral, sem abastecimento (exceto veículos de carga e coletivos)",
+      "group_occupation_id": 7
+    },
+    {
+      "id": 31,
+      "division": "G-3",
+      "description": "Local dotado de abastecimento de combustível",
+      "typification": "Postos de abastecimento de combustível e serviço, garagens (exceto veículos de carga e coletivos)",
+      "group_occupation_id": 7
+    },
+    {
+      "id": 32,
+      "division": "G-4",
+      "description": "Serviço de conservação, manutenção e reparos",
+      "typification": "Oficinas de conserto de veículos, borracharias (sem recauchutagem); oficinas e garagens de veículos de carga e coletivos, máquinas agrícolas e rodoviárias, retificadoras de motores",
+      "group_occupation_id": 7
+    },
+    {
+      "id": 33,
+      "division": "G-5",
+      "description": "Hangares",
+      "typification": "Abrigos para aeronaves com ou sem abastecimento de combustível e assemelhados",
+      "group_occupation_id": 7
+    },
+    {
+      "id": 66,
+      "division": "G-6",
+      "description": "Marinas, portos, garagens náuticas",
+      "typification": "Gestão e atividades auxiliares de transporte aquaviário.",
+      "group_occupation_id": 7
+    },
+    {
+      "id": 34,
+      "division": "H-1",
+      "description": "Hospital veterinário e assemelhados",
+      "typification": "Hospitais, clínicas e consultórios veterinários e assemelhados (inclui-se alojamento com ou sem adestramento)",
+      "group_occupation_id": 8
+    },
+    {
+      "id": 35,
+      "division": "H-2",
+      "description": "Local onde pessoas requerem cuidados especiais por limitações físicas ou mentais",
+      "typification": "Asilos, orfanatos, abrigos geriátricos, hospitais psiquiátricos, reformatórios, tratamento de dependentes de drogas, álcool e assemelhados. Todos sem celas",
+      "group_occupation_id": 8
+    },
+    {
+      "id": 36,
+      "division": "H-3",
+      "description": "Hospital e assemelhado",
+      "typification": "Hospitais, casa de saúde, prontos-socorros, clínicas com internação, ambulatórios e postos de atendimento de urgência, postos de saúde e puericultura e assemelhados com internação.",
+      "group_occupation_id": 8
+    },
+    {
+      "id": 37,
+      "division": "H-4",
+      "description": "Repartições públicas e assemelhados",
+      "typification": "Edificações do Executivo, Legislativo e Judiciário, tribunais, cartórios, quartéis, centrais de polícia, delegacias, postos policiais, postos de bombeiros e assemelhados.",
+      "group_occupation_id": 8
+    },
+    {
+      "id": 38,
+      "division": "H-5",
+      "description": "Local onde a liberdade das pessoas sofre restrições",
+      "typification": "Hospitais psiquiátricos, manicômios, reformatórios, prisões em geral (casa de detenção, penitenciárias, presídios) e instituições assemelhadas. Todos com celas",
+      "group_occupation_id": 8
+    },
+    {
+      "id": 39,
+      "division": "H-6",
+      "description": "Clínica e consultório médico e odontológico",
+      "typification": "Clínicas médicas, consultórios em geral, unidades de hemodiálise, ambulatórios e assemelhados. Todos sem internação",
+      "group_occupation_id": 8
+    },
+    {
+      "id": 40,
+      "division": "I-1",
+      "description": "Locais onde as atividades exercidas e os materiais utilizados apresentam baixo potencial de incêndio. Locais onde a carga de incêndio não chega a 300MJ/m2",
+      "typification": "Atividades que manipulem materiais com baixo risco de incêndio, tais como fábricas em geral, onde os processos não envolvem a utilização intensiva de materiais combustíveis (aço; aparelhos de rádio e som; armas; artigos de metal; gesso; esculturas de pedra; ferramentas; fotogravuras; jóias; relógios; sabão; serralheria; suco de frutas; louças; metais; máquinas)",
+      "group_occupation_id": 9
+    },
+    {
+      "id": 41,
+      "division": "I-2",
+      "description": "Locais onde as atividades exercidas e os materiais utilizados apresentam médio potencial de incêndio. Locais com carga de incêndio entre 300 e 1.200MJ/m2",
+      "typification": "Atividades que manipulam materiais com médio risco de incêndio, tais como: artigos de vidro; automóveis, bebidas destiladas; instrumentos musicais; móveis; alimentos marcenarias, fábricas de caixas e assemelhados.",
+      "group_occupation_id": 9
+    },
+    {
+      "id": 42,
+      "division": "I-3",
+      "description": "Locais onde há alto risco de incêndio. Locais com carga de incêndio superior a 1.200 MJ/m²",
+      "typification": "Fabricação de explosivos, atividades industriais que envolvam líquidos e gases inflamáveis, materiais oxidantes, destilarias, refinarias, ceras, espuma sintética, elevadores de grãos, tintas, b",
+      "group_occupation_id": 9
+    },
+    {
+      "id": 43,
+      "division": "J-1",
+      "description": "Depósitos de material incombustível",
+      "typification": "Edificações sem processo industrial que armazenem tijolos, pedras, areias, cimentos, metais e outros materiais incombustíveis. Todos sem embalagem",
+      "group_occupation_id": 10
+    },
+    {
+      "id": 44,
+      "division": "J-2",
+      "description": "Todo tipo de Depósito",
+      "typification": "Depósitos com carga de incêndio até 300MJ/m2",
+      "group_occupation_id": 10
+    },
+    {
+      "id": 45,
+      "division": "J-3",
+      "description": "Todo tipo de Depósito",
+      "typification": "Depósitos com carga de incêndio entre 300 e 1.200MJ/m2",
+      "group_occupation_id": 10
+    },
+    {
+      "id": 46,
+      "division": "J-4",
+      "description": "Todo tipo de Depósito",
+      "typification": "Depósitos onde a carga de incêndio ultrapassa 1.200MJ/m²",
+      "group_occupation_id": 10
+    },
+    {
+      "id": 47,
+      "division": "L-1",
+      "description": "Comércio",
+      "typification": "Comércio em geral de fogos de artifício e assemelhados",
+      "group_occupation_id": 11
+    },
+    {
+      "id": 48,
+      "division": "L-2",
+      "description": "Indústria",
+      "typification": "Indústria de material explosivo",
+      "group_occupation_id": 11
+    },
+    {
+      "id": 49,
+      "division": "L-3",
+      "description": "Depósito",
+      "typification": "Depósito de material explosivo",
+      "group_occupation_id": 11
+    },
+    {
+      "id": 50,
+      "division": "M-1",
+      "description": "Túnel",
+      "typification": "Túnel rodoferroviário, destinado a transporte de passageiros ou cargas diversas",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 51,
+      "division": "M-2",
+      "description": "Líquido ou gás, inflamáveis ou combustíveis",
+      "typification": "Edificação destinada a produção, manipulação, armazenamento e distribuição de líquidos ou gases combustíveis e inflamáveis.",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 52,
+      "division": "M-3",
+      "description": "Central de comunicação e energia",
+      "typification": "Central telefônica, centros de comunicação, centrais de transmissão ou de distribuição de energia e assemelhados.",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 53,
+      "division": "M-4",
+      "description": "Propriedade em transformação",
+      "typification": "Locais em construção ou demolição e assemelhados",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 54,
+      "division": "M-5",
+      "description": "Silos",
+      "typification": "Armazéns de grãos e assemelhados",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 55,
+      "division": "M-6",
+      "description": "Terra Selvagem",
+      "typification": "Floresta reserva ecológica, parque florestal e assemelhados.",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 56,
+      "division": "M-7",
+      "description": "Pátio de containers",
+      "typification": "Área aberta destinada a armazenamento de containers",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 57,
+      "division": "M-8",
+      "description": "Torres de telefonia móvel",
+      "typification": "Torre metálica com armários para equipamentos de telefonia",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 60,
+      "division": "M-9",
+      "description": "Transporte e Navegação",
+      "typification": "Atividades de transporte de passageiros ou mercadorias, nas modalidades ferroviária, rodoviária, aquaviária e aérea.(sem armazenamento).",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 61,
+      "division": "M-10",
+      "description": "Resíduos",
+      "typification": "Coleta, tratamento e gestão de resíduos, recuperação de materiais.",
+      "group_occupation_id": 12
+    },
+    {
+      "id": 58,
+      "division": "0",
+      "description": "Nenhuma divisão",
+      "typification": "Nenhuma divisão",
+      "group_occupation_id": 13
+    },
+    {
+      "id": 59,
+      "division": "1",
+      "description": "Estacionamento",
+      "typification": "Estacionamento",
+      "group_occupation_id": 14
+    },
+    {
+      "id": 62,
+      "division": "N-1",
+      "description": "Agricultura",
+      "typification": "Cultivo de plantas, frutas e assemelhados",
+      "group_occupation_id": 15
+    },
+    {
+      "id": 63,
+      "division": "N-2",
+      "description": "Zootecnia",
+      "typification": "Criação de Animais no interior de edificações",
+      "group_occupation_id": 15
+    },
+    {
+      "id": 64,
+      "division": "N-3",
+      "description": "Mineração",
+      "typification": "Extração de Minérios e assemelhados",
+      "group_occupation_id": 15
+    }
+  ],
+  "projectTypes": [
+    {
+      "id": 1,
+      "sigla": "PT",
+      "descricao": "Projeto Técnico"
+    },
+    {
+      "id": 2,
+      "sigla": "PTIOT",
+      "descricao": "Projeto Técnico para Instalação e Ocupação Temporária"
+    },
+    {
+      "id": 3,
+      "sigla": "PTOTEP",
+      "descricao": "Projeto Técnico para Ocupação Temporária em Edificação Permanente"
+    },
+    {
+      "id": 4,
+      "sigla": "PTSCLCB1",
+      "descricao": "Projeto Técnico Simplificado com área até 200 m e altura térrea"
+    },
+    {
+      "id": 5,
+      "sigla": "PTSCLCB2",
+      "descricao": "Projeto Técnico Simplificado com área menor do que 750 m e altura térrea até 3 pavimentos"
+    },
+    {
+      "id": 6,
+      "sigla": "PTSAVCB",
+      "descricao": "Projeto Técnico Simplificado que se regulariza com vistoria"
+    },
+    {
+      "id": 7,
+      "sigla": "PTSAVCBPTIOT",
+      "descricao": "Projeto Técnico Simplificado para Instalação e Ocupação Temporária"
+    },
+    {
+      "id": 8,
+      "sigla": "PTSAVCBPTOTEP",
+      "descricao": "Projeto Técnico Simplificado para Ocupação Temporária em Edificação Permanente"
+    }
+  ],
+  "exemptions": [
+    {
+      "id": 1,
+      "descricao": "Sem isenção"
+    },
+    {
+      "id": 2,
+      "descricao": "Edificação Isenta"
+    }
+  ],
+  "decrees": [
+    {
+      "id": 1,
+      "descricao": "Anterior a 2015"
+    },
+    {
+      "id": 2,
+      "descricao": "Decreto 16.302/2015"
+    }
+  ],
+  "heights": [
+    "Térrea = Um pavimento",
+    "Baixa = H <= 6,00 m",
+    "Baixa-Média = 6,00 m < H <= 12,00 m",
+    "Média = 12,00 m < H <= 23,00 m",
+    "Medianamente Alta = 23,00 m < H <= 30,00 m",
+    "Alta = Acima de 30,00 m"
+  ],
+  "blockedPtsCnaes": [
+    "0600001",
+    "2092401",
+    "2092402",
+    "2092403",
+    "4681801",
+    "4731800",
+    "4732600",
+    "4789006"
+  ]
+}

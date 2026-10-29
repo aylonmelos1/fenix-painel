@@ -8,7 +8,8 @@ import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
-import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, newSessionId, saveCookieJar, syncFenixUser, type FenixBuildingOption } from './fenix.js';
+import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
+import { deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput } from './project-drafts.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
@@ -837,6 +838,170 @@ app.delete('/api/fenix-connections/:id', requireSession, (req, res) => {
   remove();
   insightCache.clear();
   return res.json({ ok: true, removedLabel: connection.label, deletedBuildings: buildingIds.length });
+});
+
+app.get('/api/fenix-domains', requireSession, (_req, res) => {
+  try {
+    const domains = getFenixDomains();
+    res.json(domains);
+  } catch (error) {
+    logger.warn('Falha ao carregar domínios do Fênix', { error });
+    res.status(500).json({ error: 'Não foi possível carregar os domínios do Fênix.' });
+  }
+});
+
+app.get('/api/fenix-cnae/:code', requireSession, async (req, res) => {
+  try {
+    const result = await lookupFenixCnae(res.locals.user.id, String(req.params.code || ''));
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Não foi possível consultar o CNAE.';
+    const status = error instanceof FenixError && error.status ? error.status : 502;
+    res.status(status).json({ error: message });
+  }
+});
+
+app.get('/api/cnpj-it14/:cnpj', requireSession, async (req, res) => {
+  try {
+    const rawCnpj = String(req.params.cnpj || '');
+    const cleanCnpj = rawCnpj.replace(/\D/g, '');
+    if (cleanCnpj.length !== 14) {
+      return res.status(400).json({ error: 'CNPJ deve conter 14 dígitos numéricos.' });
+    }
+    const areaM2 = Number(req.query.areaM2 || 0);
+    const floors = Number(req.query.floors || 1);
+    const height = String(req.query.height || '');
+
+    const result = await lookupCnpjAndIt14(cleanCnpj, { areaM2, floors, height });
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Não foi possível consultar o CNPJ no IT-14.';
+    const status = message.includes('14 dígitos') ? 400 : 502;
+    res.status(status).json({ error: message });
+  }
+});
+
+app.get('/api/drafts', requireSession, (_req, res) => {
+  try {
+    const drafts = listProjectDrafts(res.locals.user.id);
+    res.json({ drafts });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao listar rascunhos.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/drafts', requireSession, (req, res) => {
+  try {
+    const input = (req.body?.data || req.body) as ProjectDraftInput;
+    const fenixUserId = res.locals.user.fenix_user_id ? Number(res.locals.user.fenix_user_id) : null;
+    const validation = simulateProjectDraft(input, fenixUserId);
+    const draft = upsertProjectDraft(res.locals.user.id, input, input.id);
+    const updated = updateDraftSimulation(res.locals.user.id, draft.id, validation) || draft;
+    res.status(201).json({ draft: updated, validation });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao salvar rascunho.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.delete('/api/drafts/:id', requireSession, (req, res) => {
+  try {
+    const deleted = deleteProjectDraft(res.locals.user.id, String(req.params.id));
+    res.json({ ok: deleted });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao excluir rascunho.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/drafts/:id/simulate', requireSession, (req, res) => {
+  try {
+    const draft = getProjectDraft(res.locals.user.id, String(req.params.id));
+    if (!draft) {
+      return res.status(404).json({ error: 'Rascunho não encontrado.' });
+    }
+    const fenixUserId = res.locals.user.fenix_user_id ? Number(res.locals.user.fenix_user_id) : null;
+    const validation = simulateProjectDraft(draft.data, fenixUserId);
+    const updated = updateDraftSimulation(res.locals.user.id, draft.id, validation) || draft;
+    res.json({
+      ok: validation.valid,
+      draft: updated,
+      validation: {
+        valid: validation.valid,
+        errors: validation.errors,
+        warnings: validation.warnings,
+        tipoProjetoId: validation.tipoProjetoId,
+        tipoProjetoSigla: validation.tipoProjetoSigla,
+        rtOptional: validation.rtOptional,
+        recommendedMeasures: validation.recommendedMeasures
+      },
+      fenixPayload: validation.fenixPayload
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao executar simulação.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
+  try {
+    if (req.body?.confirmWord !== 'ENVIAR_FENIX') {
+      return res.status(400).json({ error: 'Confirmação inválida. Digite a palavra exata ENVIAR_FENIX para submeter.' });
+    }
+    const draft = getProjectDraft(res.locals.user.id, String(req.params.id));
+    if (!draft) {
+      return res.status(404).json({ error: 'Rascunho não encontrado.' });
+    }
+    const fenixUserId = res.locals.user.fenix_user_id ? Number(res.locals.user.fenix_user_id) : null;
+    const validation = simulateProjectDraft(draft.data, fenixUserId);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: 'Rascunho possui inconsistências e não pode ser enviado ao Fênix.',
+        errors: validation.errors
+      });
+    }
+
+    try {
+      const result = await submitFenixTechnicalProject(res.locals.user.id, validation.fenixPayload);
+      const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: true, result });
+      res.json({ ok: true, draft: updated || draft, result });
+    } catch (submitErr) {
+      const message = submitErr instanceof Error ? submitErr.message : 'Erro na requisição ao Fênix.';
+      const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: false, error: message });
+      res.status(502).json({ ok: false, draft: updated || draft, error: message });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao processar envio do projeto.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/drafts/ai-assistant', requireSession, async (req, res) => {
+  try {
+    const message = String(req.body?.message || '').trim();
+    if (!message) {
+      return res.status(400).json({ error: 'Envie uma mensagem para o copiloto de IA.' });
+    }
+    const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
+    const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
+
+    const openaiApiKey = getSetting('openai_api_key');
+    const openaiModel = getSetting('openai_model') || 'gpt-4o-mini';
+
+    const result = await runDraftAiAssistant({
+      message,
+      currentDraft,
+      history,
+      openaiApiKey,
+      openaiModel
+    });
+
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao processar solicitação no copiloto de IA.';
+    res.status(500).json({ error: message });
+  }
 });
 
 app.get('/api/dashboard', requireSession, async (_req, res) => res.json(await dashboardPayload(res.locals.user)));

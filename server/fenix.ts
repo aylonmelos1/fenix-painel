@@ -936,3 +936,81 @@ export async function syncFenixUser(userId: string) {
 export function newLocalId() { return randomUUID(); }
 export function newSessionId() { return randomBytes(32).toString('base64url'); }
 export function saveCookieJar(jar: CookieJar) { return seal(JSON.stringify(jar.serializeSync())); }
+
+export async function lookupFenixCnae(
+  userId: string,
+  rawCode: string
+): Promise<{ cnae: string; atividade_economica: string; risk: number; division_group_id?: number; occupation_group_id?: number }> {
+  const clean = rawCode.replace(/\D/g, '');
+  if (!clean || clean.length < 5) {
+    throw new FenixError('Código CNAE inválido.', 400);
+  }
+
+  const user = db.prepare('SELECT demo, session_ciphertext FROM users WHERE id = ?').get(userId) as
+    | { demo: number; session_ciphertext: string | null }
+    | undefined;
+  if (!user) throw new FenixError('Usuário não encontrado.', 404);
+
+  if (user.demo || !user.session_ciphertext) {
+    if (clean === '4754701') {
+      return { cnae: '4754701', atividade_economica: 'Comércio varejista de móveis', risk: 300, division_group_id: 6, occupation_group_id: 3 };
+    }
+    if (clean === '1091102') {
+      return { cnae: '1091102', atividade_economica: 'Fabricação de produtos de padaria e confeitaria', risk: 300, division_group_id: 1, occupation_group_id: 1 };
+    }
+    if (clean === '4731800') {
+      return { cnae: '4731800', atividade_economica: 'Comércio varejista de combustíveis para veículos automotores', risk: 800, division_group_id: 20, occupation_group_id: 7 };
+    }
+    return { cnae: clean, atividade_economica: 'Atividade comercial e serviços', risk: 300 };
+  }
+
+  const client = await fenixClientForUser(userId);
+  const result = (await client.get('/api/v1/cnaes', { categoria: 'codigo', codigo: clean })) as any;
+  const list = Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : [];
+  if (list.length === 0) {
+    throw new FenixError(`CNAE ${clean} não encontrado na base do Fênix.`, 404);
+  }
+  const item = list[0];
+  return {
+    cnae: String(item.codigo || clean),
+    atividade_economica: String(item.descricao || ''),
+    risk: Number(item.risco) || 300,
+    division_group_id: item.division?.id,
+    occupation_group_id: item.division?.group_occupation_id
+  };
+}
+
+export async function submitFenixTechnicalProject(
+  userId: string,
+  payload: Record<string, unknown>
+): Promise<{ id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number }> {
+  const user = db.prepare('SELECT demo, session_ciphertext FROM users WHERE id = ?').get(userId) as
+    | { demo: number; session_ciphertext: string | null }
+    | undefined;
+  if (!user) throw new FenixError('Usuário não encontrado.', 404);
+
+  if (user.demo) {
+    const fakeId = Math.floor(80000 + Math.random() * 19000);
+    const fakeZip = (payload.address as any)?.zip_code || '45355000';
+    return {
+      id: fakeId,
+      num_projeto: `020863/${fakeZip}/2026`,
+      edificacao_id: Math.floor(90000 + Math.random() * 10000),
+      solicitacao_id: Math.floor(190000 + Math.random() * 10000)
+    };
+  }
+
+  const client = await fenixClientForUser(userId);
+  const result = (await client.post('/api/v1/technicalproject', payload)) as any;
+  const data = result?.data ?? result;
+  if (!data || !data.id) {
+    throw new FenixError(result?.message || 'Falha ao cadastrar Projeto Técnico no Fênix.', 502);
+  }
+  return {
+    id: Number(data.id),
+    num_projeto: String(data.num_projeto || ''),
+    edificacao_id: data.edificacao_id ? Number(data.edificacao_id) : undefined,
+    solicitacao_id: data.solicitacao_id ? Number(data.solicitacao_id) : undefined
+  };
+}
+
