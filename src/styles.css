@@ -2807,3 +2807,124 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Estilos de Reconexão e Alerta de Sessão Expirada do Fênix */
+.connection-chip.session-expired-chip {
+  background: #fff3e0;
+  color: #b45309;
+  border: 1px solid #fcd34d;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.connection-chip.session-expired-chip:hover {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  transform: translateY(-1px);
+}
+
+.session-expired-dot {
+  background: #f59e0b !important;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+  animation: connection-pulse 1.2s ease-in-out infinite;
+}
+
+.settings-card.settings-connection-expired {
+  border: 1.5px solid #f59e0b !important;
+  box-shadow: 0 4px 16px rgba(245, 158, 11, 0.08);
+  background: linear-gradient(180deg, #fffbeb 0%, #ffffff 40px);
+}
+
+.session-expired-icon {
+  background: #fef3c7 !important;
+  color: #b45309 !important;
+}
+
+.settings-status.expired {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fcd34d;
+}
+
+.settings-status.expired i {
+  background: #f59e0b;
+}
+
+.settings-session-expired-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 18px 14px;
+  padding: 12px 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  color: #92400e;
+}
+
+.settings-session-expired-alert svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #d97706;
+}
+
+.settings-session-expired-alert b {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #92400e;
+  margin-bottom: 2px;
+}
+
+.settings-session-expired-alert p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #b45309;
+  margin: 0;
+}
+
+.settings-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px 14px;
+}
+
+.button-amber, .button.button-amber {
+  background: #d97706 !important;
+  border-color: #b45309 !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  box-shadow: 0 2px 6px rgba(217, 119, 6, 0.25);
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.button-amber:hover, .button.button-amber:hover {
+  background: #b45309 !important;
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+.button-reconnect-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  border-radius: 7px;
+}
+
+.document-reconnect {
+  color: #b45309 !important;
+  font-weight: 700 !important;
+  background: #fffbeb !important;
+  border: 1px solid #fde68a !important;
+}
+
+.document-reconnect:hover {
+  background: #fef3c7 !important;
+  color: #92400e !important;
+}

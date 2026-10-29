@@ -310,6 +310,17 @@ try {
   if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
 }
 
+try {
+  db.exec("ALTER TABLE users ADD COLUMN last_fenix_auth_error TEXT");
+} catch (error) {
+  if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
+}
+try {
+  db.exec("ALTER TABLE users ADD COLUMN fenix_session_expired INTEGER NOT NULL DEFAULT 0");
+} catch (error) {
+  if (!(error instanceof Error) || !error.message.includes('duplicate column name')) throw error;
+}
+
 function isoDaysAgo(days: number, hour = 10) {
   const date = new Date();
   date.setDate(date.getDate() - days);
@@ -350,16 +361,43 @@ if (!existingDemo) {
 
 export function resolveSession(sessionId: string | undefined) {
   if (!sessionId || sessionId.length > 128) return undefined;
-  if (sessionId === 'demo-local') return db.prepare(`SELECT id, fenix_user_id, name, email, session_ciphertext, demo, last_sync
+  if (sessionId === 'demo-local') return db.prepare(`SELECT id, fenix_user_id, name, email, session_ciphertext, demo, last_sync, fenix_session_expired, last_fenix_auth_error
     FROM users WHERE id = 'demo-local'`).get() as {
       id: string; fenix_user_id: string | null; name: string; email: string | null;
       session_ciphertext: string | null; demo: number; last_sync: string | null;
+      fenix_session_expired: number; last_fenix_auth_error: string | null;
     } | undefined;
   const tokenHash = createHash('sha256').update(sessionId).digest('hex');
-  return db.prepare(`SELECT u.id, u.fenix_user_id, u.name, u.email, u.session_ciphertext, u.demo, u.last_sync
+  return db.prepare(`SELECT u.id, u.fenix_user_id, u.name, u.email, u.session_ciphertext, u.demo, u.last_sync, u.fenix_session_expired, u.last_fenix_auth_error
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`).get(tokenHash) as {
       id: string; fenix_user_id: string | null; name: string; email: string | null;
       session_ciphertext: string | null; demo: number; last_sync: string | null;
+      fenix_session_expired: number; last_fenix_auth_error: string | null;
+    } | undefined;
+}
+
+export function markUserFenixSessionExpired(userId: string, errorMessage?: string) {
+  db.prepare("UPDATE users SET fenix_session_expired = 1, last_fenix_auth_error = ? WHERE id = ?")
+    .run(errorMessage || 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.', userId);
+}
+
+export function clearUserFenixSessionExpired(userId: string) {
+  db.prepare("UPDATE users SET fenix_session_expired = 0, last_fenix_auth_error = NULL WHERE id = ?")
+    .run(userId);
+}
+
+export function getUserFenixSession(userId: string) {
+  return db.prepare(`SELECT id, fenix_user_id, name, email, session_ciphertext, demo, last_sync, fenix_session_expired, last_fenix_auth_error
+    FROM users WHERE id = ?`).get(userId) as {
+      id: string;
+      fenix_user_id: string | null;
+      name: string;
+      email: string | null;
+      session_ciphertext: string | null;
+      demo: number;
+      last_sync: string | null;
+      fenix_session_expired: number;
+      last_fenix_auth_error: string | null;
     } | undefined;
 }
 

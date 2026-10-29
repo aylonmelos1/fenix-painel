@@ -7,8 +7,8 @@ import { CookieJar } from 'tough-cookie';
 import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
-import { addSession, db, deleteSession, deleteSetting, getSetting, resolveSession, seal, setSetting, unseal } from './store.js';
-import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
+import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSetting, getSetting, getUserFenixSession, markUserFenixSessionExpired, resolveSession, seal, setSetting, unseal } from './store.js';
+import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
 import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type DraftAiAssistantRequest } from './project-drafts.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
@@ -338,19 +338,22 @@ async function executeSync(userId: string, source: 'manual' | 'automatic' | 'log
   syncInProgress.add(userId);
   const started = new Date().toISOString();
   const run = db.prepare('INSERT INTO sync_runs (user_id, started_at, status) VALUES (?, ?, ?)').run(userId, started, 'running');
+  const connection = db.prepare('SELECT id FROM fenix_connections WHERE data_user_id=?').get(userId) as { id: string } | undefined;
   try {
     const result = await syncFenixUser(userId);
     const message = `${result.buildings} edificações; ${result.processes} processos${result.changes ? `; ${result.changes} alterações` : ''}`;
     db.prepare('UPDATE sync_runs SET completed_at=?, status=?, message=? WHERE id=?').run(result.completedAt, 'success', message, run.lastInsertRowid);
     scheduleHistoryRefresh(userId, true);
+    if (!connection) clearUserFenixSessionExpired(userId);
     return { status: 'success' as const, ...result, message };
   } catch (error) {
     const message = error instanceof FenixError ? error.message : `Falha na sincronização ${source === 'automatic' ? 'automática' : 'com o Fênix'}.`;
     db.prepare('UPDATE sync_runs SET completed_at=?, status=?, message=? WHERE id=?').run(new Date().toISOString(), 'error', message, run.lastInsertRowid);
-    const connection = db.prepare('SELECT id FROM fenix_connections WHERE data_user_id=?').get(userId) as { id: string } | undefined;
     if (connection) {
       const status = error instanceof FenixError && [401, 403, 419].includes(Number(error.status)) ? 'reauth_required' : 'error';
       db.prepare('UPDATE fenix_connections SET status=?,updated_at=? WHERE id=?').run(status, new Date().toISOString(), connection.id);
+    } else if (error instanceof FenixError && [401, 403, 419].includes(Number(error.status))) {
+      markUserFenixSessionExpired(userId, error.message);
     }
     logger.warn(source === 'automatic' ? 'Sincronização automática falhou' : 'Sincronização Fênix falhou', { message });
     return { status: 'error' as const, error: message };
@@ -586,6 +589,126 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.get('/api/auth/me', requireSession, (req, res) => {
   res.json({ user: { name: res.locals.user.name, email: res.locals.user.email, demo: Boolean(res.locals.user.demo) } });
+});
+
+const reauthRateLimitMap = new Map<string, number[]>();
+function isReauthRateLimited(key: string, maxAttempts = 5, windowMs = 5 * 60_000): boolean {
+  const now = Date.now();
+  const attempts = (reauthRateLimitMap.get(key) || []).filter((time) => now - time < windowMs);
+  if (attempts.length >= maxAttempts) {
+    reauthRateLimitMap.set(key, attempts);
+    return true;
+  }
+  attempts.push(now);
+  reauthRateLimitMap.set(key, attempts);
+  return false;
+}
+
+app.get('/api/fenix-session/status', requireSession, (_req, res) => {
+  const user = res.locals.user;
+  if (user.demo) {
+    return res.json({ status: 'ok', expiresAt: null, lastError: null, fenixUserId: 'demo-local' });
+  }
+  const userRow = getUserFenixSession(user.id);
+  if (!userRow || !userRow.session_ciphertext) {
+    return res.json({
+      status: 'expired',
+      expiresAt: null,
+      lastError: 'Sessão do Fênix não encontrada. Reconecte sua conta em Configurações.',
+      fenixUserId: userRow?.fenix_user_id || null
+    });
+  }
+  const cookieInspection = inspectFenixSessionCookie(userRow.session_ciphertext);
+  const isFlagExpired = Boolean(userRow.fenix_session_expired);
+  const isExpired = isFlagExpired || cookieInspection.expired;
+  const lastError = isExpired
+    ? (userRow.last_fenix_auth_error || (cookieInspection.expired ? 'Sessão do Fênix expirada.' : 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.'))
+    : null;
+
+  return res.json({
+    status: isExpired ? 'expired' : 'ok',
+    expiresAt: cookieInspection.expiresAt,
+    lastError,
+    fenixUserId: userRow.fenix_user_id
+  });
+});
+
+app.post('/api/fenix-session/reauthenticate', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  if (user.demo) {
+    return res.status(403).json({ error: 'O ambiente demonstrativo não permite reconectar conta real.' });
+  }
+
+  const rateLimitKey = `${user.id}:${req.ip || 'ip'}`;
+  if (isReauthRateLimited(rateLimitKey)) {
+    return res.status(429).json({ error: 'Muitas tentativas de reconexão. Aguarde 5 minutos antes de tentar novamente.' });
+  }
+
+  const email = String(req.body?.email || '').trim();
+  const password = String(req.body?.password || '');
+  const hcaptchaToken = String(req.body?.hcaptchaToken || '');
+  const progressId = String(req.body?.progressId || '');
+
+  if (!email || !password || !hcaptchaToken) {
+    return res.status(400).json({ error: 'Preencha usuário, senha e hCaptcha.' });
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(progressId)) {
+    return res.status(400).json({ error: 'Não foi possível acompanhar as etapas do acesso.' });
+  }
+
+  loginProgress.set(progressId, { stage: -1, completedStages: [], status: 'working' });
+  const updateProgress = (stage: number, extra: Partial<{ status: 'working' | 'done' | 'error'; error: string }> = {}) => {
+    const prior = loginProgress.get(progressId);
+    const completedStages = [...(prior?.completedStages || [])];
+    if (prior && prior.stage >= 0 && stage > prior.stage) completedStages.push(prior.stage);
+    if (extra.status === 'done' && stage >= 0) completedStages.push(stage);
+    loginProgress.set(progressId, { stage, completedStages: [...new Set(completedStages)], status: 'working', ...extra });
+  };
+  const cleanupProgress = () => setTimeout(() => loginProgress.delete(progressId), 5 * 60_000).unref();
+
+  try {
+    const result = await loginFenix(email, password, hcaptchaToken, (stage) => updateProgress(stage));
+    if (!result) {
+      const message = 'O Fênix não validou essas credenciais ou o hCaptcha. Confira os dados ou tente novamente.';
+      updateProgress(3, { status: 'error', error: message });
+      cleanupProgress();
+      return res.status(401).json({ error: message });
+    }
+
+    const newFenixUserId = String(result.user.id);
+    const currentFenixUserId = String(user.fenix_user_id || '');
+
+    if (currentFenixUserId && newFenixUserId !== currentFenixUserId) {
+      const message = 'A conta informada pertence a outro usuário do Fênix. Para reconectar o acesso principal, informe as credenciais do mesmo usuário vinculado originalmente.';
+      updateProgress(4, { status: 'error', error: message });
+      cleanupProgress();
+      return res.status(409).json({ error: message });
+    }
+
+    const requester = result.user;
+    const name = requester.pessoa_fisica?.nome || requester.pessoa_juridica?.razao_social || requester.name || requester.email || user.name;
+    const ciphertext = saveCookieJar(result.jar);
+
+    db.prepare(`UPDATE users SET session_ciphertext = ?, fenix_user_id = ?, name = ?, email = COALESCE(?, email), fenix_session_expired = 0, last_fenix_auth_error = NULL WHERE id = ?`)
+      .run(ciphertext, newFenixUserId, name, email, user.id);
+    clearUserFenixSessionExpired(user.id);
+
+    updateProgress(4, { status: 'done' });
+    cleanupProgress();
+
+    void executeSync(user.id, 'login').catch((syncErr) => {
+      logger.warn('Sincronização pós-reautenticação falhou', { message: syncErr instanceof Error ? syncErr.message : 'unknown' });
+    });
+
+    logger.info('Sessão principal do Fênix reconectada com sucesso', { userId: user.id, fenixUserId: newFenixUserId });
+    return res.json({ ok: true, user: { id: user.id, fenixUserId: newFenixUserId, name, email } });
+  } catch (error) {
+    const message = error instanceof FenixError ? error.message : 'Não foi possível reconectar ao Fênix agora.';
+    updateProgress(loginProgress.get(progressId)?.stage ?? 0, { status: 'error', error: message });
+    cleanupProgress();
+    logger.warn('Falha ao reconectar sessão principal do Fênix', { status: error instanceof FenixError ? error.status : undefined, message });
+    return res.status(error instanceof FenixError && error.status === 429 ? 429 : 502).json({ error: message });
+  }
 });
 
 app.post('/api/fenix-connections/login', requireSession, async (req, res) => {
@@ -1568,6 +1691,10 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
       logger.info('Metadados de DAE indisponíveis', { status: error instanceof FenixError ? error.status : undefined });
       const missing = error instanceof FenixError && error.status === 404;
       const unauthorized = error instanceof FenixError && error.status === 401;
+      if (unauthorized) {
+        if (building.source_connection_id) db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?").run(new Date().toISOString(), building.source_connection_id);
+        else markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+      }
       result = { ...result, documents: [...result.documents, {
         id: `${item.id}-dae-metadata`, name: 'Metadados de DAE', type: 'Documento de arrecadação · Fênix',
         date: item.updatedAt, available: false, source: 'fenix' as const, processId: item.id,
@@ -1585,6 +1712,10 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
       logger.info('Comprovante de protocolo oficial indisponível', { status: error instanceof FenixError ? error.status : undefined });
       const missing = error instanceof FenixError && error.status === 404;
       const unauthorized = error instanceof FenixError && error.status === 401;
+      if (unauthorized) {
+        if (building.source_connection_id) db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?").run(new Date().toISOString(), building.source_connection_id);
+        else markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+      }
       result = { ...result, documents: [...result.documents, {
         id: `${item.id}-protocol-metadata`, name: 'Comprovante de protocolo', type: 'Documento oficial · Fênix',
         date: item.updatedAt, available: false, source: 'fenix' as const, processId: item.id,
@@ -1608,6 +1739,10 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
       logger.info('Certificado oficial indisponível', { status: error instanceof FenixError ? error.status : undefined });
       const missing = error instanceof FenixError && error.status === 404;
       const unauthorized = error instanceof FenixError && error.status === 401;
+      if (unauthorized) {
+        if (building.source_connection_id) db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?").run(new Date().toISOString(), building.source_connection_id);
+        else markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+      }
       return { processId: project.id, certificate: null, issue: {
         id: `${project.id}-certificate-metadata`, name: 'Certificado de aprovação', type: 'Documento oficial · Fênix',
         available: false, source: 'fenix' as const, processId: project.id, kind: 'certificate' as const,
@@ -1684,6 +1819,7 @@ app.post('/api/buildings/:buildingId/history/refresh', requireSession, async (re
         logger.info('Atualização manual do histórico de processo falhou', { status: upstreamStatus });
         if ([401, 403, 419].includes(Number(upstreamStatus))) {
           if (building.source_connection_id) db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?").run(new Date().toISOString(), building.source_connection_id);
+          else markUserFenixSessionExpired(userId, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
           break;
         }
       }

@@ -937,6 +937,35 @@ export function newLocalId() { return randomUUID(); }
 export function newSessionId() { return randomBytes(32).toString('base64url'); }
 export function saveCookieJar(jar: CookieJar) { return seal(JSON.stringify(jar.serializeSync())); }
 
+export function inspectFenixSessionCookie(sessionCiphertext: string | null): { expired: boolean; expiresAt: string | null } {
+  if (!sessionCiphertext) return { expired: true, expiresAt: null };
+  try {
+    const raw = JSON.parse(unseal(sessionCiphertext));
+    const jar = CookieJar.deserializeSync(raw);
+    const cookies = jar.getCookiesSync(FENIX_ORIGIN);
+    const sessionCookie = cookies.find((item) => {
+      const key = item.key.toLowerCase();
+      return key.includes('fenix_cbmba_session') || key.includes('cookiesession1') || key.includes('session');
+    }) || cookies.find((item) => item.key.toLowerCase().includes('xsrf'));
+
+    if (!sessionCookie) {
+      return { expired: cookies.length === 0, expiresAt: null };
+    }
+
+    if (sessionCookie.expires && sessionCookie.expires !== 'Infinity') {
+      const expDate = sessionCookie.expires instanceof Date ? sessionCookie.expires : new Date(sessionCookie.expires);
+      if (Number.isFinite(expDate.getTime())) {
+        const expiresAt = expDate.toISOString();
+        const expired = expDate.getTime() <= Date.now();
+        return { expired, expiresAt };
+      }
+    }
+    return { expired: false, expiresAt: null };
+  } catch {
+    return { expired: true, expiresAt: null };
+  }
+}
+
 export async function lookupFenixCnae(
   userId: string,
   rawCode: string

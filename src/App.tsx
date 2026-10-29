@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, useCallback, lazy, Suspense, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import HCaptcha from '@hcaptcha/react-hcaptcha';
 import {
@@ -188,14 +188,22 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('fenix-sidebar-collapsed') === 'true');
   const [helpOpen, setHelpOpen] = useState(false);
   const [fenixSync, setFenixSync] = useState<{ status: string; startedAt: string | null; lastSync?: string | null; phase?: string; total?: number; processed?: number; failed?: number; message?: string; requestQueue?: { queued: number; recentCount: number; limitPerMinute: number } }>({ status: 'idle', startedAt: null, lastSync: null });
+  const [fenixSessionStatus, setFenixSessionStatus] = useState<'ok' | 'expired' | 'unknown'>('ok');
   const [clock, setClock] = useState(Date.now());
   const navigate = useNavigate();
   useEffect(() => {
-    const refreshStatus = () => void api<typeof fenixSync>('/api/sync/status').then(setFenixSync).catch(() => undefined);
+    const refreshStatus = () => {
+      void api<typeof fenixSync>('/api/sync/status').then(setFenixSync).catch(() => undefined);
+      if (!user.demo) {
+        void api<{ status: 'ok' | 'expired' | 'unknown' }>('/api/fenix-session/status')
+          .then((res) => setFenixSessionStatus(res.status))
+          .catch(() => undefined);
+      }
+    };
     refreshStatus();
     const timer = window.setInterval(refreshStatus, 3000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [user.demo]);
   useEffect(() => { onSyncRunningChange?.(fenixSync.status === 'running'); }, [fenixSync.status, onSyncRunningChange]);
   useEffect(() => {
     if (fenixSync.status !== 'running') return;
@@ -217,7 +225,7 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
     <div className="sidebar-user"><span className="avatar avatar-small">{user.name.slice(0, 1).toUpperCase()}</span><span className="sidebar-user-label"><b>{user.demo ? 'Demonstração' : user.name.split(' ')[0]}</b><small>{user.demo ? 'Dados fictícios' : 'Conta Fênix'}</small></span></div>
   </aside>
   {menuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
-  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions"><span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>{onOpenAi && <button className={`button button-ai-min global-ai-button ${copilotOpen ? 'active' : ''}`} onClick={onOpenAi} aria-label={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'} title={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'}><Sparkles size={15} /><span>Copiloto IA</span>{copilotOpen ? <PanelRightClose size={13} style={{ marginLeft: 3 }} /> : null}</button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
+  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions">{!user.demo && fenixSessionStatus === 'expired' ? <Link to="/configuracoes?secao=contas-fenix#settings-fenix-primary" className="connection-chip session-expired-chip" title="A sessão do Fênix expirou. Clique para reconectar sua conta em Configurações."><span className="connection-dot session-expired-dot" /> Sessão do Fênix expirada <ArrowRight size={12} style={{ marginLeft: 3 }} /></Link> : <span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>}{onOpenAi && <button className={`button button-ai-min global-ai-button ${copilotOpen ? 'active' : ''}`} onClick={onOpenAi} aria-label={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'} title={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'}><Sparkles size={15} /><span>Copiloto IA</span>{copilotOpen ? <PanelRightClose size={13} style={{ marginLeft: 3 }} /> : null}</button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
     {user.demo && <div className="demo-banner"><Eye size={14} /><span>Você está vendo dados fictícios de demonstração. Nenhuma informação real do Fênix está sendo exibida.</span><Link to="/entrar">Entrar com Fênix <ArrowRight size={13} /></Link></div>}
     {children}</main>
     {helpOpen && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setHelpOpen(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header><div><span className="help-icon"><HelpCircle size={20} /></span><div><h2 id="help-title">Como acompanhar processos</h2><p>Um guia rápido para usar o Fênix Painel.</p></div></div><button className="icon-button" onClick={() => setHelpOpen(false)} aria-label="Fechar ajuda"><X size={18} /></button></header><div className="help-content"><section><b>1. Comece pela edificação</b><p>Abra uma edificação para ver seus protocolos, etapa atual, histórico e documentos consultados no Fênix.</p></section><section><b>2. Entenda os indicadores</b><p>Os cartões mostram processos. Clique em um para abrir a lista correspondente; cada linha leva à ficha da edificação.</p></section><section><b>3. Atualize e confira mudanças</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas. Mudanças encontradas aparecem na campainha.</p></section><section><b>4. Use a IA como apoio</b><p>Na ficha, pergunte sobre o status, as movimentações ou os documentos. Confirme decisões e exigências no Fênix.</p></section></div><footer><button className="button button-outline" onClick={() => { setHelpOpen(false); navigateFromSidebar('/painel?view=sync'); }}>Ver consultas e sincronizações <ArrowRight size={15} /></button></footer></section></div>}
@@ -774,7 +782,14 @@ function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, window
 function DashboardPage() {
   const { data, error, loading, refresh } = useDashboard();
   const location = useLocation();
+  const navigate = useNavigate();
   const view = new URLSearchParams(location.search).get('view') || 'overview';
+  useEffect(() => {
+    if (view === 'settings') {
+      const hash = location.hash || '#settings-fenix-primary';
+      navigate(`/configuracoes?secao=contas-fenix${hash}`, { replace: true });
+    }
+  }, [view, location.hash, navigate]);
   const [filter, setFilter] = useState('Todas');
   const [searchFilters, setSearchFilters] = useState<BuildingSearchFilter[]>([]);
   const [buildingSearchQuery, setBuildingSearchQuery] = useState('');
@@ -796,7 +811,7 @@ function DashboardPage() {
   const [activeBuildingDetail, setActiveBuildingDetail] = useState<BuildingDetail | null>(null);
   const [selectedTab, setSelectedTab] = useState('Edificação');
   const [selectedProcessId, setSelectedProcessId] = useState<string | undefined>();
-  const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary } | null>(null);
+  const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth' | 'reauth-primary'; connection?: FenixConnectionSummary } | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [aiBuilding, setAiBuilding] = useState<Building | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
@@ -826,7 +841,6 @@ function DashboardPage() {
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, []);
-  const navigate = useNavigate();
   if (loading) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>Preparando seu painel...</span></div>;
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
   const refreshAll = refresh;
@@ -1054,6 +1068,7 @@ function DashboardPage() {
 }
 
 function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessId, onClose, onAsk, onDetailLoaded, demo }: { building: Building; initialTab?: string; initialProcessId?: string; onClose: () => void; onAsk: (prompt?: string) => void; onDetailLoaded?: (detail: BuildingDetail | null) => void; demo: boolean }) {
+  const navigate = useNavigate();
   const [detail, setDetail] = useState<BuildingDetail | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState(initialTab);
@@ -1215,8 +1230,9 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
     const errorMessage = documentErrors[doc.id] || doc.availabilityMessage;
     const manualDae = manualDaeIds.has(doc.id) || doc.availabilityMessage?.startsWith('A emissão deste DAE exige') === true;
     const retryMetadata = doc.status === 'metadata_error';
+    const isSessionExpired = errorMessage?.toLowerCase().includes('sessão do fênix expirada') || errorMessage?.toLowerCase().includes('sessao do fenix expirada');
     const stateLabel = doc.kind === 'dae' && doc.available ? 'Abrir na SEFAZ-BA' : doc.status === 'demo' ? 'Arquivo ilustrativo' : errorMessage ? 'Indisponível' : doc.available ? 'Disponível' : 'Sem download';
-    return <div className="document-row" key={doc.id}><span className="pdf-icon">PDF</span><span className="doc-info"><b>{doc.name}</b><small>{doc.source === 'fenix' ? `${doc.type} · Documento oficial` : `${doc.type} · ${formatDate(doc.date)}`}</small>{errorMessage && <small className="document-error-text">{errorMessage}</small>}</span><span className={`document-state ${errorMessage || !doc.available ? 'document-state-warning' : 'document-state-ready'}`}>{stateLabel}</span>{retryMetadata ? <button className="button button-ghost document-retry" onClick={async () => { setDownloadingDocumentId(doc.id); try { const result = await api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`); setDetail(result); setDocumentErrors((current) => { const next = { ...current }; delete next[doc.id]; return next; }); } catch (error) { setDocumentErrors((current) => ({ ...current, [doc.id]: error instanceof Error ? error.message : 'Falha ao consultar o Fênix.' })); } finally { setDownloadingDocumentId(null); } }}>{downloadingDocumentId === doc.id ? 'Consultando…' : 'Tentar novamente'}</button> : doc.source === 'fenix' ? <button className="icon-button doc-download" title={manualDae && doc.kind !== 'dae' ? 'A emissão do DAE exige uma etapa manual no portal da SEFAZ-BA' : !doc.available ? (errorMessage || 'Documento não disponível no Fênix.') : doc.kind === 'dae' ? 'Abrir DAE no portal SEFAZ-BA' : `Baixar ${doc.kind === 'protocol' ? 'comprovante de protocolo' : doc.kind === 'notification' ? 'notificação' : 'certificado'} oficial do Fênix`} aria-label={`${doc.kind === 'dae' ? 'Abrir' : 'Baixar'} ${doc.name}`} disabled={downloadingDocumentId === doc.id || (manualDae && doc.kind !== 'dae') || !doc.available} onClick={() => void downloadOfficialDocument(doc)}>{downloadingDocumentId === doc.id ? <LoaderCircle className="spin" size={16} /> : <ArrowDownToLine size={16} />}</button> : demo ? <button className="icon-button doc-download" title="Arquivo ilustrativo; clique para ver o aviso" onClick={() => setNotice('Demonstração: este registro ilustra a lista de anexos e não contém um arquivo oficial.')}><ArrowDownToLine size={16} /></button> : <button className="icon-button doc-download" title="O Fênix não forneceu um endereço de download validado para este anexo." disabled><ArrowDownToLine size={16} /></button>}</div>;
+    return <div className="document-row" key={doc.id}><span className="pdf-icon">PDF</span><span className="doc-info"><b>{doc.name}</b><small>{doc.source === 'fenix' ? `${doc.type} · Documento oficial` : `${doc.type} · ${formatDate(doc.date)}`}</small>{errorMessage && <small className="document-error-text">{errorMessage}</small>}</span><span className={`document-state ${errorMessage || !doc.available ? 'document-state-warning' : 'document-state-ready'}`}>{stateLabel}</span>{retryMetadata ? (isSessionExpired ? <button className="button button-ghost document-retry document-reconnect" onClick={() => { navigate('/configuracoes?secao=contas-fenix#settings-fenix-primary'); onClose(); }} title="Reconectar conta Fênix em Configurações"><RefreshCw size={13} style={{ marginRight: 4 }} /> Reconectar</button> : <button className="button button-ghost document-retry" onClick={async () => { setDownloadingDocumentId(doc.id); try { const result = await api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`); setDetail(result); setDocumentErrors((current) => { const next = { ...current }; delete next[doc.id]; return next; }); } catch (error) { setDocumentErrors((current) => ({ ...current, [doc.id]: error instanceof Error ? error.message : 'Falha ao consultar o Fênix.' })); } finally { setDownloadingDocumentId(null); } }}>{downloadingDocumentId === doc.id ? 'Consultando…' : 'Tentar novamente'}</button>) : doc.source === 'fenix' ? <button className="icon-button doc-download" title={manualDae && doc.kind !== 'dae' ? 'A emissão do DAE exige uma etapa manual no portal da SEFAZ-BA' : !doc.available ? (errorMessage || 'Documento não disponível no Fênix.') : doc.kind === 'dae' ? 'Abrir DAE no portal SEFAZ-BA' : `Baixar ${doc.kind === 'protocol' ? 'comprovante de protocolo' : doc.kind === 'notification' ? 'notificação' : 'certificado'} oficial do Fênix`} aria-label={`${doc.kind === 'dae' ? 'Abrir' : 'Baixar'} ${doc.name}`} disabled={downloadingDocumentId === doc.id || (manualDae && doc.kind !== 'dae') || !doc.available} onClick={() => void downloadOfficialDocument(doc)}>{downloadingDocumentId === doc.id ? <LoaderCircle className="spin" size={16} /> : <ArrowDownToLine size={16} />}</button> : demo ? <button className="icon-button doc-download" title="Arquivo ilustrativo; clique para ver o aviso" onClick={() => setNotice('Demonstração: este registro ilustra a lista de anexos e não contém um arquivo oficial.')}><ArrowDownToLine size={16} /></button> : <button className="icon-button doc-download" title="O Fênix não forneceu um endereço de download validado para este anexo." disabled><ArrowDownToLine size={16} /></button>}</div>;
   })}</div> : <div className="documents-empty"><FileText size={17} /> O Fênix não retornou documentos ou certificados disponíveis para esta edificação.</div>}{notice && <div className="document-notice" role="status"><CircleAlert size={13} /> {notice}</div>}{!demo && documents.some((doc) => doc.source === 'fenix') && <small className="source-limit">Documentos de retificação podem não ser autorizados pela sessão Fênix. O DAE pode exigir emissão manual na SEFAZ-BA.</small>}</div>;
   const updatableHistoryCount = allProcesses.filter((item) => item.id.startsWith('technicalproject:')).length;
   const historyPanel = <div className="history-list"><div className="timeline-title"><div><h4>Movimentações do processo</h4><small>Histórico oficial de status retornado pelo Fênix.</small></div><div className="history-actions"><button className="button button-outline history-refresh-button" onClick={() => void refreshBuildingHistory()} disabled={demo || historyRefreshing || updatableHistoryCount === 0} title={demo ? 'Disponível em contas conectadas ao Fênix.' : updatableHistoryCount === 0 ? 'Esta edificação não tem processos técnicos com histórico atualizável.' : 'Atualiza somente os processos técnicos desta edificação.'}><RefreshCw className={historyRefreshing ? 'spin' : ''} size={14} /> {historyRefreshing ? 'Atualizando…' : 'Atualizar histórico'}</button><button className="button button-ai-min" onClick={() => onAsk(`Resuma em ordem cronológica o histórico dos processos da edificação ${building.reference}. Explique as mudanças relevantes, a situação atual e o próximo passo que os dados permitem inferir.`)}><Sparkles size={13} /> Resumir histórico</button></div></div>{historyRefreshFeedback && <div className={`history-refresh-feedback ${historyRefreshFeedback.tone}`} role="status">{historyRefreshFeedback.message}</div>}{allProcesses.length ? allProcesses.map((item) => <section className="history-process" key={item.id}><div className="history-process-title"><span className="history-entry-icon"><ClipboardList size={15} /></span><div><b>{item.type} · {item.protocol || 'Protocolo não informado'}</b><small>{item.timeline.length ? `${item.timeline.length} movimentações` : item.stage || item.status}</small></div><StatusPill status={item.status} /></div>{item.timeline.length ? <div className="history-event-list">{item.timeline.map((event, index) => <div className="history-event" key={`${event.label}-${event.date}-${index}`}><span className={`history-event-dot ${event.current ? 'current' : event.done ? 'done' : ''}`} /><span><b>{event.label}</b><small>{event.date ? formatDate(event.date) : 'Data não informada'}</small></span></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas para este processo.</div>}</section>) : <div className="timeline-empty">Não há processos vinculados para compor o histórico.</div>}</div>;
@@ -2069,7 +2085,7 @@ function FenixConnectionsPanel({ user, revision, onAdd, onManage, onReauthentica
 }
 
 function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
-  mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary;
+  mode: 'new' | 'manage' | 'reauth' | 'reauth-primary'; connection?: FenixConnectionSummary;
   onClose: () => void; onSaved: (message: string) => void;
 }) {
   const [siteKey, setSiteKey] = useState('');
@@ -2090,7 +2106,7 @@ function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
   const [loginCompleted, setLoginCompleted] = useState<number[]>([]);
   const captchaRef = useRef<HCaptcha>(null);
   const emailRef = useRef<HTMLInputElement>(null);
-  const title = mode === 'new' ? 'Conectar conta Fênix' : mode === 'reauth' ? `Reconectar ${connection?.label || 'conta Fênix'}` : `Gerenciar ${connection?.label || 'conta Fênix'}`;
+  const title = mode === 'reauth-primary' ? 'Reconectar acesso principal ao Fênix' : mode === 'new' ? 'Conectar conta Fênix' : mode === 'reauth' ? `Reconectar ${connection?.label || 'conta Fênix'}` : `Gerenciar ${connection?.label || 'conta Fênix'}`;
   async function loadExistingCatalog(preserveSelection = false) {
     if (!connection) return;
     setLoadingCatalog(true); setError('');
@@ -2145,7 +2161,17 @@ function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
     setBusy(true); setLoginStage(-1); setLoginCompleted([]);
     let poller: number | undefined;
     try {
-      if (mode === 'reauth' && connection) {
+      if (mode === 'reauth-primary') {
+        const progressId = crypto.randomUUID();
+        poller = window.setInterval(() => void api<{ stage: number; completedStages: number[] }>(`/api/auth/login/progress/${progressId}`).then((progress) => {
+          setLoginStage((current) => Math.max(current, progress.stage)); setLoginCompleted((current) => [...new Set([...current, ...progress.completedStages])]);
+        }).catch(() => undefined), 300);
+        await api('/api/fenix-session/reauthenticate', { method: 'POST', body: JSON.stringify({ email, password, hcaptchaToken: captchaToken, progressId }) });
+        setPassword(''); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
+        onSaved('Acesso principal ao Fênix reconectado com sucesso. Sincronização iniciada.');
+        onClose();
+        return;
+      } else if (mode === 'reauth' && connection) {
         await api(`/api/fenix-connections/${encodeURIComponent(connection.id)}/reauthenticate`, { method: 'POST', body: JSON.stringify({ email, password, hcaptchaToken: captchaToken }) });
         setPassword(''); setCaptchaToken(''); captchaRef.current?.resetCaptcha();
         await loadExistingCatalog(); setStep('select');
@@ -2191,16 +2217,16 @@ function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
   };
   return <div className="fenix-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
     <section className="fenix-connect-modal" role="dialog" aria-modal="true" aria-labelledby="fenix-connect-title" aria-busy={busy}>
-      <header className="fenix-modal-header"><div><span className="section-kicker">{step === 'connect' ? 'PASSO 1 DE 2 · CONECTAR' : 'PASSO 2 DE 2 · SELECIONAR'}</span><h2 id="fenix-connect-title">{title}</h2><p>{step === 'connect' ? 'A conta principal do Painel continuará conectada.' : 'Escolha quais edificações essa conta vai acompanhar.'}</p></div><button className="icon-button" aria-label="Fechar" onClick={close} disabled={busy}><X size={19} /></button></header>
+      <header className="fenix-modal-header"><div><span className="section-kicker">{mode === 'reauth-primary' ? 'ACESSO PRINCIPAL · RECONECTAR' : step === 'connect' ? 'PASSO 1 DE 2 · CONECTAR' : 'PASSO 2 DE 2 · SELECIONAR'}</span><h2 id="fenix-connect-title">{title}</h2><p>{mode === 'reauth-primary' ? 'Informe usuário e senha da mesma conta para restabelecer o acesso ao Fênix.' : step === 'connect' ? 'A conta principal do Painel continuará conectada.' : 'Escolha quais edificações essa conta vai acompanhar.'}</p></div><button className="icon-button" aria-label="Fechar" onClick={close} disabled={busy}><X size={19} /></button></header>
       <div className={`fenix-modal-step ${step === 'select' ? 'fenix-step-active' : ''}`} key={step}>
         {step === 'connect' ? <form className="fenix-login-form" onSubmit={(event) => void login(event)}>
-          <div className="fenix-modal-notice"><ShieldCheck size={17} /><span>Use a conta do cliente. Você precisa ter autorização para acompanhar os dados dela.</span></div>
+          <div className="fenix-modal-notice"><ShieldCheck size={17} /><span>{mode === 'reauth-primary' ? 'Informe as credenciais da sua conta Fênix principal para restabelecer a sessão e continuar consultando processos e documentos.' : 'Use a conta do cliente. Você precisa ter autorização para acompanhar os dados dela.'}</span></div>
           <label>Usuário ou e-mail Fênix<input ref={emailRef} autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
           <label>Senha Fênix<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
           <div className="captcha-wrap fenix-modal-captcha">{siteKey && <HCaptcha ref={captchaRef} sitekey={siteKey} onVerify={setCaptchaToken} onExpire={() => setCaptchaToken('')} onError={() => setError('Não foi possível validar o hCaptcha. Tente novamente.')} />}</div>
           {error && <div className="form-error" role="alert"><CircleAlert size={15} />{error}</div>}
           {busy && <div className="connection-login-progress" aria-live="polite"><LoaderCircle className="spin" size={16} />{loginStage < 0 ? 'Validando acesso com o Fênix…' : loginStage < 4 ? 'Autenticando a conta…' : 'Acesso aprovado; carregando a lista…'}</div>}
-          <button className="button button-teal button-wide" type="submit" disabled={busy || !siteKey}>{busy ? <><LoaderCircle size={15} className="spin" /> Conectando…</> : <>Conectar conta <ArrowRight size={15} /></>}</button>
+          <button className="button button-teal button-wide" type="submit" disabled={busy || !siteKey}>{busy ? <><LoaderCircle size={15} className="spin" /> {mode === 'reauth-primary' ? 'Reconectando…' : 'Conectando…'}</> : <>{mode === 'reauth-primary' ? 'Reconectar conta' : 'Conectar conta'} <ArrowRight size={15} /></>}</button>
           <small className="field-hint">A senha e o token hCaptcha são usados apenas para autenticar. O Painel guarda a sessão criptografada para futuras consultas.</small>
         </form> : <div className="fenix-building-picker">
           <div className="fenix-selection-summary"><div><b>{selectedCount} {selectedCount === 1 ? 'selecionada' : 'selecionadas'}</b><small>{mode === 'new' ? 'Apenas as selecionadas serão adicionadas ao painel.' : 'As desmarcadas deixam as listas ativas e ficam guardadas para reativação.'}</small></div><label className="fenix-connection-label">{mode === 'new' ? 'Nome para identificar esta conta' : 'Nome da conexão'}<input value={label} maxLength={60} onChange={(event) => setLabel(event.target.value)} /></label></div>
@@ -2302,6 +2328,19 @@ function SettingsAnchorRail({ anchors }: { anchors: readonly { id: string; label
   </nav>;
 }
 
+const ANCHOR_SECTIONS: Record<string, typeof SETTINGS_SECTIONS[number]['id']> = {
+  'settings-fenix-primary': 'contas-fenix',
+  'settings-fenix-accounts': 'contas-fenix',
+  'settings-preferences-ai-sync': 'preferencias',
+  'settings-preferences-filters': 'preferencias',
+  'settings-preferences-renewals': 'preferencias',
+  'settings-ai-api-key': 'assistente',
+  'settings-ai-model': 'assistente',
+  'settings-ai-privacy': 'assistente',
+  'settings-integration-odoo': 'integracoes',
+  'settings-integration-webhook': 'integracoes'
+};
+
 function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -2311,12 +2350,36 @@ function SettingsPage() {
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [user, setUser] = useState<{ name: string; demo: boolean } | null>(null);
-  const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary } | null>(null);
+  const [primaryStatus, setPrimaryStatus] = useState<{ status: 'ok' | 'expired' | 'unknown'; lastError?: string | null } | null>(null);
+  const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth' | 'reauth-primary'; connection?: FenixConnectionSummary } | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [connectionMessage, setConnectionMessage] = useState('');
-  const requestedSection = new URLSearchParams(location.search).get('secao');
+  const hashTarget = location.hash ? location.hash.replace('#', '') : '';
+  const sectionFromHash = hashTarget ? ANCHOR_SECTIONS[hashTarget] : undefined;
+  const requestedSection = new URLSearchParams(location.search).get('secao') || sectionFromHash;
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === requestedSection)?.id || 'preferencias';
   const selectedSection = SETTINGS_SECTIONS.find((section) => section.id === activeSection)!;
+
+  const loadPrimaryStatus = useCallback(() => {
+    void api<{ status: 'ok' | 'expired' | 'unknown'; lastError?: string | null }>('/api/fenix-session/status')
+      .then(setPrimaryStatus)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    loadPrimaryStatus();
+  }, [loadPrimaryStatus, connectionRevision]);
+
+  useEffect(() => {
+    if (location.hash) {
+      const id = location.hash.replace('#', '');
+      window.setTimeout(() => {
+        const el = document.getElementById(id);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 140);
+    }
+  }, [location.hash, activeSection]);
+
   useEffect(() => {
     Promise.all([api<{ configured: boolean; model: string }>('/api/settings/ai'), api<{ user: { name: string; demo: boolean } }>('/api/auth/me')])
       .then(([ai, me]) => { setConfigured(ai.configured); setModel(ai.model); setUser(me.user); })
@@ -2329,6 +2392,7 @@ function SettingsPage() {
     finally { setSaving(false); }
   }
   if (!user) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /></div>;
+  const isPrimaryExpired = !user.demo && primaryStatus?.status === 'expired';
   const sectionHref = (id: typeof SETTINGS_SECTIONS[number]['id']) => id === 'preferencias' ? '/configuracoes' : `/configuracoes?secao=${id}`;
   return <Shell user={user} active="Configurações"><div className="page-content settings-page">
     <div className="settings-main-column">
@@ -2359,11 +2423,22 @@ function SettingsPage() {
       <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'contas-fenix'}>
         <div className="settings-anchor-target" id="settings-fenix-accounts" data-settings-anchor="Contas Fênix acompanhadas"><FenixConnectionsPanel user={user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => undefined} /></div>
         {connectionMessage && <div className="settings-message">{connectionMessage}</div>}
-        <div className="settings-anchor-target" id="settings-fenix-primary" data-settings-anchor="Acesso principal ao Fênix"><section className="settings-card settings-connection"><div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Acesso principal ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div><span className={`settings-status ${user.demo ? '' : 'active'}`}><i /> {user.demo ? 'Demonstração' : 'Sessão ativa'}</span></div><p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p></section></div>
+        <div className="settings-anchor-target" id="settings-fenix-primary" data-settings-anchor="Acesso principal ao Fênix">
+          <section className={`settings-card settings-connection ${isPrimaryExpired ? 'settings-connection-expired' : ''}`}>
+            <div className="settings-card-heading">
+              <span className={`settings-card-icon connection-icon ${isPrimaryExpired ? 'session-expired-icon' : ''}`}><Cloud size={19} /></span>
+              <div><h2>Acesso principal ao Fênix</h2><p>Autenticação feita pelo próprio Fênix, usando hCaptcha.</p></div>
+              <span className={`settings-status ${user.demo ? '' : isPrimaryExpired ? 'expired' : 'active'}`}><i /> {user.demo ? 'Demonstração' : isPrimaryExpired ? 'Sessão expirada — reconecte' : 'Conectada'}</span>
+            </div>
+            {isPrimaryExpired && <div className="settings-session-expired-alert" role="alert"><CircleAlert size={16} /><div><b>Sua sessão no Fênix expirou</b><p>{primaryStatus?.lastError || 'O Fênix exige nova autenticação para continuar consultando processos e baixando documentos.'}</p></div></div>}
+            {!user.demo && <div className="settings-primary-actions"><button type="button" className={`button ${isPrimaryExpired ? 'button-amber button-reconnect-primary' : 'button-outline button-sm'}`} onClick={() => setConnectionModal({ mode: 'reauth-primary' })}><RefreshCw size={14} /> Reconectar conta Fênix</button></div>}
+            <p className="settings-footnote">A senha não é armazenada. Cookies da sessão ficam criptografados localmente; o Fênix pode exigir nova autenticação quando a sessão expirar.</p>
+          </section>
+        </div>
       </section>
     </div>
     <SettingsAnchorRail anchors={SETTINGS_ANCHORS[activeSection]} />
-    {connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(savedMessage) => { setConnectionMessage(savedMessage); setConnectionRevision((revision) => revision + 1); setConnectionModal(null); }} />}
+    {connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(savedMessage) => { setConnectionMessage(savedMessage); setConnectionRevision((revision) => revision + 1); loadPrimaryStatus(); setConnectionModal(null); }} />}
   </div></Shell>;
 }
 
