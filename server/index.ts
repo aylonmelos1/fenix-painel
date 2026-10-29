@@ -1060,8 +1060,9 @@ app.post('/api/drafts/ai-assistant', requireSession, draftAiRateLimiter, async (
     const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
     const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
 
-    let systemContext = req.body?.systemContext as DraftAiAssistantRequest['systemContext'];
-    const targetBuildingId = String(req.body?.buildingId || systemContext?.activeBuilding?.id || '');
+    let systemContext = (req.body?.systemContext || {}) as NonNullable<DraftAiAssistantRequest['systemContext']>;
+    const currentView = req.body?.currentView || systemContext.currentView || (req.body?.buildingId ? 'buildings' : undefined);
+    const activeTab = req.body?.activeTab || systemContext.activeTab;
 
     try {
       const sourceUserIds = dataUserIds(res.locals.user.id);
@@ -1078,34 +1079,132 @@ app.post('/api/drafts/ai-assistant', requireSession, draftAiRateLimiter, async (
         stopped
       };
 
-      let activeBuilding = systemContext?.activeBuilding || null;
-      if (targetBuildingId) {
-        const found = allBuildings.find((b) => b.id === targetBuildingId) || ownedBuilding(res.locals.user.id, targetBuildingId);
-        if (found) {
-          const bProcesses = allProcesses
-            .filter((p) => p.building_id === found.id)
-            .map((p) => ({
-              protocol: p.protocol || '—',
-              type: p.type || '',
-              status: p.status || '',
-              stage: p.stage || '',
-              updatedAt: p.updated_at || ''
-            }));
-          activeBuilding = {
-            id: found.id,
-            reference: found.reference,
-            municipality: found.municipality,
-            area: found.area ? String(found.area) : undefined,
-            floors: found.floors ? String(found.floors) : undefined,
-            height: found.height ? String(found.height) : undefined,
-            processes: bProcesses
+      const buildingsOverview = allBuildings.slice(0, 25).map((b) => {
+        const bProcesses = allProcesses.filter((p) => p.building_id === b.id);
+        const latest = bProcesses[0];
+        return {
+          id: b.id,
+          reference: b.reference,
+          municipality: b.municipality,
+          latestProtocol: latest?.protocol || '—',
+          latestStatus: latest?.status || 'Sem processo',
+          latestStage: latest?.stage || '—'
+        };
+      });
+
+      // Localização da edificação ativa por id, referência ou citação na mensagem
+      const requestedId = String(req.body?.buildingId || systemContext.activeBuilding?.id || '').trim();
+      const requestedRef = String(systemContext.activeBuilding?.reference || '').trim().toLowerCase();
+      const normalizedMsg = message.toLowerCase();
+
+      let found = null;
+      if (requestedId) {
+        found = allBuildings.find((b) => String(b.id) === requestedId || String(b.remote_id) === requestedId) ||
+                ownedBuilding(res.locals.user.id, requestedId);
+      }
+      if (!found && requestedRef) {
+        found = allBuildings.find((b) => b.reference?.trim().toLowerCase() === requestedRef);
+      }
+      if (!found) {
+        found = allBuildings.find((b) => b.reference && b.reference.trim().length >= 4 && normalizedMsg.includes(b.reference.trim().toLowerCase()));
+      }
+      if (!found && allBuildings.length === 1) {
+        found = allBuildings[0];
+      }
+
+      let activeBuilding = systemContext.activeBuilding || null;
+
+      if (found) {
+        const bProcesses = allProcesses.filter((p) => p.building_id === found.id);
+        const frontendProcesses = systemContext.activeBuilding?.processes || [];
+
+        const mergedProcesses = (bProcesses.length > 0 ? bProcesses : [{
+          id: found.id,
+          protocol: (found as any).protocol || '—',
+          type: (found as any).processType || 'Processo',
+          status: (found as any).status || 'Em tramitação',
+          stage: (found as any).stage || '—',
+          updated_at: (found as any).lastUpdated || '',
+          payload: '{}'
+        } as any]).map((p) => {
+          const matchingFrontendProc = frontendProcesses.find((fp) => fp.protocol === p.protocol || String(fp.id) === String(p.id));
+
+          let payloadDocs: Array<{ name?: string; type?: string; status?: string; available?: boolean; error?: string }> = [];
+          try {
+            const parsed = JSON.parse(p.payload || '{}');
+            const rawDocs = parsed?.documents || parsed?.documentos || parsed?.files || [];
+            if (Array.isArray(rawDocs)) {
+              payloadDocs = rawDocs.map((d: any) => ({
+                name: d.name || d.nome || d.descricao || 'Documento',
+                type: d.type || d.tipo || 'Anexo',
+                status: d.status || (d.available ? 'Disponível' : 'Indisponível'),
+                available: Boolean(d.available),
+                error: d.error || d.availabilityMessage || d.message
+              }));
+            }
+          } catch {}
+
+          if (payloadDocs.length === 0 && !matchingFrontendProc?.documents) {
+            payloadDocs = [
+              { name: 'Metadados de DAE', type: 'Taxa / DAE', status: 'Indisponível', available: false, error: 'DAE não retornado pelo Fênix ou exige consulta na SEFAZ-BA' },
+              { name: 'Comprovante de protocolo', type: 'Protocolo', status: 'Indisponível', available: false, error: 'Falha ao consultar ou documento não disponibilizado pelo Fênix' },
+              { name: 'Certificado de aprovação', type: 'Certificado', status: 'Indisponível', available: false, error: 'Falha ao consultar ou documento não disponibilizado pelo Fênix' }
+            ];
+          }
+
+          let timeline: Array<{ date?: string; stage?: string; description?: string }> = [];
+          try {
+            const hist = db.prepare('SELECT timeline_json FROM process_histories WHERE user_id=? AND process_id=?').get(res.locals.user.id, p.id) as { timeline_json: string } | undefined;
+            if (hist?.timeline_json) {
+              const parsedTimeline = JSON.parse(hist.timeline_json);
+              if (Array.isArray(parsedTimeline)) {
+                timeline = parsedTimeline.map((t: any) => ({
+                  date: t.date || t.data,
+                  stage: t.stage || t.label || t.etapa,
+                  description: t.description || t.descricao || t.label
+                }));
+              }
+            }
+          } catch {}
+
+          return {
+            id: p.id,
+            protocol: p.protocol || matchingFrontendProc?.protocol || '—',
+            type: p.type || matchingFrontendProc?.type || 'Processo',
+            status: p.status || matchingFrontendProc?.status || 'Em tramitação',
+            stage: p.stage || matchingFrontendProc?.stage || '—',
+            updatedAt: p.updated_at || matchingFrontendProc?.updatedAt || '',
+            notes: p.notified_by || matchingFrontendProc?.notes || '',
+            documents: matchingFrontendProc?.documents?.length ? matchingFrontendProc.documents.map((d: any) => ({
+              name: d.name || 'Documento',
+              type: d.type || 'Anexo',
+              status: d.status || (d.available ? 'Disponível' : 'Indisponível'),
+              available: Boolean(d.available),
+              error: d.error || d.availabilityMessage || d.message
+            })) : payloadDocs,
+            timeline: matchingFrontendProc?.timeline?.length ? matchingFrontendProc.timeline : timeline
           };
-        }
+        });
+
+        activeBuilding = {
+          id: found.id,
+          reference: found.reference,
+          municipality: found.municipality || systemContext.activeBuilding?.municipality,
+          address: found.address || systemContext.activeBuilding?.address,
+          area: found.area ? String(found.area) : systemContext.activeBuilding?.area,
+          floors: found.floors ? String(found.floors) : systemContext.activeBuilding?.floors,
+          height: found.height ? String(found.height) : systemContext.activeBuilding?.height,
+          occupation: (found as any).use || systemContext.activeBuilding?.occupation,
+          processes: mergedProcesses
+        };
       }
 
       systemContext = {
-        activeBuilding: activeBuilding || systemContext?.activeBuilding || null,
-        metricsSummary: metricsSummary || systemContext?.metricsSummary || null
+        currentView,
+        activeTab,
+        activeBuilding: activeBuilding || systemContext.activeBuilding || null,
+        metricsSummary: metricsSummary || systemContext.metricsSummary || null,
+        buildingsOverview: buildingsOverview.length > 0 ? buildingsOverview : systemContext.buildingsOverview
       };
     } catch {
       // Ignora falhas de enriquecimento do contexto
@@ -1468,11 +1567,12 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     } catch (error) {
       logger.info('Metadados de DAE indisponíveis', { status: error instanceof FenixError ? error.status : undefined });
       const missing = error instanceof FenixError && error.status === 404;
+      const unauthorized = error instanceof FenixError && error.status === 401;
       result = { ...result, documents: [...result.documents, {
         id: `${item.id}-dae-metadata`, name: 'Metadados de DAE', type: 'Documento de arrecadação · Fênix',
         date: item.updatedAt, available: false, source: 'fenix' as const, processId: item.id,
         kind: 'dae' as const, status: missing ? 'metadata_missing' : 'metadata_error',
-        availabilityMessage: missing ? 'O Fênix não retornou DAE para este processo.' : 'Falha ao consultar os metadados do DAE. Tente consultar novamente.'
+        availabilityMessage: missing ? 'O Fênix não retornou DAE para este processo.' : unauthorized ? 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.' : 'Falha ao consultar os metadados do DAE. Tente consultar novamente.'
       }] };
     }
     try {
@@ -1483,11 +1583,13 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
       }] };
     } catch (error) {
       logger.info('Comprovante de protocolo oficial indisponível', { status: error instanceof FenixError ? error.status : undefined });
+      const missing = error instanceof FenixError && error.status === 404;
+      const unauthorized = error instanceof FenixError && error.status === 401;
       result = { ...result, documents: [...result.documents, {
         id: `${item.id}-protocol-metadata`, name: 'Comprovante de protocolo', type: 'Documento oficial · Fênix',
         date: item.updatedAt, available: false, source: 'fenix' as const, processId: item.id,
-        kind: 'protocol' as const, status: error instanceof FenixError && error.status === 404 ? 'metadata_missing' : 'metadata_error',
-        availabilityMessage: error instanceof FenixError && error.status === 404 ? 'O Fênix não disponibilizou comprovante para este processo.' : 'Falha ao consultar o comprovante. Tente consultar novamente.'
+        kind: 'protocol' as const, status: missing ? 'metadata_missing' : 'metadata_error',
+        availabilityMessage: missing ? 'O Fênix não disponibilizou comprovante para este processo.' : unauthorized ? 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.' : 'Falha ao consultar o comprovante. Tente consultar novamente.'
       }] };
     }
     return result;
@@ -1505,11 +1607,12 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
     } catch (error) {
       logger.info('Certificado oficial indisponível', { status: error instanceof FenixError ? error.status : undefined });
       const missing = error instanceof FenixError && error.status === 404;
+      const unauthorized = error instanceof FenixError && error.status === 401;
       return { processId: project.id, certificate: null, issue: {
         id: `${project.id}-certificate-metadata`, name: 'Certificado de aprovação', type: 'Documento oficial · Fênix',
         available: false, source: 'fenix' as const, processId: project.id, kind: 'certificate' as const,
         status: missing ? 'metadata_missing' : 'metadata_error',
-        availabilityMessage: missing ? 'O Fênix não retornou certificado para este processo.' : 'Falha ao consultar o certificado oficial. Tente consultar novamente.'
+        availabilityMessage: missing ? 'O Fênix não retornou certificado para este processo.' : unauthorized ? 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.' : 'Falha ao consultar o certificado oficial. Tente consultar novamente.'
       } };
     }
   }));

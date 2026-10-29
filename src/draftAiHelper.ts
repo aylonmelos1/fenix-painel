@@ -185,19 +185,38 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
   }
 };
 
+export interface ActiveBuildingProcessDocument {
+  name: string;
+  type?: string;
+  status?: string;
+  available?: boolean;
+  availabilityMessage?: string;
+}
+
+export interface ActiveBuildingProcessTimelineItem {
+  label: string;
+  date?: string;
+  done?: boolean;
+  current?: boolean;
+}
+
 export interface ActiveBuildingContext {
   id: string;
   reference: string;
   municipality?: string;
+  address?: string;
   area?: string;
   floors?: string;
   height?: string;
+  occupation?: string;
   processes?: Array<{
     protocol: string;
     type: string;
     status: string;
     stage?: string;
     updatedAt?: string;
+    documents?: ActiveBuildingProcessDocument[];
+    timeline?: ActiveBuildingProcessTimelineItem[];
   }>;
 }
 
@@ -211,11 +230,16 @@ export function generateLocalAiAssistantFallback(
   const norm = prompt.toLowerCase();
 
   if (activeBuilding) {
-    const refLower = (activeBuilding.reference || '').toLowerCase();
-    const isAboutBuilding = norm.includes(refLower) || norm.includes('edifica') || norm.includes('desta') || norm.includes('este processo') || norm.includes('geral') || norm.includes('situa') || norm.includes('process') || norm.includes('etapa') || norm.includes('pend') || norm.includes('explic') || norm.includes('histor') || norm.includes('analis');
+    const procs = activeBuilding.processes || [];
+    const allDocs: ActiveBuildingProcessDocument[] = procs.flatMap((p) => p.documents || []);
+    const allTimeline: ActiveBuildingProcessTimelineItem[] = procs.flatMap((p) => p.timeline || []);
 
-    // Caso 1: Preencher novo cadastro com dados da edificação
-    if (norm.includes('preencher') || (norm.includes('cadastro') && norm.includes('dados'))) {
+    // Caso 1: Preencher novo cadastro com dados da edificação (solicitação explícita)
+    if (
+      norm.includes('preencher') ||
+      (norm.includes('iniciar') && norm.includes('cadastro')) ||
+      (norm.includes('cadastrar') && (norm.includes('edifica') || norm.includes('dados')))
+    ) {
       const parsedArea = parseFloat(activeBuilding.area || '500') || 500;
       const parsedFloors = parseInt(activeBuilding.floors || '1', 10) || 1;
       return {
@@ -249,32 +273,106 @@ export function generateLocalAiAssistantFallback(
       };
     }
 
-    // Caso 2: Explicar situação / processos da edificação
-    if (isAboutBuilding) {
-      const procs = activeBuilding.processes || [];
-      const procCount = procs.length;
-      let processSummary = '';
-      if (procCount === 0) {
-        processSummary = 'Não constam processos ou vistorias vinculados a esta edificação na sincronização atual.';
+    // Caso 2: Pergunta sobre documentos, anexos ou disponibilidade
+    if (
+      norm.includes('doc') ||
+      norm.includes('dispon') ||
+      norm.includes('indispon') ||
+      norm.includes('dae') ||
+      norm.includes('avcb') ||
+      norm.includes('clcb') ||
+      norm.includes('certificad') ||
+      norm.includes('comprovante') ||
+      norm.includes('anexo') ||
+      norm.includes('pdf')
+    ) {
+      let docsDiagnostic = '';
+      if (allDocs.length > 0) {
+        docsDiagnostic = allDocs
+          .map(
+            (d) =>
+              `• ${d.name || d.type || 'Documento'}: ${
+                d.available ? 'Disponível para download' : d.availabilityMessage || d.status || 'Indisponível no momento'
+              }`
+          )
+          .join('\n');
       } else {
-        processSummary = procs.map(p => `• Protocolo ${p.protocol} (${p.type}): Etapa atual "${p.stage || p.status}".`).join('\n');
+        docsDiagnostic = 'Na consulta atual ao Fênix, não constam arquivos binários de documentos liberados para os processos desta edificação.';
       }
 
       return {
-        reply: `Edificação "${activeBuilding.reference}" (${activeBuilding.municipality || 'BA'}):\nÁrea: ${activeBuilding.area || 'Não informada'} m² | Pavimentos: ${activeBuilding.floors || '1'}.\n\nProcessos sincronizados:\n${processSummary}\n\nRecomendo verificar as pendências documentais e notificações no portal Fênix caso necessite de renovação ou emissão de AVCB/CLCB.`,
+        reply: `Sobre a disponibilidade de documentos da edificação "${activeBuilding.reference}":\n\nNo portal Fênix do CBMBA, documentos como DAEs, Comprovantes de Protocolo e Certificados (AVCB/CLCB) ficam marcados como "Indisponíveis" principalmente por:\n\n1. **Etapa do Processo**: Certificados de Aprovação (AVCB/CLCB) só são gerados e disponibilizados após a **homologação final** do processo. Enquanto o processo estiver em análise ou vistoria, o certificado ainda não existe.\n2. **Guias e DAE**: As guias de pagamento podem ficar indisponíveis quando já foram compensadas pelo banco, quando expiraram ou quando a isenção de taxa foi concedida.\n3. **Comprovantes e Notificações**: Podem estar indisponíveis caso o analista do CBMBA ainda não tenha feito o upload do arquivo digitalizado no sistema estadual.\n\nSituação dos documentos encontrados:\n${docsDiagnostic}\n\nRecomendo acessar o Fênix caso precise protocolar nova retificação ou emitir segunda via da taxa.`,
         thinkingSteps: [
-          `Consulta aos dados sincronizados de ${activeBuilding.reference}`,
-          `Verificação de ${procCount} processo(s) vinculado(s)`,
-          'Análise de etapas e orientações de próximos passos CBMBA'
+          `Identificado contexto de documentos para ${activeBuilding.reference}`,
+          `Analisando ${allDocs.length} documento(s) e metadados de disponibilidade`,
+          'Verificando regras de emissão e homologação documental do CBMBA'
         ],
         appliedChangesSummary: [],
         suggestions: [
-          `✦ Preencher novo cadastro com dados de ${activeBuilding.reference}`,
-          '✦ Sugerir e marcar medidas da IT-14',
-          '✦ Auto-revisar pendências'
+          `✦ Explicar situação de ${activeBuilding.reference}`,
+          `✦ Resumir linha do tempo do processo`,
+          `✦ Preencher cadastro com dados de ${activeBuilding.reference}`
         ]
       };
     }
+
+    // Caso 3: Pergunta sobre linha do tempo, histórico ou movimentações
+    if (
+      norm.includes('timeline') ||
+      norm.includes('linha do tempo') ||
+      norm.includes('histó') ||
+      norm.includes('histor') ||
+      norm.includes('moviment') ||
+      norm.includes('marcos')
+    ) {
+      let timelineText = '';
+      if (allTimeline.length > 0) {
+        timelineText = allTimeline
+          .slice(0, 10)
+          .map((t) => `• ${t.label}${t.date ? ` (${t.date})` : ''} - ${t.done ? 'Concluído' : t.current ? 'Etapa Atual' : 'Pendente'}`)
+          .join('\n');
+      } else {
+        timelineText = 'O Fênix não retornou movimentações cronológicas detalhadas para este protocolo na sincronização recente.';
+      }
+
+      return {
+        reply: `Linha do tempo e histórico dos processos de "${activeBuilding.reference}":\n\n${timelineText}\n\nEssas etapas refletem o andamento oficial no Corpo de Bombeiros Militar da Bahia.`,
+        thinkingSteps: [
+          `Buscando movimentações e marcos de ${activeBuilding.reference}`,
+          `Organizando linha cronológica dos processos`,
+          'Sintetizando andamento oficial CBMBA'
+        ],
+        appliedChangesSummary: [],
+        suggestions: [
+          `✦ Por que há documentos indisponíveis?`,
+          `✦ Explicar situação de ${activeBuilding.reference}`,
+          `✦ Preencher cadastro com dados de ${activeBuilding.reference}`
+        ]
+      };
+    }
+
+    // Caso 4: Qualquer outra dúvida sobre a edificação em tela
+    let processSummary = '';
+    if (procs.length === 0) {
+      processSummary = 'Não constam processos ou vistorias vinculados a esta edificação na sincronização atual.';
+    } else {
+      processSummary = procs.map((p) => `• Protocolo ${p.protocol} (${p.type}): Etapa atual "${p.stage || p.status}".`).join('\n');
+    }
+
+    return {
+      reply: `Edificação "${activeBuilding.reference}" (${activeBuilding.municipality || 'BA'}):\nÁrea: ${activeBuilding.area || 'Não informada'} m² | Pavimentos: ${activeBuilding.floors || '1'}.\n\nProcessos sincronizados:\n${processSummary}\n\nPosso explicar a situação de documentos, detalhar as movimentações da linha do tempo ou auxiliar no preenchimento de um novo rascunho. O que gostaria de saber?`,
+      thinkingSteps: [
+        `Consulta aos dados sincronizados de ${activeBuilding.reference}`,
+        `Verificação de ${procs.length} processo(s) vinculado(s)`,
+        'Análise de etapas e orientações de próximos passos CBMBA'
+      ],
+      appliedChangesSummary: [],
+      suggestions: [
+        `✦ Por que há documentos indisponíveis?`,
+        `✦ Resumir linha do tempo do processo`,
+        `✦ Preencher cadastro com dados de ${activeBuilding.reference}`
+      ]
+    };
   }
 
   if (norm.includes('exemplo') || norm.includes('galpao') || norm.includes('galpão')) {

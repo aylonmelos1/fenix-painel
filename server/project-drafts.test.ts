@@ -715,3 +715,97 @@ test('runDraftAiAssistant preenche formPatch ao solicitar "✦ Iniciar novo cada
   assert.equal(res.formPatch.address?.municipio_id, 22);
 });
 
+test('runDraftAiAssistant explica indisponibilidade de documentos sem vazar erros de rascunho ou formPatch quando currentView !== register', async () => {
+  const req = {
+    message: 'O que ta fazendo esses docs ficarem como indisponíveis?',
+    currentDraft: {}, // Rascunho vazio
+    systemContext: {
+      currentView: 'buildings',
+      activeTab: 'Documentos',
+      activeBuilding: {
+        id: 'b-999',
+        reference: 'GRAFICO EMPREENDIMENTOS LTDA',
+        municipality: 'FEIRA DE SANTANA',
+        processes: [
+          {
+            protocol: '0028099-5/2026',
+            type: 'Projeto Técnico Simplificado (PTS)',
+            status: 'Homologado',
+            stage: 'Processo Homologado',
+            documents: [
+              { name: 'Metadados de DAE', status: 'Indisponível', available: false },
+              { name: 'Comprovante de protocolo', status: 'Indisponível', available: false },
+              { name: 'Certificado de aprovação', status: 'Indisponível', available: false }
+            ]
+          }
+        ]
+      }
+    }
+  };
+
+  const res = await runDraftAiAssistant(req);
+
+  // 1. Resposta explica sobre os documentos e a edificação
+  assert.ok(res.reply.includes('GRAFICO EMPREENDIMENTOS LTDA'));
+  assert.ok(res.reply.includes('0028099-5/2026'));
+  assert.ok(res.reply.includes('SEFAZ-BA') || res.reply.includes('DAE'));
+  assert.ok(res.reply.includes('Certificado') || res.reply.includes('protocolo'));
+
+  // 2. NÃO deve reclamar de CEP ou complemento de rascunho
+  assert.equal(res.reply.includes('CEP deve conter'), false);
+  assert.equal(res.reply.includes('Preenchi o complemento com ***'), false);
+  assert.equal(res.reply.includes('Existem 4 pendências'), false);
+
+  // 3. NÃO deve retornar formPatch
+  assert.equal(res.formPatch, undefined);
+  assert.deepEqual(res.appliedChangesSummary, []);
+
+  // 4. Thinking steps adequados
+  assert.ok(res.thinkingSteps.some((step) => step.includes('documentos')));
+
+  // 5. NÃO deve inventar regras especulativas sobre CBMBA
+  assert.equal(res.reply.includes('desativa a emissão do comprovante'), false);
+  assert.equal(res.reply.includes('assinatura digital final do Comando dos Bombeiros'), false);
+});
+
+test('runDraftAiAssistant diagnostica falha de consulta / sessão Fênix e orienta reconexão em Configurações', async () => {
+  const req = {
+    message: 'Por que o certificado e o comprovante deram erro?',
+    currentDraft: {},
+    systemContext: {
+      currentView: 'buildings',
+      activeTab: 'Documentos',
+      activeBuilding: {
+        id: '39315',
+        reference: 'Alex Da cruz Gomes',
+        municipality: 'CAMACARI',
+        processes: [
+          {
+            protocol: '0030596-5/2024',
+            type: 'Projeto técnico · PTSCLCB - Análise',
+            status: 'Homologado',
+            stage: 'Homologado',
+            documents: [
+              { name: 'Metadados de DAE', status: 'metadata_error', available: false, error: 'Falha ao consultar os metadados do DAE. Tente consultar novamente.' },
+              { name: 'Comprovante de protocolo', status: 'metadata_error', available: false, error: 'Falha ao consultar o comprovante. Tente consultar novamente.' },
+              { name: 'Certificado de aprovação', status: 'metadata_error', available: false, error: 'Falha ao consultar o certificado oficial. Tente consultar novamente.' }
+            ]
+          }
+        ]
+      }
+    }
+  };
+
+  const res = await runDraftAiAssistant(req);
+
+  assert.ok(res.reply.includes('Alex Da cruz Gomes'));
+  assert.ok(res.reply.includes('0030596-5/2024'));
+  assert.ok(res.reply.includes('Configurações'));
+  assert.ok(res.reply.includes('Sessão') || res.reply.includes('sessão'));
+  assert.ok(res.reply.includes('Falha ao consultar'));
+  assert.equal(res.reply.includes('desativa a emissão do comprovante'), false);
+  assert.equal(res.reply.includes('assinatura digital final do Comando dos Bombeiros'), false);
+  assert.equal(res.formPatch, undefined);
+  assert.deepEqual(res.appliedChangesSummary, []);
+});
+

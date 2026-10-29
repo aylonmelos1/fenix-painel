@@ -209,7 +209,7 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
   const lastSyncTitle = fenixSync.lastSync && Number.isFinite(Date.parse(fenixSync.lastSync)) ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bahia' }).format(new Date(fenixSync.lastSync)) : null;
   function navigateFromSidebar(path: string) { setMenuOpen(false); onNavigate?.(); navigate(path); }
   async function logout() { await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined); navigate('/'); }
-  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${copilotOpen ? 'copilot-open' : ''}`}><aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
+  return <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${copilotOpen ? 'copilot-open ai-sidebar-open' : ''}`}><aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
     <Link to="/" className="brand brand-light sidebar-brand">{logo}<span>Fênix <b>Painel</b></span></Link>
     <div className="sidebar-section-label">ACOMPANHAMENTO</div><nav className="side-nav">{navItems.map((item) => <button key={item.label} type="button" title={item.label} onClick={() => navigateFromSidebar(item.path!)} className={`side-link ${active === item.label ? 'active' : ''}`}><item.icon size={17} /><span>{item.label}</span></button>)}</nav>
     <div className="sidebar-spacer" /><button className="sidebar-help" type="button" onClick={() => setHelpOpen(true)}><span className="help-icon"><HelpCircle size={17} /></span><span><b>Precisa de ajuda?</b><small>Veja como acompanhar</small></span><ArrowRight size={15} /></button>
@@ -793,6 +793,7 @@ function DashboardPage() {
   const [updatingRenewalId, setUpdatingRenewalId] = useState('');
   const [toast, setToast] = useState('');
   const [selected, setSelected] = useState<Building | null>(null);
+  const [activeBuildingDetail, setActiveBuildingDetail] = useState<BuildingDetail | null>(null);
   const [selectedTab, setSelectedTab] = useState('Edificação');
   const [selectedProcessId, setSelectedProcessId] = useState<string | undefined>();
   const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth'; connection?: FenixConnectionSummary } | null>(null);
@@ -805,6 +806,7 @@ function DashboardPage() {
     applyPatch: (patch: any) => void;
     isEditor: boolean;
   } | null>(null);
+  const activeScreenBuilding = selected || aiBuilding;
   const launchAi = (building: Building | null, prompt = '') => { setAiBuilding(building); setAiPrompt(prompt); setAiOpen(true); };
   const [syncMenu, setSyncMenu] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -956,7 +958,12 @@ function DashboardPage() {
     { label: 'Processos aguardando ação', value: data.metrics.attention, trend: 'processos do Fênix', icon: CircleAlert, tone: 'amber', target: 'notified' },
     { label: 'Processos com vistoria', value: data.metrics.inspections, trend: 'etapas de vistoria', icon: FileCheck2, tone: 'violet', target: 'analysis' }
   ];
-  const openBuilding = (building: Building, tab = 'Edificação', processId?: string) => { setSelectedTab(tab); setSelectedProcessId(processId); setSelected(building); };
+  const openBuilding = (building: Building, tab = 'Edificação', processId?: string) => {
+    setSelectedTab(tab);
+    setSelectedProcessId(processId);
+    setSelected(building);
+    setAiBuilding(building);
+  };
   return <Shell user={data.user} active={view === 'register' ? 'Cadastrar no Fênix' : selected ? 'Edificações' : activeNav} breadcrumbs={view === 'register' ? <><b>Cadastrar no Fênix</b></> : selected ? <><b>Edificações</b><span>/</span><b>{selected.reference}</b></> : undefined} onNavigate={() => { setSelected(null); }} onOpenAi={() => setAiOpen((prev) => !prev)} copilotOpen={aiOpen} onSyncRunningChange={setExternalSyncRunning} onNotification={(notification) => {
     const target = data.buildings.find((item) => item.id === notification.buildingId);
     if (target) openBuilding(target, 'Edificação', notification.processId || undefined);
@@ -1002,11 +1009,26 @@ function DashboardPage() {
         <section className="bottom-insight"><span className="insight-icon"><Sparkles size={19} /></span><div className="insight-copy"><div className="insight-title"><b>Leitura contextual com IA</b><span className="ai-label">SOB DEMANDA</span></div><p>Selecione uma edificação para entender o status, as etapas e as informações disponíveis no Fênix.</p></div><button className="button button-ai-outline" onClick={() => visible[0] && launchAi(visible[0], `Explique a situação atual da edificação ${visible[0].reference}, considerando seus processos, etapas, documentos e próximos passos.`)} disabled={!visible.length}><Sparkles size={14} /> Explicar processo <ArrowRight size={14} /></button></section>
       </div>
     )}
-    {selected && <BuildingDrawer key={selected.id} building={selected} initialTab={selectedTab} initialProcessId={selectedProcessId} onClose={() => setSelected(null)} onAsk={(prompt) => launchAi(selected, prompt)} demo={data.user.demo} />}
+    {selected && (
+      <BuildingDrawer
+        key={selected.id}
+        building={selected}
+        initialTab={selectedTab}
+        initialProcessId={selectedProcessId}
+        onClose={() => { setSelected(null); setActiveBuildingDetail(null); }}
+        onDetailLoaded={(loadedDetail) => setActiveBuildingDetail(loadedDetail)}
+        onAsk={(prompt) => launchAi(selected, prompt)}
+        demo={data.user.demo}
+      />
+    )}
     <UnifiedCopilotSidebar
       isOpen={aiOpen}
       onClose={() => setAiOpen(false)}
-      building={aiBuilding}
+      building={activeScreenBuilding}
+      buildingDetail={activeBuildingDetail}
+      currentView={view}
+      buildings={data.buildings}
+      metrics={data.metrics}
       processes={data.processes}
       initialPrompt={aiPrompt}
       draftContext={draftContext}
@@ -1031,7 +1053,7 @@ function DashboardPage() {
   </Shell>;
 }
 
-function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessId, onClose, onAsk, demo }: { building: Building; initialTab?: string; initialProcessId?: string; onClose: () => void; onAsk: (prompt?: string) => void; demo: boolean }) {
+function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessId, onClose, onAsk, onDetailLoaded, demo }: { building: Building; initialTab?: string; initialProcessId?: string; onClose: () => void; onAsk: (prompt?: string) => void; onDetailLoaded?: (detail: BuildingDetail | null) => void; demo: boolean }) {
   const [detail, setDetail] = useState<BuildingDetail | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState(initialTab);
@@ -1054,6 +1076,7 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
     api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`).then(async (result) => {
       if (!active) return;
       setDetail(result);
+      onDetailLoaded?.(result);
       if (demo) return;
       setAiInsightLoading(true);
       try {
@@ -1235,6 +1258,10 @@ function UnifiedCopilotSidebar({
   isOpen,
   onClose,
   building,
+  buildingDetail,
+  currentView,
+  buildings,
+  metrics,
   processes,
   initialPrompt,
   draftContext,
@@ -1244,6 +1271,10 @@ function UnifiedCopilotSidebar({
   isOpen: boolean;
   onClose: () => void;
   building: Building | null;
+  buildingDetail?: BuildingDetail | null;
+  currentView?: string;
+  buildings?: Building[];
+  metrics?: { buildings: number; processes: number; analysis: number; attention: number; inspections: number };
   processes?: DashboardProcess[];
   initialPrompt: string;
   draftContext: { currentDraft: any; applyPatch: (patch: any) => void; isEditor: boolean } | null;
@@ -1268,6 +1299,33 @@ function UnifiedCopilotSidebar({
   const [copilotThinking, setCopilotThinking] = useState('');
   const [copilotPrompt, setCopilotPrompt] = useState('');
   const [appliedNotice, setAppliedNotice] = useState('');
+
+  const welcomeText = building
+    ? `Olá! Sou o Copiloto IA do Fênix Painel. Estou com o contexto completo da edificação "${building.reference}" carregado. Posso analisar seus processos, explicar a situação dos documentos, resumir o histórico ou auxiliar em um novo enquadramento CBMBA. Como posso ajudar?`
+    : isRegisterView
+    ? 'Olá! Sou o Copiloto IA do Fênix Painel, especialista no Decreto Estadual 16.302/BA e IT-14 do CBMBA. Posso preencher campos na tela em tempo real, sugerir medidas, revisar pendências e calcular o enquadramento do seu projeto.'
+    : 'Olá! Sou o Copiloto IA do Fênix Painel. Posso analisar a situação da sua carteira de edificações no CBMBA, orientar sobre processos parados ou notificados e guiar novos cadastros. Como posso ajudar?';
+
+  const defaultSuggestions = building
+    ? [
+        `✦ Explicar situação de ${building.reference}`,
+        '✦ Por que há documentos indisponíveis?',
+        '✦ Resumir linha do tempo do processo',
+        `✦ Preencher cadastro com dados de ${building.reference}`
+      ]
+    : isRegisterView
+    ? [
+        '✦ Auto-revisar e corrigir pendências da tela',
+        '✦ Sugerir e marcar medidas da IT-14',
+        '✦ Exemplo: Galpão 620 m² em Feira de Santana',
+        '✦ Explicar meu enquadramento atual'
+      ]
+    : [
+        '✦ Resumo geral da carteira de edificações',
+        '✦ Processos notificados e parados',
+        '✦ Iniciar novo cadastro no Fênix'
+      ];
+
   const [copilotMessages, setCopilotMessages] = useState<Array<{
     role: 'user' | 'assistant';
     content: string;
@@ -1278,15 +1336,20 @@ function UnifiedCopilotSidebar({
   }>>([
     {
       role: 'assistant',
-      content: 'Olá! Sou o Copiloto IA do Fênix Painel, especialista no Decreto Estadual 16.302/BA, IT-14 do CBMBA e na gestão inteligente dos seus processos. Como posso ajudar?',
-      suggestions: [
-        '✦ Auto-revisar e corrigir pendências da tela',
-        '✦ Sugerir e marcar medidas da IT-14',
-        '✦ Exemplo: Galpão 620 m² em Feira de Santana',
-        '✦ Explicar meu enquadramento atual'
-      ]
+      content: welcomeText,
+      suggestions: defaultSuggestions
     }
   ]);
+
+  useEffect(() => {
+    setCopilotMessages((prev) => {
+      if (prev.length <= 1 && prev[0]?.role === 'assistant') {
+        return [{ role: 'assistant', content: welcomeText, suggestions: defaultSuggestions }];
+      }
+      return prev;
+    });
+  }, [building?.id, isRegisterView]);
+
   const draftContentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1306,33 +1369,63 @@ function UnifiedCopilotSidebar({
 
     setCopilotMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
 
-    const buildingProcesses = building ? (
-      processes && processes.length > 0
-        ? processes.filter((p) => p.buildingId === building.id)
-        : (building.protocol ? [{
-            protocol: building.protocol,
-            type: building.processType,
-            status: building.status,
-            stage: building.stage,
-            updatedAt: building.lastUpdated || ''
-          }] : [])
-    ) : [];
+    const isMatchingDetail = Boolean(buildingDetail && building && buildingDetail.building.id === building.id);
 
-    const buildingPayload = building ? {
-      id: building.id,
-      reference: building.reference,
-      municipality: building.municipality,
-      area: String(building.area || ''),
-      floors: String(building.floors || ''),
-      height: building.height || '',
-      processes: buildingProcesses.map((p) => ({
-        protocol: p.protocol,
-        type: p.type,
-        status: p.status,
-        stage: p.stage,
-        updatedAt: p.updatedAt
-      }))
-    } : null;
+    const buildingProcesses = isMatchingDetail
+      ? buildingDetail!.processes.map((p) => ({
+          protocol: p.protocol,
+          type: p.type,
+          status: p.status,
+          stage: p.stage,
+          updatedAt: p.updatedAt,
+          documents: (p.documents || []).map((d) => ({
+            name: d.name,
+            type: d.type,
+            status: d.status,
+            available: d.available,
+            availabilityMessage: d.availabilityMessage
+          })),
+          timeline: (p.timeline || []).slice(0, 10).map((t) => ({
+            label: t.label,
+            date: t.date,
+            done: t.done,
+            current: t.current
+          }))
+        }))
+      : building
+      ? (processes && processes.length > 0
+          ? processes.filter((p) => p.buildingId === building.id)
+          : (building.protocol ? [{
+              protocol: building.protocol,
+              type: building.processType,
+              status: building.status,
+              stage: building.stage,
+              updatedAt: building.lastUpdated || ''
+            }] : [])
+        ).map((p) => ({
+          protocol: p.protocol,
+          type: p.type,
+          status: p.status,
+          stage: p.stage,
+          updatedAt: p.updatedAt,
+          documents: [],
+          timeline: []
+        }))
+      : [];
+
+    const buildingPayload = building
+      ? {
+          id: building.id,
+          reference: building.reference,
+          municipality: building.municipality,
+          address: isMatchingDetail ? (buildingDetail!.building.address || building.address) : building.address,
+          area: String(isMatchingDetail ? (buildingDetail!.building.totalArea || buildingDetail!.building.buildingArea || building.area || '') : (building.area || '')),
+          floors: String(isMatchingDetail ? (buildingDetail!.building.floors || building.floors || '') : (building.floors || '')),
+          height: isMatchingDetail ? (buildingDetail!.building.height || building.height || '') : (building.height || ''),
+          occupation: isMatchingDetail ? (buildingDetail!.building.use || '') : '',
+          processes: buildingProcesses
+        }
+      : null;
 
     try {
       let aiResult: DraftAiAssistantResponse;
@@ -1346,7 +1439,21 @@ function UnifiedCopilotSidebar({
             history: copilotMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
             buildingId: building?.id || null,
             systemContext: {
-              activeBuilding: buildingPayload
+              currentView: currentView || (isRegisterView ? 'register' : 'buildings'),
+              activeBuilding: buildingPayload,
+              metricsSummary: metrics ? {
+                buildings: metrics.buildings,
+                processes: metrics.processes,
+                attention: metrics.attention,
+                analysis: metrics.analysis
+              } : null,
+              buildingsOverview: (buildings || []).slice(0, 15).map((b) => ({
+                id: b.id,
+                reference: b.reference,
+                municipality: b.municipality,
+                status: b.status,
+                stage: b.stage
+              }))
             }
           })
         });
@@ -1355,14 +1462,14 @@ function UnifiedCopilotSidebar({
         aiResult = generateLocalAiAssistantFallback(
           userMessage,
           draftContext?.currentDraft || INITIAL_EMPTY_DRAFT,
-          Number(draftContext?.currentDraft?.edification?.building_area) || Number(building?.area) || 500,
+          Number(draftContext?.currentDraft?.edification?.building_area) || Number(buildingPayload?.area) || 500,
           { sigla: 'PTS', nome: 'Processo Técnico Simplificado', motivo: 'Área calculada dentro dos limites', isPts: true },
           buildingPayload
         );
       }
 
       // Se temos o rascunho ativo aberto na tela de cadastro, aplicamos instantaneamente!
-      if (aiResult.formPatch && draftContext?.applyPatch) {
+      if (aiResult.formPatch && draftContext?.applyPatch && isRegisterView) {
         draftContext.applyPatch(aiResult.formPatch);
         setAppliedNotice('Alterações aplicadas na tela de cadastro!');
         setTimeout(() => setAppliedNotice(''), 3500);
@@ -1445,58 +1552,104 @@ function UnifiedCopilotSidebar({
 
       <div className="copilot-sidebar-body" ref={draftContentRef}>
         <div className="copilot-chips-row">
-          {building && (
-            <button
-              type="button"
-              className="copilot-chip-action copilot-chip-highlight"
-              onClick={() => void handleSendDraftPrompt(`Preencher novo cadastro com os dados da edificação ${building.reference}`)}
-              disabled={copilotLoading}
-            >
-              <Sparkles size={13} /> Preencher cadastro com dados de {building.reference}
-            </button>
+          {building && !isRegisterView ? (
+            <>
+              <button
+                type="button"
+                className="copilot-chip-action copilot-chip-highlight"
+                onClick={() => void handleSendDraftPrompt(`Explicar situação da edificação ${building.reference}`)}
+                disabled={copilotLoading}
+              >
+                <Sparkles size={13} /> Explicar situação de {building.reference}
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Por que há documentos indisponíveis?')}
+                disabled={copilotLoading}
+              >
+                <FileText size={13} /> Documentos indisponíveis?
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt(`Resumir linha do tempo do processo de ${building.reference}`)}
+                disabled={copilotLoading}
+              >
+                <CalendarClock size={13} /> Resumir linha do tempo
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt(`Preencher novo cadastro com os dados da edificação ${building.reference}`)}
+                disabled={copilotLoading}
+              >
+                <Building2 size={13} /> Preencher cadastro com esta edificação
+              </button>
+            </>
+          ) : isRegisterView ? (
+            <>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Auto-revisar e corrigir pendências da tela')}
+                disabled={copilotLoading}
+              >
+                <Sparkles size={13} /> Auto-revisar pendências
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Sugerir e marcar medidas da IT-14')}
+                disabled={copilotLoading}
+              >
+                <ShieldCheck size={13} /> Sugerir medidas IT-14
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Exemplo: Galpão 620 m² em Feira de Santana')}
+                disabled={copilotLoading}
+              >
+                <Building2 size={13} /> Galpão 620 m² (FSA)
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Explicar meu enquadramento atual')}
+                disabled={copilotLoading}
+              >
+                <Info size={13} /> Explicar enquadramento
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="copilot-chip-action copilot-chip-highlight"
+                onClick={() => void handleSendDraftPrompt('Analise o resumo geral da carteira de edificações e processos acompanhados.')}
+                disabled={copilotLoading}
+              >
+                <Sparkles size={13} /> Resumo geral da carteira
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => void handleSendDraftPrompt('Quais processos estão notificados ou precisam de atenção imediata?')}
+                disabled={copilotLoading}
+              >
+                <CircleAlert size={13} /> Processos com pendência
+              </button>
+              <button
+                type="button"
+                className="copilot-chip-action"
+                onClick={() => onNavigateToRegister()}
+                disabled={copilotLoading}
+              >
+                <Plus size={13} /> Iniciar novo cadastro no Fênix
+              </button>
+            </>
           )}
-          {building && (
-            <button
-              type="button"
-              className="copilot-chip-action"
-              onClick={() => void handleSendDraftPrompt(`Explique a situação dos processos da edificação ${building.reference}`)}
-              disabled={copilotLoading}
-            >
-              <Building2 size={13} /> Explicar situação de {building.reference}
-            </button>
-          )}
-          <button
-            type="button"
-            className="copilot-chip-action"
-            onClick={() => void handleSendDraftPrompt('Auto-revisar e corrigir pendências da tela')}
-            disabled={copilotLoading}
-          >
-            <Sparkles size={13} /> Auto-revisar pendências
-          </button>
-          <button
-            type="button"
-            className="copilot-chip-action"
-            onClick={() => void handleSendDraftPrompt('Sugerir e marcar medidas da IT-14')}
-            disabled={copilotLoading}
-          >
-            <ShieldCheck size={13} /> Sugerir medidas IT-14
-          </button>
-          <button
-            type="button"
-            className="copilot-chip-action"
-            onClick={() => void handleSendDraftPrompt('Exemplo: Galpão 620 m² em Feira de Santana')}
-            disabled={copilotLoading}
-          >
-            <Building2 size={13} /> Galpão 620 m² (FSA)
-          </button>
-          <button
-            type="button"
-            className="copilot-chip-action"
-            onClick={() => void handleSendDraftPrompt('Explicar meu enquadramento atual')}
-            disabled={copilotLoading}
-          >
-            <Info size={13} /> Explicar enquadramento
-          </button>
         </div>
 
         <div className="copilot-chat-history">
@@ -1513,7 +1666,7 @@ function UnifiedCopilotSidebar({
                 </div>
               )}
 
-              {msg.appliedChangesSummary && msg.appliedChangesSummary.length > 0 && (
+              {msg.appliedChangesSummary && msg.appliedChangesSummary.length > 0 && isRegisterView && (
                 <div className="copilot-applied-badges">
                   {msg.appliedChangesSummary.map((item, bIdx) => (
                     <span key={bIdx} className="copilot-applied-badge">
@@ -1523,7 +1676,7 @@ function UnifiedCopilotSidebar({
                 </div>
               )}
 
-              {msg.pendingPatch && !isRegisterView && (
+              {msg.pendingPatch && !isRegisterView && /cadastr|preench|iniciar/i.test(copilotMessages[idx - 1]?.content || '') && (
                 <button
                   type="button"
                   className="button button-horizon-ai button-xs mt-2"
@@ -1578,8 +1731,8 @@ function UnifiedCopilotSidebar({
               isRegisterView
                 ? "Ex: 'Muda a área para 520m² e marca hidrantes'..."
                 : building
-                ? `Pergunte sobre ${building.reference} ou consulte a IT-14...`
-                : "Diga o que deseja cadastrar ou consulte a IT-14..."
+                ? `Pergunte sobre ${building.reference}, documentos ou processos...`
+                : "Pergunte sobre seus processos, carteira ou consulte a IT-14..."
             }
             value={copilotPrompt}
             onChange={(e) => setCopilotPrompt(e.target.value)}

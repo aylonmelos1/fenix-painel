@@ -1266,14 +1266,38 @@ export interface DraftAiAssistantRequest {
   currentDraft: Partial<ProjectDraftInput>;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   systemContext?: {
+    currentView?: string;
+    activeTab?: string;
     activeBuilding?: {
-      id: string;
+      id: number | string;
       reference: string;
-      municipality: string;
-      area?: string;
-      floors?: string;
+      municipality?: string;
+      address?: string;
+      area?: number | string;
+      floors?: number | string;
       height?: string;
-      processes?: Array<{ protocol: string; type: string; status: string; stage: string; updatedAt: string }>;
+      occupation?: string;
+      processes?: Array<{
+        id?: number | string;
+        protocol?: string;
+        type?: string;
+        status?: string;
+        stage?: string;
+        updatedAt?: string;
+        notes?: string;
+        documents?: Array<{
+          name?: string;
+          type?: string;
+          status?: string;
+          available?: boolean;
+          error?: string;
+        }>;
+        timeline?: Array<{
+          date?: string;
+          stage?: string;
+          description?: string;
+        }>;
+      }>;
     } | null;
     metricsSummary?: {
       totalBuildings: number;
@@ -1281,6 +1305,14 @@ export interface DraftAiAssistantRequest {
       notified: number;
       stopped: number;
     } | null;
+    buildingsOverview?: Array<{
+      id: number | string;
+      reference: string;
+      municipality?: string;
+      latestProtocol?: string;
+      latestStatus?: string;
+      latestStage?: string;
+    }>;
   };
   openaiApiKey?: string | null;
   openaiModel?: string | null;
@@ -1316,12 +1348,20 @@ async function runDeterministicDraftAssistant(
   const message = req.message.trim();
 
   // 0. Verificação de perguntas sobre situação de edificação e processos / métricas gerais
+  const isNonRegisterView = Boolean(req.systemContext?.currentView && req.systemContext.currentView !== 'register');
+  const isExplicitDraftRequest = /(cadastr|preench|rascunho|formul[aá]rio|criar projeto|iniciar novo cadastro|mudar|alter|coloqu|configur|defin|ajust|aplic.*medida|\d+\s*(?:m²|m2|paviment))/i.test(message);
+  const shouldHandleDraftPatch = !isNonRegisterView || isExplicitDraftRequest;
+
+  const isDocumentOrHistoryQuery =
+    /(?:documento|indispon[ií]ve|docs?|dae|comprovante|protocolo|certificado|avcb|clcb|linha do tempo|hist[oó]rico|movimenta[çc]|anexo)/i.test(message);
+
   const isStartDraftQuery =
     Boolean(req.systemContext?.activeBuilding) &&
     /(?:iniciar|novo cadastro|preparar rascunho)/i.test(message);
 
   const isGeneralPortfolio =
     !isStartDraftQuery &&
+    !isDocumentOrHistoryQuery &&
     (/(?:situaç[ãa]o\s+geral|carteira|processos?\s+em\s+an[aá]lise|notificaç[õo]es?|pend[êe]ncias?\s+da\s+carteira|edificaç[õo]es?\s+e\s+processos|resumo|panorama|vis[ãa]o\s+geral)/i.test(message) ||
       message.toLowerCase().includes('analise a situação geral'));
 
@@ -1329,8 +1369,94 @@ async function runDeterministicDraftAssistant(
     Boolean(req.systemContext?.activeBuilding) &&
     !isStartDraftQuery &&
     !isGeneralPortfolio &&
+    !isDocumentOrHistoryQuery &&
     (/(?:situaç[ãa]o|processo|etapa|status|notifica|como est[aá]|explic)/i.test(message) ||
       message.toLowerCase().includes('explicar a situação atual da edificação'));
+
+  if (isDocumentOrHistoryQuery) {
+    thinkingSteps.push(
+      'Analisando status de disponibilidade dos documentos do processo...',
+      'Verificando status de consulta e possíveis erros de integração com o Fênix...'
+    );
+
+    let replyText = '';
+    const b = req.systemContext?.activeBuilding;
+
+    if (b) {
+      replyText += `Sobre os documentos da edificação **${b.reference}**`;
+      if (b.municipality) replyText += ` em **${b.municipality}**`;
+      replyText += `:\n\n`;
+
+      const procs = b.processes || [];
+      const documentErrors: string[] = [];
+
+      if (procs.length > 0) {
+        for (const p of procs) {
+          replyText += `• **Processo ${p.protocol || '—'}** (${p.type || 'Projeto Técnico'}, Status: **${p.status || 'Homologado'}**, Etapa: **${p.stage || '—'}**):\n`;
+          if (p.documents && p.documents.length > 0) {
+            for (const d of p.documents) {
+              const state = d.status || (d.available ? 'Disponível' : 'Indisponível');
+              const err = d.error || (d as any).availabilityMessage;
+              if (err) documentErrors.push(err);
+              const errText = err ? ` — *${err}*` : '';
+              replyText += `  - **${d.name || 'Documento'}**: ${state}${errText}\n`;
+            }
+          } else {
+            replyText += `  - *Nenhum anexo adicional retornado pelo Fênix para este processo.*\n`;
+          }
+        }
+        replyText += `\n`;
+      }
+
+      const hasAuthError = documentErrors.some((e) => /sess[ãa]o|expirad|autentica|401|login/i.test(e));
+      const hasQueryError = documentErrors.some((e) => /falha ao consultar|erro ao consultar|tente consultar novamente/i.test(e));
+      const hasSefazNotice = documentErrors.some((e) => /sefaz/i.test(e));
+
+      replyText += `**Diagnóstico dos documentos no Painel:**\n\n`;
+
+      if (hasAuthError || hasQueryError) {
+        replyText += `Os documentos constam como indisponíveis devido a **falhas na consulta direta à API do Fênix CBMBA**:\n\n`;
+        replyText += `1. **Sessão ou autenticação do Fênix**: As rotas de documentos exigem sessão válida ativa. Quando a sessão do Fênix expira (erro de autenticação / HTTP 401), as chamadas para consultar os metadados de DAE, comprovante de protocolo e certificado oficial falham com "Falha ao consultar...".\n`;
+        replyText += `2. **Instabilidade ou timeout upstream**: Se o portal do CBMBA apresentar lentidão ou o serviço local for reiniciado durante a sincronização, o painel registra a falha de consulta.\n`;
+        replyText += `3. **Taxa / DAE**: ${hasSefazNotice ? 'A emissão deste DAE exige consulta manual no portal da SEFAZ-BA.' : 'No CBMBA, taxas pagas ou emitidas diretamente na SEFAZ-BA podem não retornar arquivo PDF via API.'}\n\n`;
+        replyText += `**Como resolver:**\n`;
+        replyText += `• Acesse **Configurações** no menu para verificar o status da conexão Fênix e reconectar sua conta caso a sessão esteja expirada.\n`;
+        replyText += `• Após reconectar, clique em **Sincronizar com o Fênix** ou utilize o botão de consultar novamente em cada documento.\n`;
+        replyText += `• Para obter 2ª via imediata do Certificado ou DAE, você também pode consultar diretamente o portal público do CBMBA ou da SEFAZ-BA com o número do protocolo (**${procs[0]?.protocol || 'do processo'}**).`;
+      } else {
+        replyText += `Documentos oficiais no Fênix CBMBA (como Metadados de DAE, Comprovante de protocolo e Certificado de aprovação) podem constar como **Indisponíveis** pelos seguintes motivos comprovados:\n\n`;
+        replyText += `1. **DAE**: A guia é gerada ou consultada diretamente no portal da SEFAZ-BA, não ficando retida na API do Fênix após quitação.\n`;
+        replyText += `2. **Comprovante de protocolo**: Fica disponível apenas se o endpoint correspondente do Fênix fornecer o arquivo digital do protocolo.\n`;
+        replyText += `3. **Certificado de aprovação**: Requer que o Fênix disponibilize o PDF assinado no endpoint de certificados do processo.\n`;
+        replyText += `4. **Sincronização**: Falhas de comunicação ou sessão expirada podem impedir o download dos metadados.\n\n`;
+        replyText += `**Recomendação:** Verifique a conexão com o Fênix em Configurações ou consulte o processo diretamente no portal do CBMBA com o número do protocolo.`;
+      }
+    } else {
+      replyText += `Documentos oficiais no Fênix CBMBA (como Metadados de DAE, Comprovante de protocolo e Certificado de aprovação) podem constar como **Indisponíveis** pelos seguintes motivos técnicos:\n\n`;
+      replyText += `1. **Falha de consulta ou sessão expirada**: As rotas de documentos do Fênix exigem autenticação ativa. Se a sessão expirar, o painel não consegue consultar os arquivos.\n`;
+      replyText += `2. **DAE na SEFAZ-BA**: A emissão ou validação de taxas é realizada no portal da SEFAZ-BA.\n`;
+      replyText += `3. **Disponibilidade no Fênix**: O Fênix só retorna comprovante e certificado se os arquivos estiverem gerados e acessíveis via API para o processo.\n\n`;
+      if (req.systemContext?.buildingsOverview && req.systemContext.buildingsOverview.length > 0) {
+        replyText += `Edificações disponíveis na sua carteira:\n`;
+        for (const ob of req.systemContext.buildingsOverview.slice(0, 5)) {
+          replyText += `• **${ob.reference}** (${ob.municipality || 'BA'}) — Protocolo: ${ob.latestProtocol || '—'}, Status: ${ob.latestStatus || '—'}\n`;
+        }
+      }
+    }
+
+    return {
+      reply: replyText,
+      thinkingSteps,
+      appliedChangesSummary: [],
+      formPatch: undefined,
+      suggestions: [
+        'Consultar DAE na SEFAZ-BA',
+        'Verificar protocolo no CBMBA',
+        'Atualizar histórico do Fênix',
+        '✦ Iniciar novo cadastro para esta edificação'
+      ]
+    };
+  }
 
   if (isGeneralPortfolio && req.systemContext?.metricsSummary) {
     thinkingSteps.push(
@@ -1686,8 +1812,17 @@ async function runDeterministicDraftAssistant(
 
   // 8. Resposta amigável (reply)
   let reply = '';
-  if (appliedChangesSummary.length > 0) {
+  if (appliedChangesSummary.length > 0 && shouldHandleDraftPatch) {
     reply = `Pronto! Atualizei o formulário com os dados solicitados:\n\n${appliedChangesSummary.map((s) => `• ${s}`).join('\n')}\n\nO imóvel está enquadrado na modalidade **${currentVal.tipoProjetoSigla}**. Você pode revisar os campos na tela ou simular o envio diretamente ao Fênix.`;
+  } else if (!shouldHandleDraftPatch) {
+    if (req.systemContext?.activeBuilding) {
+      const b = req.systemContext.activeBuilding;
+      reply = `Você está visualizando a edificação **${b.reference}** (${b.municipality || 'BA'}). Como posso ajudar com os processos ou documentos vinculados a este imóvel?`;
+    } else if (req.systemContext?.metricsSummary) {
+      reply = `Sua carteira possui ${req.systemContext.metricsSummary.totalBuildings} edificações acompanhadas. Como posso ajudar na gestão dos seus processos hoje?`;
+    } else {
+      reply = `Olá! Sou o Copiloto IA do Fênix Painel. Como posso ajudar na gestão dos seus processos, documentos ou regularização junto ao CBMBA?`;
+    }
   } else {
     reply = `Analisei o rascunho atual. A edificação está enquadrada em **${currentVal.tipoProjetoSigla}**. ${
       initialValidation.errors.length > 0
@@ -1706,8 +1841,8 @@ async function runDeterministicDraftAssistant(
   return {
     reply,
     thinkingSteps,
-    appliedChangesSummary,
-    formPatch: Object.keys(formPatch).length > 0 ? formPatch : undefined,
+    appliedChangesSummary: shouldHandleDraftPatch ? appliedChangesSummary : [],
+    formPatch: shouldHandleDraftPatch && Object.keys(formPatch).length > 0 ? formPatch : undefined,
     suggestions: suggestions.slice(0, 4)
   };
 }
@@ -1719,42 +1854,51 @@ export async function runDraftAiAssistant(
   const currentDraft = req.currentDraft || {};
   const validation = buildAndValidateFenixProjectPayload(currentDraft as ProjectDraftInput);
 
+  const isNonRegisterView = Boolean(req.systemContext?.currentView && req.systemContext.currentView !== 'register');
+  const isExplicitDraftRequest = /(cadastr|preench|rascunho|formul[aá]rio|criar projeto|iniciar novo cadastro|mudar|alter|coloqu|configur|defin|ajust|aplic.*medida|\d+\s*(?:m²|m2|paviment))/i.test(req.message);
+  const shouldHandleDraftPatch = !isNonRegisterView || isExplicitDraftRequest;
+
   if (req.openaiApiKey) {
     try {
       const client = new OpenAI({ apiKey: req.openaiApiKey, timeout: 30_000 });
       const model = req.openaiModel || 'gpt-4o-mini';
 
       const systemPrompt = `Você é o Copiloto Especialista em Regularização, Acompanhamento de Processos e Cadastro Técnico no Sistema Fênix (Corpo de Bombeiros Militar da Bahia - CBMBA).
-Você atua como copiloto de IA unificado para todo o painel Fênix, respondendo tanto sobre:
-1. Situação das edificações sincronizadas, processos em tramitação, etapas, notificações e métricas da carteira do usuário.
-2. Preenchimento, conferência e otimização de novos cadastros e projetos técnicos segundo o Decreto Estadual 16.302/2015 e a Instrução Técnica IT-14.
+Você atua como copiloto de IA unificado para todo o painel Fênix, com visão completa da tela atual do usuário:
+- "systemContext.currentView": Tela atual (ex.: "buildings", "register", "dashboard").
+- "systemContext.activeBuilding": Edificação selecionada na tela com dados cadastrais, processos em tramitação, documentos oficiais/anexados, disponibilidade e histórico de movimentações (timeline).
+- "systemContext.buildingsOverview": Relação de edificações da carteira do usuário com status do último processo.
+- "systemContext.metricsSummary": Contagem de processos em análise, notificados e parados.
 
-REGRAS OBRIGATÓRIAS DO FÊNIX:
-1. Alturas oficiais (exatamente uma das 6 opções):
-   - "Térrea = Um pavimento" (OBRIGATÓRIO ter exatamente 1 pavimento)
-   - "Baixa = H <= 6,00 m"
-   - "Baixa-Média = 6,00 m < H <= 12,00 m"
-   - "Média = 12,00 m < H <= 23,00 m"
-   - "Medianamente Alta = 23,00 m < H <= 30,00 m"
-   - "Alta = Acima de 30,00 m"
-2. Complemento de endereço: se não houver, enviar "***".
-3. Enquadramento de Projeto:
-   - Área total <= 200 m² e até 2 pavimentos -> PTSCLCB1 (CLCB sem vistoria prévia)
-   - Área total <= 750 m² e até 3 pavimentos -> PTSCLCB2 (ou PTSAVCB se exigida vistoria)
-   - Área total > 750 m² OU > 3 pavimentos OU CNAEs de alto risco (postos, inflamáveis, etc.) -> PT (Projeto Técnico Completo)
-4. Mantenha uma fala em português natural, técnica, clara e amigável.
-5. Sempre que puder aplicar alterações ou correções nos campos da tela de cadastro, retorne o objeto "formPatch". Se a dúvida for sobre acompanhamento ou situação de processos, explique de forma clara e sugira próximos passos práticos.
-6. Retorne ESTRITAMENTE um JSON com as chaves:
-   - "reply": string com a resposta ao usuário explicando o que foi feito ou orientando
+DIRETRIZES DE ATENDIMENTO:
+1. Dúvidas sobre Processos, Documentos e Edificações (telas de consulta/dashboard):
+   - Quando o usuário perguntar sobre a situação de uma edificação ou processo, responda com base nos dados reais presentes em "systemContext.activeBuilding".
+   - Quando perguntar sobre DOCUMENTOS INDISPONÍVEIS (ex.: "Metadados de DAE", "Comprovante de protocolo", "Certificado de aprovação"):
+     * Explique com base nos fatos e no campo "error" / status de cada documento:
+       a) "Falha ao consultar..." ou falha na atualização: decorrem de sessão do Fênix expirada (HTTP 401), instabilidade temporária do portal do CBMBA ou interrupção de sincronização por reinício. Recomende verificar a conexão em Configurações e sincronizar novamente.
+       b) "Metadados de DAE": No CBMBA, a taxa/DAE frequentemente deve ser emitida ou acessada diretamente no portal da SEFAZ-BA (não fica armazenada como PDF na API do Fênix se já foi quitada ou isenta).
+       c) "Comprovante de protocolo" e "Certificado de aprovação": Só ficam disponíveis se o endpoint do Fênix retornar o arquivo PDF válido correspondente.
+       d) NUNCA invente regras hipotéticas não documentadas do CBMBA (como "o Fênix desativa comprovante após homologação" ou "falta assinatura do Comando"). Baseie-se estritamente no erro real registrado no documento.
+   - NUNCA mencione erros de rascunho de cadastro (como CEP incompleto ou complemento "***") a menos que o usuário esteja explicitamente na tela de cadastro ("register") ou peça para preencher formulário.
+   - NUNCA gere "formPatch" quando o usuário estiver apenas tirando dúvidas sobre processos ou documentos. Retorne "formPatch": null e "appliedChangesSummary": [].
+
+2. Preenchimento e Cadastro Técnico (quando na tela "register" ou solicitação explícita):
+   - Auxilie a preencher, conferir e otimizar projetos técnicos segundo o Decreto Estadual 16.302/2015 e a IT-14.
+   - Alturas oficiais (6 opções): "Térrea = Um pavimento", "Baixa = H <= 6,00 m", "Baixa-Média = 6,00 m < H <= 12,00 m", "Média = 12,00 m < H <= 23,00 m", "Medianamente Alta = 23,00 m < H <= 30,00 m", "Alta = Acima de 30,00 m".
+   - Complemento de endereço: se não houver, preencher com "***".
+   - Retorne o objeto "formPatch" com as alterações para a tela.
+
+3. Formato de Saída (JSON estrito):
+   - "reply": string em português natural, técnica, clara e amigável
    - "thinkingSteps": string[] com os passos de raciocínio lógico
-   - "appliedChangesSummary": string[] com resumo das alterações aplicadas no formPatch (se houver)
-   - "formPatch": objeto com os campos alterados (se aplicável: step, name, edification, address, occupation, responsavel, securityMeasures)
+   - "appliedChangesSummary": string[] com resumo das alterações aplicadas no formPatch (vazio se não houver)
+   - "formPatch": objeto com campos alterados (apenas se aplicável a cadastro)
    - "suggestions": string[] com 3 ou 4 ações rápidas sugeridas`;
 
       const userContent = JSON.stringify({
         message: req.message,
         systemContext: req.systemContext || null,
-        currentDraftState: {
+        currentDraftState: shouldHandleDraftPatch ? {
           name: currentDraft.name || currentDraft.reference_name,
           edification: currentDraft.edification || {
             building_area: currentDraft.building_area,
@@ -1769,7 +1913,7 @@ REGRAS OBRIGATÓRIAS DO FÊNIX:
             enquadramento: validation.tipoProjetoSigla,
             recommendedMeasures: validation.recommendedMeasures
           }
-        }
+        } : null
       });
 
       const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
@@ -1793,7 +1937,10 @@ REGRAS OBRIGATÓRIAS DO FÊNIX:
       if (rawContent) {
         const parsed = JSON.parse(rawContent) as DraftAiAssistantResponse;
         if (parsed.reply && Array.isArray(parsed.thinkingSteps)) {
-          if (parsed.formPatch?.address?.county && !parsed.formPatch.address.municipio_id) {
+          if (!shouldHandleDraftPatch) {
+            parsed.formPatch = undefined;
+            parsed.appliedChangesSummary = [];
+          } else if (parsed.formPatch?.address?.county && !parsed.formPatch.address.municipio_id) {
             const norm = (str: unknown) =>
               String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
             const countyNorm = norm(parsed.formPatch.address.county);
