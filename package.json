@@ -10,7 +10,7 @@
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
-    "build": "tsc -p tsconfig.server.json && vite build",
+    "build": "tsc -p tsconfig.server.json && node scripts/copy-fenix-domains.mjs && vite build",
     "start": "node dist-server/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node --import tsx --test server/*.test.ts",
