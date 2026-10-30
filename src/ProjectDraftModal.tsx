@@ -1466,91 +1466,110 @@ function ProjectDraftModalContent({
   const localValidation = useMemo(() => {
     const errors: string[] = [];
     const warnings: string[] = [];
+    const fieldErrors: Record<string, string> = {};
+    const fieldMap: Record<string, { step: 1 | 2; cardId: string }> = {};
+
+    const registerError = (
+      key: string,
+      message: string,
+      step: 1 | 2,
+      cardId: string,
+      customFullError?: string
+    ) => {
+      const full = customFullError || `Etapa ${step}: ${message}`;
+      errors.push(full);
+      fieldErrors[key] = message;
+      fieldMap[key] = { step, cardId };
+      fieldMap[full] = { step, cardId };
+    };
 
     // Etapa 1: Edificação e Endereço
     if (formData.edificacao_mode === 'existing' && !String(formData.edificacao_id || '').trim()) {
-      errors.push('Etapa 1: Informe o ID da edificação existente no Fênix.');
+      registerError('edificacao_id', 'Informe o ID da edificação existente no Fênix.', 1, 'draft-s1-origem');
     }
     if (!(formData.edification?.reference_name || '').trim()) {
-      errors.push('Etapa 1: Nome de referência da edificação é obrigatório.');
+      registerError('edification.reference_name', 'Nome de referência da edificação é obrigatório.', 1, 'draft-s1-estrutura');
     }
     if (!formData.edification?.height) {
-      errors.push('Etapa 1: Altura da edificação é obrigatória.');
+      registerError('edification.height', 'Altura da edificação é obrigatória.', 1, 'draft-s1-estrutura');
     }
     if (formData.edification?.height === 'Térrea = Um pavimento' && Number(formData.edification?.number_floors) !== 1) {
-      errors.push('Etapa 1: Quando a altura for "Térrea", o número de pavimentos deve ser exatamente 1.');
+      registerError('edification.number_floors', 'Quando a altura for "Térrea", o número de pavimentos deve ser exatamente 1.', 1, 'draft-s1-estrutura');
     }
     if (calculatedTotalArea <= 0) {
-      errors.push('Etapa 1: A área total construída deve ser maior que zero.');
+      registerError('edification.building_area', 'A área total construída deve ser maior que zero.', 1, 'draft-s1-estrutura');
     }
     if (cleanDigits(formData.address?.zip_code).length !== 8) {
-      errors.push('Etapa 1: CEP deve conter 8 dígitos.');
+      registerError('address.zip_code', 'CEP deve conter 8 dígitos.', 1, 'draft-s1-endereco');
     }
     if (!(formData.address?.public_place || '').trim()) {
-      errors.push('Etapa 1: Logradouro é obrigatório.');
+      registerError('address.public_place', 'Logradouro é obrigatório.', 1, 'draft-s1-endereco');
     }
     if (!(formData.address?.number || '').trim()) {
-      errors.push('Etapa 1: Número predial é obrigatório (use "S/N" caso não exista).');
+      registerError('address.number', 'Número predial é obrigatório (use "S/N" caso não exista).', 1, 'draft-s1-endereco');
     }
     if (!(formData.address?.district || '').trim()) {
-      errors.push('Etapa 1: Bairro é obrigatório.');
+      registerError('address.district', 'Bairro é obrigatório.', 1, 'draft-s1-endereco');
     }
     if (!formData.address?.municipio_id) {
-      errors.push('Etapa 1: Município deve ser selecionado na lista oficial do CBMBA.');
+      registerError('address.municipio_id', 'Município deve ser selecionado na lista oficial do CBMBA.', 1, 'draft-s1-endereco');
     }
 
     // Etapa 2: Projeto e Enquadramento
     const rawCnpjCpf = cleanDigits(formData.institution?.cnpj_cpf);
     if (!rawCnpjCpf || (rawCnpjCpf.length !== 11 && rawCnpjCpf.length !== 14)) {
-      errors.push('Etapa 2: CNPJ ou CPF do estabelecimento é obrigatório e deve ter 11 ou 14 dígitos.');
+      registerError('institution.cnpj_cpf', 'CNPJ ou CPF do estabelecimento é obrigatório e deve ter 11 ou 14 dígitos.', 2, 'draft-s2-instituicao');
     }
     if (!(formData.institution?.razao_social || '').trim()) {
-      errors.push('Etapa 2: Razão Social do estabelecimento é obrigatória.');
+      registerError('institution.razao_social', 'Razão Social do estabelecimento é obrigatória.', 2, 'draft-s2-instituicao');
     }
     if (!cleanDigits(formData.institution?.cnae)) {
-      errors.push('Etapa 2: Código CNAE é obrigatório.');
+      registerError('institution.cnae', 'Código CNAE é obrigatório.', 2, 'draft-s2-instituicao');
     }
     if (
       (formData.institution?.natureza_juridica === 'Outros' || (formData.institution as any)?.porte === 'Outros' || (formData as any)?.porte === 'Outros') &&
       !formData.porte_outros?.trim() &&
       !(formData.institution as any)?.porte_outros?.trim()
     ) {
-      errors.push('Etapa 2: Especifique a Natureza Jurídica quando selecionar "Outros".');
+      registerError('porte_outros', 'Especifique a Natureza Jurídica quando selecionar "Outros".', 2, 'draft-s2-instituicao');
     }
-    if (!formData.occupation?.occupation_group_id || !formData.occupation?.division_group_id) {
-      errors.push('Etapa 2: Grupo e Divisão de ocupação IT 14 são obrigatórios.');
+    if (!formData.occupation?.occupation_group_id) {
+      registerError('occupation.occupation_group_id', 'Grupo de ocupação IT 14 é obrigatório.', 2, 'draft-s2-ocupacao');
+    }
+    if (!formData.occupation?.division_group_id) {
+      registerError('occupation.division_group_id', 'Divisão de ocupação IT 14 é obrigatória.', 2, 'draft-s2-ocupacao');
     }
     if (!(formData.proprietario?.nome_proprietario || '').trim()) {
-      errors.push('Etapa 2: Nome do proprietário é obrigatório.');
+      registerError('proprietario.nome_proprietario', 'Nome do proprietário é obrigatório.', 2, 'draft-s2-proprietario');
     }
     if (!cleanDigits(formData.proprietario?.cpf_cnpj_prop)) {
-      errors.push('Etapa 2: CPF/CNPJ do proprietário é obrigatório.');
+      registerError('proprietario.cpf_cnpj_prop', 'CPF/CNPJ do proprietário é obrigatório.', 2, 'draft-s2-proprietario');
     }
     if (!(formData.proprietario?.email_proprietario || '').trim() || !formData.proprietario?.email_proprietario?.includes('@')) {
-      errors.push('Etapa 2: E-mail de contato do proprietário é obrigatório.');
+      registerError('proprietario.email_proprietario', 'E-mail de contato do proprietário é obrigatório.', 2, 'draft-s2-proprietario');
     }
     const propTel = cleanDigits(formData.proprietario?.tel_proprietario);
     if (!propTel || (propTel.length !== 10 && propTel.length !== 11)) {
-      errors.push('Etapa 2: Telefone do proprietário é obrigatório (com DDD).');
+      registerError('proprietario.tel_proprietario', 'Telefone do proprietário é obrigatório (com DDD).', 2, 'draft-s2-proprietario');
     }
 
     // Responsável pelo uso quando não for a mesma pessoa
     const mesmoProp = Boolean(formData.responsavel?.responsavel_uso_igual_prop ?? (formData as any).mesmo_proprietario);
     if (!mesmoProp) {
       if (!formData.responsavel?.nome_responsavel?.trim()) {
-        errors.push('Etapa 2: Nome do responsável pelo uso é obrigatório.');
+        registerError('responsavel.nome_responsavel', 'Nome do responsável pelo uso é obrigatório.', 2, 'draft-s2-proprietario');
       }
       const respDoc = cleanDigits(formData.responsavel?.cpf_cnpj_resp);
       if (!respDoc || (respDoc.length !== 11 && respDoc.length !== 14)) {
-        errors.push('Etapa 2: CPF/CNPJ do responsável pelo uso é obrigatório (11 ou 14 dígitos).');
+        registerError('responsavel.cpf_cnpj_resp', 'CPF/CNPJ do responsável pelo uso é obrigatório (11 ou 14 dígitos).', 2, 'draft-s2-proprietario');
       }
       const respEmail = String(formData.responsavel?.email_responsavel_uso || (formData.responsavel as any)?.email_responsavel || '').trim();
       if (!respEmail || !respEmail.includes('@')) {
-        errors.push('Etapa 2: E-mail do responsável pelo uso é obrigatório.');
+        registerError('responsavel.email_responsavel_uso', 'E-mail do responsável pelo uso é obrigatório.', 2, 'draft-s2-proprietario');
       }
       const respTel = cleanDigits(formData.responsavel?.tel_responsavel_uso || (formData.responsavel as any)?.tel_responsavel || '');
       if (!respTel || (respTel.length !== 10 && respTel.length !== 11)) {
-        errors.push('Etapa 2: Telefone do responsável pelo uso é obrigatório (com DDD).');
+        registerError('responsavel.tel_responsavel_uso', 'Telefone do responsável pelo uso é obrigatório (com DDD).', 2, 'draft-s2-proprietario');
       }
     }
 
@@ -1558,7 +1577,7 @@ function ProjectDraftModalContent({
     const isGlpAtivo = Boolean(formData.specialRisks?.gas_liquefeito_petroleo || (formData as any).glp_quantidade_kg || formData.glpData?.total_kg_glp);
     const qtdGlp = Number(formData.glpData?.total_kg_glp ?? (formData as any).glp_quantidade_kg ?? (formData as any).total_kg_glp ?? 0);
     if (isGlpAtivo && !(qtdGlp > 0)) {
-      errors.push('Etapa 2: Informe a quantidade total de GLP (kg).');
+      registerError('glp_quantidade', 'Informe a quantidade total de GLP (kg).', 2, 'draft-s2-riscos-glp');
     }
 
     // Validação de Responsável Técnico e ART/RRT
@@ -1567,66 +1586,70 @@ function ProjectDraftModalContent({
 
     if (!isPtsClcb1SaidaDireta) {
       if (!mainArt) {
-        errors.push('Etapa 2: Número de ART/RRT do projeto técnico é obrigatório.');
+        registerError('n_art_rrt', 'Número de ART/RRT do projeto técnico é obrigatório.', 2, 'draft-s2-dados-gerais');
       }
       if (!formData.responsaveis_tecnicos || formData.responsaveis_tecnicos.length === 0) {
-        errors.push('Etapa 2: Cadastre ao menos 1 Responsável Técnico pelo projeto.');
+        const msg = 'Cadastre ao menos 1 Responsável Técnico pelo projeto.';
+        errors.push(`Etapa 2: ${msg}`);
+        fieldMap[`Etapa 2: ${msg}`] = { step: 2, cardId: 'draft-s2-rt' };
       } else {
         formData.responsaveis_tecnicos.forEach((rt, idx) => {
           const idxMsg = formData.responsaveis_tecnicos!.length > 1 ? ` #${idx + 1}` : '';
           if (!rt.nome_tecnico?.trim()) {
-            errors.push(`Etapa 2: Nome do Responsável Técnico${idxMsg} é obrigatório.`);
+            registerError(`rt_nome_${idx}`, 'Nome do Responsável Técnico é obrigatório.', 2, 'draft-s2-rt', `Etapa 2: Nome do Responsável Técnico${idxMsg} é obrigatório.`);
           }
           const cDigits = cleanDigits(rt.cpf_cnpj_tecnico);
           if (!cDigits || (cDigits.length !== 11 && cDigits.length !== 14)) {
-            errors.push(`Etapa 2: CPF/CNPJ do Responsável Técnico${idxMsg} é obrigatório (11 ou 14 dígitos).`);
+            registerError(`rt_cpf_${idx}`, 'CPF/CNPJ do Responsável Técnico é obrigatório (11 ou 14 dígitos).', 2, 'draft-s2-rt', `Etapa 2: CPF/CNPJ do Responsável Técnico${idxMsg} é obrigatório (11 ou 14 dígitos).`);
           }
           if (!rt.conselho || !['CREA', 'CAU', 'CFT'].includes(rt.conselho)) {
-            errors.push(`Etapa 2: Conselho do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
+            registerError(`rt_conselho_${idx}`, 'Conselho do Responsável Técnico deve ser CREA, CAU ou CFT.', 2, 'draft-s2-rt', `Etapa 2: Conselho do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
           }
           if (!rt.n_registro_conselho?.trim()) {
-            errors.push(`Etapa 2: Nº de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
+            registerError(`rt_registro_${idx}`, 'Nº de registro no conselho do Responsável Técnico é obrigatório.', 2, 'draft-s2-rt', `Etapa 2: Nº de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
           }
           if (formData.responsaveis_tecnicos!.length > 1 && !rt.n_art_rrt?.trim()) {
-            errors.push(`Etapa 2: Nº da ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
+            registerError(`rt_art_${idx}`, 'Nº da ART/RRT do Responsável Técnico é obrigatório.', 2, 'draft-s2-rt', `Etapa 2: Nº da ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
           }
           if (!rt.email_tecnico?.trim() || !rt.email_tecnico.includes('@')) {
-            errors.push(`Etapa 2: E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
+            registerError(`rt_email_${idx}`, 'E-mail do Responsável Técnico é obrigatório e deve ser válido.', 2, 'draft-s2-rt', `Etapa 2: E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
           }
           const tDigits = cleanDigits(rt.telefone_tecnico);
           if (!tDigits || (tDigits.length !== 10 && tDigits.length !== 11)) {
-            errors.push(`Etapa 2: Telefone do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos com DDD).`);
+            registerError(`rt_tel_${idx}`, 'Telefone do Responsável Técnico é obrigatório (10 ou 11 dígitos).', 2, 'draft-s2-rt', `Etapa 2: Telefone do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos com DDD).`);
           }
         });
       }
     } else if (formData.incluir_rt_opcional) {
       if (!formData.responsaveis_tecnicos || formData.responsaveis_tecnicos.length === 0) {
-        errors.push('Etapa 2: Ao optar por cadastrar Responsável Técnico, cadastre ao menos 1 profissional.');
+        const msg = 'Ao optar por cadastrar Responsável Técnico, cadastre ao menos 1 profissional.';
+        errors.push(`Etapa 2: ${msg}`);
+        fieldMap[`Etapa 2: ${msg}`] = { step: 2, cardId: 'draft-s2-rt' };
       } else {
         formData.responsaveis_tecnicos.forEach((rt, idx) => {
           const idxMsg = formData.responsaveis_tecnicos!.length > 1 ? ` #${idx + 1}` : '';
           if (!rt.nome_tecnico?.trim()) {
-            errors.push(`Etapa 2: Nome do Responsável Técnico${idxMsg} é obrigatório.`);
+            registerError(`rt_nome_${idx}`, 'Nome do Responsável Técnico é obrigatório.', 2, 'draft-s2-rt', `Etapa 2: Nome do Responsável Técnico${idxMsg} é obrigatório.`);
           }
           const cDigits = cleanDigits(rt.cpf_cnpj_tecnico);
           if (!cDigits || (cDigits.length !== 11 && cDigits.length !== 14)) {
-            errors.push(`Etapa 2: CPF/CNPJ do Responsável Técnico${idxMsg} é obrigatório (11 ou 14 dígitos).`);
+            registerError(`rt_cpf_${idx}`, 'CPF/CNPJ do Responsável Técnico é obrigatório (11 ou 14 dígitos).', 2, 'draft-s2-rt', `Etapa 2: CPF/CNPJ do Responsável Técnico${idxMsg} é obrigatório (11 ou 14 dígitos).`);
           }
           if (!rt.conselho || !['CREA', 'CAU', 'CFT'].includes(rt.conselho)) {
-            errors.push(`Etapa 2: Conselho do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
+            registerError(`rt_conselho_${idx}`, 'Conselho do Responsável Técnico deve ser CREA, CAU ou CFT.', 2, 'draft-s2-rt', `Etapa 2: Conselho do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
           }
           if (!rt.n_registro_conselho?.trim()) {
-            errors.push(`Etapa 2: Nº de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
+            registerError(`rt_registro_${idx}`, 'Nº de registro no conselho do Responsável Técnico é obrigatório.', 2, 'draft-s2-rt', `Etapa 2: Nº de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
           }
           if (!rt.n_art_rrt?.trim() && !mainArt) {
-            errors.push(`Etapa 2: Nº da ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
+            registerError(`rt_art_${idx}`, 'Nº da ART/RRT do Responsável Técnico é obrigatório.', 2, 'draft-s2-rt', `Etapa 2: Nº da ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
           }
           if (!rt.email_tecnico?.trim() || !rt.email_tecnico.includes('@')) {
-            errors.push(`Etapa 2: E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
+            registerError(`rt_email_${idx}`, 'E-mail do Responsável Técnico é obrigatório e deve ser válido.', 2, 'draft-s2-rt', `Etapa 2: E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
           }
           const tDigits = cleanDigits(rt.telefone_tecnico);
           if (!tDigits || (tDigits.length !== 10 && tDigits.length !== 11)) {
-            errors.push(`Etapa 2: Telefone do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos com DDD).`);
+            registerError(`rt_tel_${idx}`, 'Telefone do Responsável Técnico é obrigatório (10 ou 11 dígitos).', 2, 'draft-s2-rt', `Etapa 2: Telefone do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos com DDD).`);
           }
         });
       }
@@ -1634,17 +1657,19 @@ function ProjectDraftModalContent({
 
     if ([2, 3, 7, 8].includes(formData.tipo_projeto_id || 0)) {
       if (!formData.data_inicio || !formData.data_fim) {
-        errors.push('Etapa 2: Datas de início e término são obrigatórias para ocupações temporárias.');
+        const msg = 'Datas de início e término são obrigatórias para ocupações temporárias.';
+        errors.push(`Etapa 2: ${msg}`);
+        fieldMap[`Etapa 2: ${msg}`] = { step: 2, cardId: 'draft-s2-dados-gerais' };
       }
     }
 
     // Modalidade PTS: limites e requisitos bloqueantes
     if ([4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0)) {
       if (calculatedTotalArea > 750 || Number(formData.edification?.number_floors) > 3) {
-        errors.push('Etapa 2: Edificação acima de 750 m² ou 3 pavimentos exige Projeto Técnico Completo (PT).');
+        registerError('pts_enquadramento', 'Edificação acima de 750 m² ou 3 pavimentos exige Projeto Técnico Completo (PT).', 2, 'draft-s2-dados-gerais');
       }
       if (formData.questionario?.edf_saida_direta === false && !formData.questionario?.edf_regularizada_certificado) {
-        errors.push('Etapa 2: Sem saída direta para via pública, o PTS exige que a edificação principal possua AVCB/CLCB vigente (ou altere para PT Completo).');
+        registerError('pts_saida_direta', 'Sem saída direta para via pública, o PTS exige que a edificação principal possua AVCB/CLCB vigente.', 2, 'draft-s2-questionario', 'Etapa 2: Sem saída direta para via pública, o PTS exige que a edificação principal possua AVCB/CLCB vigente (ou altere para PT Completo).');
       }
     }
 
@@ -1656,9 +1681,23 @@ function ProjectDraftModalContent({
     return {
       valid: errors.length === 0,
       errors,
-      warnings
+      warnings,
+      fieldErrors,
+      fieldMap
     };
   }, [formData, calculatedTotalArea, enquadramento]);
+
+  const isFieldPending = (key: string): boolean => Boolean(localValidation.fieldErrors[key]);
+  const getFieldError = (key: string): string | undefined => localValidation.fieldErrors[key];
+
+  const handleNavigateToPending = (err: string) => {
+    const meta = localValidation.fieldMap[err] || (err.startsWith('Etapa 1:') ? { step: 1, cardId: 'draft-s1-origem' } : { step: 2, cardId: 'draft-s2-enquadramento' });
+    setStep(meta.step);
+    setTimeout(() => {
+      const el = document.getElementById(meta.cardId);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  };
 
   // Garante inicialização de ao menos 1 RT quando não for PTSCLCB1 com saída direta
   useEffect(() => {
@@ -2952,10 +2991,10 @@ function ProjectDraftModalContent({
                   {/* Seletor de edificação existente */}
                   {formData.edificacao_mode === 'existing' && (
                     <div className="existing-building-picker">
-                      <label className="field-label">
+                      <label className={`field-label ${isFieldPending('edificacao_id') ? 'has-pending' : ''}`}>
                         <span>Selecione a Edificação Acompanhada ({buildings.length} disponíveis)</span>
                         <select
-                          className="input-select"
+                          className={`input-select ${isFieldPending('edificacao_id') ? 'input-pending-error' : ''}`}
                           value={formData.edificacao_id ? String(formData.edificacao_id) : ''}
                           onChange={(e) => handleSelectExistingBuilding(e.target.value)}
                         >
@@ -2966,6 +3005,11 @@ function ProjectDraftModalContent({
                             </option>
                           ))}
                         </select>
+                        {isFieldPending('edificacao_id') && (
+                          <span className="field-pending-msg">
+                            <CircleAlert size={12} /> {getFieldError('edificacao_id')}
+                          </span>
+                        )}
                       </label>
                       <small className="field-hint">
                         Ao selecionar, os campos estruturais e o município serão preenchidos automaticamente. O Fênix vinculará o projeto ao ID existente.
@@ -2983,12 +3027,12 @@ function ProjectDraftModalContent({
                     <div className="form-grid">
                       {/* CEP com Busca ViaCEP */}
                       <div className="form-col-4">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('address.zip_code') ? 'has-pending' : ''}`}>
                           <span>CEP (8 dígitos) *</span>
                           <div className="input-with-button">
                             <input
                               type="text"
-                              className="input-text"
+                              className={`input-text ${isFieldPending('address.zip_code') ? 'input-pending-error' : ''}`}
                               placeholder="00000-000"
                               maxLength={9}
                               value={formatCep(formData.address.zip_code)}
@@ -3010,6 +3054,11 @@ function ProjectDraftModalContent({
                               {cepLoading ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />} Buscar
                             </button>
                           </div>
+                          {isFieldPending('address.zip_code') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('address.zip_code')}
+                            </span>
+                          )}
                         </label>
                         {cepNotice && (
                           <div className={`field-notice notice-${cepNotice.type}`}>
@@ -3021,11 +3070,11 @@ function ProjectDraftModalContent({
 
                       {/* Logradouro */}
                       <div className="form-col-8">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('address.public_place') ? 'has-pending' : ''}`}>
                           <span>Logradouro (Rua, Av, Praça) *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('address.public_place') ? 'input-pending-error' : ''}`}
                             maxLength={100}
                             placeholder="Ex: RUA OTACILIO PINHEIRO"
                             value={formData.address.public_place}
@@ -3034,17 +3083,22 @@ function ProjectDraftModalContent({
                               address: { ...prev.address, public_place: e.target.value.toUpperCase() }
                             }))}
                           />
+                          {isFieldPending('address.public_place') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('address.public_place')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       {/* Número */}
                       <div className="form-col-3">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('address.number') ? 'has-pending' : ''}`}>
                           <span>Número *</span>
                           <div className="input-with-button">
                             <input
                               type="text"
-                              className="input-text"
+                              className={`input-text ${isFieldPending('address.number') ? 'input-pending-error' : ''}`}
                               maxLength={10}
                               placeholder="Nº ou S/N"
                               value={formData.address.number}
@@ -3062,6 +3116,11 @@ function ProjectDraftModalContent({
                               S/N
                             </button>
                           </div>
+                          {isFieldPending('address.number') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('address.number')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -3086,11 +3145,11 @@ function ProjectDraftModalContent({
 
                       {/* Bairro */}
                       <div className="form-col-5">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('address.district') ? 'has-pending' : ''}`}>
                           <span>Bairro / Distrito *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('address.district') ? 'input-pending-error' : ''}`}
                             maxLength={50}
                             placeholder="Ex: CENTRO"
                             value={formData.address.district}
@@ -3099,15 +3158,20 @@ function ProjectDraftModalContent({
                               address: { ...prev.address, district: e.target.value.toUpperCase() }
                             }))}
                           />
+                          {isFieldPending('address.district') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('address.district')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       {/* Município CBMBA - Select Único com 417 municípios ordenados alfabeticamente */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('address.municipio_id') ? 'has-pending' : ''}`}>
                           <span>Município CBMBA (Bahia — 417 municípios) *</span>
                           <select
-                            className="input-select"
+                            className={`input-select ${isFieldPending('address.municipio_id') ? 'input-pending-error' : ''}`}
                             value={formData.address.municipio_id || ''}
                             onChange={(e) => {
                               const val = Number(e.target.value) || null;
@@ -3129,6 +3193,11 @@ function ProjectDraftModalContent({
                               </option>
                             ))}
                           </select>
+                          {isFieldPending('address.municipio_id') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('address.municipio_id')}
+                            </span>
+                          )}
                         </label>
                         <small className="field-hint">Preenchido automaticamente ao consultar CNPJ ou CEP.</small>
                       </div>
@@ -3164,11 +3233,11 @@ function ProjectDraftModalContent({
                     <div className="form-grid">
                       {/* Nome de Referência */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('edification.reference_name') ? 'has-pending' : ''}`}>
                           <span>Nome de Referência do Imóvel *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('edification.reference_name') ? 'input-pending-error' : ''}`}
                             maxLength={100}
                             placeholder="Ex: VAL SAT, Condomínio Parque dos Sonhos"
                             value={formData.edification.reference_name}
@@ -3177,6 +3246,11 @@ function ProjectDraftModalContent({
                               edification: { ...prev.edification, reference_name: e.target.value }
                             }))}
                           />
+                          {isFieldPending('edification.reference_name') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('edification.reference_name')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -3200,10 +3274,10 @@ function ProjectDraftModalContent({
 
                       {/* Altura Oficial (Enum 6 Opções) */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('edification.height') ? 'has-pending' : ''}`}>
                           <span>Altura da Edificação (Enum Oficial CBMBA) *</span>
                           <select
-                            className="input-select"
+                            className={`input-select ${isFieldPending('edification.height') ? 'input-pending-error' : ''}`}
                             value={formData.edification.height}
                             onChange={(e) => {
                               const newHeight = e.target.value;
@@ -3224,19 +3298,24 @@ function ProjectDraftModalContent({
                               </option>
                             ))}
                           </select>
+                          {isFieldPending('edification.height') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('edification.height')}
+                            </span>
+                          )}
                         </label>
                         <small className="field-hint">O Fênix exige a faixa oficial do CBMBA.</small>
                       </div>
 
                       {/* Número de Pavimentos */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('edification.number_floors') ? 'has-pending' : ''}`}>
                           <span>Nº de Pavimentos *</span>
                           <input
                             type="number"
                             min={1}
                             max={100}
-                            className="input-text"
+                            className={`input-text ${isFieldPending('edification.number_floors') ? 'input-pending-error' : ''}`}
                             disabled={formData.edification.height === 'Térrea = Um pavimento'}
                             value={formData.edification.number_floors}
                             onChange={(e) => {
@@ -3257,6 +3336,11 @@ function ProjectDraftModalContent({
                               }));
                             }}
                           />
+                          {isFieldPending('edification.number_floors') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('edification.number_floors')}
+                            </span>
+                          )}
                         </label>
                         {formData.edification.height === 'Térrea = Um pavimento' ? (
                           <small className="field-hint text-teal">✓ Bloqueado em 1 pavimento devido à altura "Térrea".</small>
@@ -3267,11 +3351,11 @@ function ProjectDraftModalContent({
 
                       {/* Áreas: Construída, A Construir, Desconto */}
                       <div className="form-col-4">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('edification.building_area') ? 'has-pending' : ''}`}>
                           <span>Área Construída (m²) *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('edification.building_area') ? 'input-pending-error' : ''}`}
                             placeholder="Ex: 434.11"
                             value={formData.edification.building_area}
                             onChange={(e) => setFormData((prev) => ({
@@ -3279,6 +3363,11 @@ function ProjectDraftModalContent({
                               edification: { ...prev.edification, building_area: e.target.value }
                             }))}
                           />
+                          {isFieldPending('edification.building_area') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('edification.building_area')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -3424,10 +3513,10 @@ function ProjectDraftModalContent({
                     <div className="form-grid">
                       {/* Tipo Oficial de Projeto Técnico */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('pts_enquadramento') ? 'has-pending' : ''}`}>
                           <span>Tipo Oficial de Projeto Técnico (Fênix CBMBA) *</span>
                           <select
-                            className="input-select"
+                            className={`input-select ${isFieldPending('pts_enquadramento') ? 'input-pending-error' : ''}`}
                             value={formData.tipo_projeto_id || 4}
                             onChange={(e) => {
                               const tid = Number(e.target.value);
@@ -3456,6 +3545,11 @@ function ProjectDraftModalContent({
                               ))}
                             </optgroup>
                           </select>
+                          {isFieldPending('pts_enquadramento') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('pts_enquadramento')}
+                            </span>
+                          )}
                         </label>
                         <small className="field-hint">Todas as 8 modalidades oficiais do Fênix CBMBA em um único cadastro unificado.</small>
                       </div>
@@ -3478,7 +3572,7 @@ function ProjectDraftModalContent({
 
                       {/* ART / RRT Geral */}
                       <div className="form-col-3">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('n_art_rrt') ? 'has-pending' : ''}`}>
                           <div className="flex-between">
                             <span>
                               Nº ART / RRT
@@ -3496,17 +3590,11 @@ function ProjectDraftModalContent({
                           </div>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('n_art_rrt') ? 'input-pending-error' : ''}`}
                             maxLength={30}
                             required={!(formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false)}
                             placeholder="Ex: BA20261628773"
                             value={formData.n_art_rrt || formData.responsaveis_tecnicos?.[0]?.n_art_rrt || ''}
-                            style={
-                              !(formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false) &&
-                              !(formData.n_art_rrt?.trim() || formData.responsaveis_tecnicos?.[0]?.n_art_rrt?.trim())
-                                ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
-                                : undefined
-                            }
                             onChange={(e) => {
                               const val = e.target.value.toUpperCase();
                               setFormData((prev) => {
@@ -3530,6 +3618,11 @@ function ProjectDraftModalContent({
                               });
                             }}
                           />
+                          {isFieldPending('n_art_rrt') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('n_art_rrt')}
+                            </span>
+                          )}
                         </label>
                         <small className="field-hint">Registro no CREA / CAU / CFT.</small>
                       </div>
@@ -3654,11 +3747,11 @@ function ProjectDraftModalContent({
 
                       {/* CNPJ / CPF */}
                       <div className="form-col-4">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('institution.cnpj_cpf') ? 'has-pending' : ''}`}>
                           <span>{formData.institution.tipo_pessoa === 'PF' ? 'CPF *' : 'CNPJ *'}</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('institution.cnpj_cpf') ? 'input-pending-error' : ''}`}
                             placeholder={formData.institution.tipo_pessoa === 'PF' ? '000.000.000-00' : '00.000.000/0000-00'}
                             value={formatCnpjCpf(formData.institution.cnpj_cpf)}
                             onChange={(e) => {
@@ -3669,16 +3762,21 @@ function ProjectDraftModalContent({
                               }));
                             }}
                           />
+                          {isFieldPending('institution.cnpj_cpf') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('institution.cnpj_cpf')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       {/* Razão Social */}
                       <div className="form-col-5">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('institution.razao_social') ? 'has-pending' : ''}`}>
                           <span>Razão Social / Nome Completo *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('institution.razao_social') ? 'input-pending-error' : ''}`}
                             maxLength={100}
                             placeholder="Ex: VANDERLEI DA SILVA SANTOS"
                             value={formData.institution.razao_social}
@@ -3687,6 +3785,11 @@ function ProjectDraftModalContent({
                               institution: { ...prev.institution, razao_social: e.target.value.toUpperCase() }
                             }))}
                           />
+                          {isFieldPending('institution.razao_social') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('institution.razao_social')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -3729,27 +3832,32 @@ function ProjectDraftModalContent({
 
                       {formData.institution.natureza_juridica === 'Outros' && (
                         <div className="form-col-6 animate-fade-in">
-                          <label className="field-label">
+                          <label className={`field-label ${isFieldPending('porte_outros') ? 'has-pending' : ''}`}>
                             <span>Especifique a Natureza Jurídica *</span>
                             <input
                               type="text"
-                              className="input-text"
+                              className={`input-text ${isFieldPending('porte_outros') ? 'input-pending-error' : ''}`}
                               placeholder="Especifique o tipo societário ou porte"
                               value={formData.porte_outros || ''}
                               onChange={(e) => setFormData((prev) => ({ ...prev, porte_outros: e.target.value }))}
                             />
+                            {isFieldPending('porte_outros') && (
+                              <span className="field-pending-msg">
+                                <CircleAlert size={12} /> {getFieldError('porte_outros')}
+                              </span>
+                            )}
                           </label>
                         </div>
                       )}
 
                       {/* CNAE com Consulta Fênix */}
                       <div className="form-col-4">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('institution.cnae') ? 'has-pending' : ''}`}>
                           <span>Código CNAE (7 dígitos) *</span>
                           <div className="input-with-button">
                             <input
                               type="text"
-                              className="input-text"
+                              className={`input-text ${isFieldPending('institution.cnae') ? 'input-pending-error' : ''}`}
                               placeholder="0000-0/00"
                               value={formatCnae(formData.institution.cnae)}
                               onChange={(e) => {
@@ -3770,6 +3878,11 @@ function ProjectDraftModalContent({
                               {cnaeLoading ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />} Consultar
                             </button>
                           </div>
+                          {isFieldPending('institution.cnae') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('institution.cnae')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -3835,10 +3948,10 @@ function ProjectDraftModalContent({
                     <div className="form-grid">
                       {/* Grupo de Ocupação */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('occupation.occupation_group_id') ? 'has-pending' : ''}`}>
                           <span>Grupo de Ocupação (Tabela 1 IT 14) *</span>
                           <select
-                            className="input-select"
+                            className={`input-select ${isFieldPending('occupation.occupation_group_id') ? 'input-pending-error' : ''}`}
                             value={formData.occupation.occupation_group_id || ''}
                             onChange={(e) => {
                               const gid = Number(e.target.value) || null;
@@ -3870,15 +3983,20 @@ function ProjectDraftModalContent({
                               </option>
                             ))}
                           </select>
+                          {isFieldPending('occupation.occupation_group_id') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('occupation.occupation_group_id')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       {/* Divisão de Ocupação */}
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('occupation.division_group_id') ? 'has-pending' : ''}`}>
                           <span>Divisão de Ocupação *</span>
                           <select
-                            className="input-select"
+                            className={`input-select ${isFieldPending('occupation.division_group_id') ? 'input-pending-error' : ''}`}
                             value={formData.occupation.division_group_id || ''}
                             onChange={(e) => {
                               const did = Number(e.target.value) || null;
@@ -3902,6 +4020,11 @@ function ProjectDraftModalContent({
                               </>
                             )}
                           </select>
+                          {isFieldPending('occupation.division_group_id') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('occupation.division_group_id')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -4085,6 +4208,11 @@ function ProjectDraftModalContent({
                               <AlertTriangle size={14} /> Atenção CBMBA: Estabelecimentos sem saída direta para a via pública exigem que a edificação maior possua certificado regularizado.
                             </div>
                           )}
+                          {isFieldPending('pts_saida_direta') && (
+                            <div className="field-pending-msg" style={{ marginTop: '6px' }}>
+                              <CircleAlert size={12} /> {getFieldError('pts_saida_direta')}
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -4140,11 +4268,11 @@ function ProjectDraftModalContent({
 
                       {/* Nome do Proprietário */}
                       <div className="form-col-5">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('proprietario.nome_proprietario') ? 'has-pending' : ''}`}>
                           <span>Nome do Proprietário *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('proprietario.nome_proprietario') ? 'input-pending-error' : ''}`}
                             maxLength={100}
                             placeholder="Nome completo ou Razão Social"
                             value={formData.proprietario.nome_proprietario}
@@ -4153,15 +4281,20 @@ function ProjectDraftModalContent({
                               proprietario: { ...prev.proprietario, nome_proprietario: e.target.value.toUpperCase() }
                             }))}
                           />
+                          {isFieldPending('proprietario.nome_proprietario') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('proprietario.nome_proprietario')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       <div className="form-col-4">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('proprietario.cpf_cnpj_prop') ? 'has-pending' : ''}`}>
                           <span>CPF / CNPJ do Proprietário *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('proprietario.cpf_cnpj_prop') ? 'input-pending-error' : ''}`}
                             placeholder="00.000.000/0000-00"
                             value={formatCnpjCpf(formData.proprietario.cpf_cnpj_prop)}
                             onChange={(e) => {
@@ -4172,15 +4305,20 @@ function ProjectDraftModalContent({
                               }));
                             }}
                           />
+                          {isFieldPending('proprietario.cpf_cnpj_prop') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('proprietario.cpf_cnpj_prop')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('proprietario.email_proprietario') ? 'has-pending' : ''}`}>
                           <span>E-mail do Proprietário *</span>
                           <input
                             type="email"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('proprietario.email_proprietario') ? 'input-pending-error' : ''}`}
                             placeholder="engenharia@abaincendio.com.br"
                             value={formData.proprietario.email_proprietario}
                             onChange={(e) => setFormData((prev) => ({
@@ -4188,15 +4326,20 @@ function ProjectDraftModalContent({
                               proprietario: { ...prev.proprietario, email_proprietario: e.target.value }
                             }))}
                           />
+                          {isFieldPending('proprietario.email_proprietario') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('proprietario.email_proprietario')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
                       <div className="form-col-6">
-                        <label className="field-label">
+                        <label className={`field-label ${isFieldPending('proprietario.tel_proprietario') ? 'has-pending' : ''}`}>
                           <span>Telefone do Proprietário *</span>
                           <input
                             type="text"
-                            className="input-text"
+                            className={`input-text ${isFieldPending('proprietario.tel_proprietario') ? 'input-pending-error' : ''}`}
                             placeholder="(71) 4000-2895"
                             value={formatPhone(formData.proprietario.tel_proprietario)}
                             onChange={(e) => {
@@ -4207,6 +4350,11 @@ function ProjectDraftModalContent({
                               }));
                             }}
                           />
+                          {isFieldPending('proprietario.tel_proprietario') && (
+                            <span className="field-pending-msg">
+                              <CircleAlert size={12} /> {getFieldError('proprietario.tel_proprietario')}
+                            </span>
+                          )}
                         </label>
                       </div>
 
@@ -4258,33 +4406,33 @@ function ProjectDraftModalContent({
                           </div>
 
                           <div className="form-col-5 animate-fade-in">
-                            <label className="field-label">
+                            <label className={`field-label ${isFieldPending('responsavel.nome_responsavel') ? 'has-pending' : ''}`}>
                               <span>Nome do Responsável pelo Uso *</span>
                               <input
                                 type="text"
-                                className="input-text"
+                                className={`input-text ${isFieldPending('responsavel.nome_responsavel') ? 'input-pending-error' : ''}`}
                                 value={formData.responsavel.nome_responsavel}
                                 onChange={(e) => setFormData((prev) => ({
                                   ...prev,
                                   responsavel: { ...prev.responsavel, nome_responsavel: e.target.value.toUpperCase() }
                                 }))}
                               />
+                              {isFieldPending('responsavel.nome_responsavel') && (
+                                <span className="field-pending-msg">
+                                  <CircleAlert size={12} /> {getFieldError('responsavel.nome_responsavel')}
+                                </span>
+                              )}
                             </label>
                           </div>
 
                           <div className="form-col-4 animate-fade-in">
-                            <label className="field-label">
+                            <label className={`field-label ${isFieldPending('responsavel.cpf_cnpj_resp') ? 'has-pending' : ''}`}>
                               <span>CPF / CNPJ do Responsável <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span></span>
                               <input
                                 type="text"
-                                className="input-text"
+                                className={`input-text ${isFieldPending('responsavel.cpf_cnpj_resp') ? 'input-pending-error' : ''}`}
                                 required
                                 value={formatCnpjCpf(formData.responsavel.cpf_cnpj_resp)}
-                                style={
-                                  !cleanDigits(formData.responsavel.cpf_cnpj_resp) || ![11, 14].includes(cleanDigits(formData.responsavel.cpf_cnpj_resp).length)
-                                    ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
-                                    : undefined
-                                }
                                 onChange={(e) => {
                                   const digits = cleanDigits(e.target.value);
                                   setFormData((prev) => ({
@@ -4293,43 +4441,43 @@ function ProjectDraftModalContent({
                                   }));
                                 }}
                               />
+                              {isFieldPending('responsavel.cpf_cnpj_resp') && (
+                                <span className="field-pending-msg">
+                                  <CircleAlert size={12} /> {getFieldError('responsavel.cpf_cnpj_resp')}
+                                </span>
+                              )}
                             </label>
                           </div>
 
                           <div className="form-col-6 animate-fade-in">
-                            <label className="field-label">
+                            <label className={`field-label ${isFieldPending('responsavel.email_responsavel_uso') ? 'has-pending' : ''}`}>
                               <span>E-mail do Responsável pelo Uso <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span></span>
                               <input
                                 type="email"
-                                className="input-text"
+                                className={`input-text ${isFieldPending('responsavel.email_responsavel_uso') ? 'input-pending-error' : ''}`}
                                 required
                                 value={formData.responsavel.email_responsavel_uso || ''}
-                                style={
-                                  !formData.responsavel.email_responsavel_uso?.trim() || !formData.responsavel.email_responsavel_uso.includes('@')
-                                    ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
-                                    : undefined
-                                }
                                 onChange={(e) => setFormData((prev) => ({
                                   ...prev,
                                   responsavel: { ...prev.responsavel, email_responsavel_uso: e.target.value }
                                 }))}
                               />
+                              {isFieldPending('responsavel.email_responsavel_uso') && (
+                                <span className="field-pending-msg">
+                                  <CircleAlert size={12} /> {getFieldError('responsavel.email_responsavel_uso')}
+                                </span>
+                              )}
                             </label>
                           </div>
 
                           <div className="form-col-6 animate-fade-in">
-                            <label className="field-label">
+                            <label className={`field-label ${isFieldPending('responsavel.tel_responsavel_uso') ? 'has-pending' : ''}`}>
                               <span>Telefone do Responsável pelo Uso <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span></span>
                               <input
                                 type="text"
-                                className="input-text"
+                                className={`input-text ${isFieldPending('responsavel.tel_responsavel_uso') ? 'input-pending-error' : ''}`}
                                 required
                                 value={formatPhone(formData.responsavel.tel_responsavel_uso)}
-                                style={
-                                  !cleanDigits(formData.responsavel.tel_responsavel_uso) || ![10, 11].includes(cleanDigits(formData.responsavel.tel_responsavel_uso).length)
-                                    ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
-                                    : undefined
-                                }
                                 onChange={(e) => {
                                   const digits = cleanDigits(e.target.value);
                                   setFormData((prev) => ({
@@ -4338,6 +4486,11 @@ function ProjectDraftModalContent({
                                   }));
                                 }}
                               />
+                              {isFieldPending('responsavel.tel_responsavel_uso') && (
+                                <span className="field-pending-msg">
+                                  <CircleAlert size={12} /> {getFieldError('responsavel.tel_responsavel_uso')}
+                                </span>
+                              )}
                             </label>
                           </div>
                         </>
@@ -4471,16 +4624,15 @@ function ProjectDraftModalContent({
 
                                 <div className="form-grid">
                                   <div className="form-col-6">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_nome_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         Nome Completo do Profissional
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <input
                                         type="text"
-                                        className="input-text"
+                                        className={`input-text ${isFieldPending('rt_nome_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        style={isNomePending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
                                         placeholder="Ex: ENG. MARCOS VINICIUS ALMEIDA"
                                         value={rt.nome_tecnico}
                                         onChange={(e) => {
@@ -4494,20 +4646,24 @@ function ProjectDraftModalContent({
                                           });
                                         }}
                                       />
+                                      {isFieldPending('rt_nome_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_nome_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
 
                                   <div className="form-col-6">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_cpf_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         CPF / CNPJ do RT
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <input
                                         type="text"
-                                        className="input-text"
+                                        className={`input-text ${isFieldPending('rt_cpf_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        style={isCpfPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
                                         placeholder="000.000.000-00"
                                         value={formatCnpjCpf(rt.cpf_cnpj_tecnico)}
                                         onChange={(e) => {
@@ -4521,17 +4677,22 @@ function ProjectDraftModalContent({
                                           });
                                         }}
                                       />
+                                      {isFieldPending('rt_cpf_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_cpf_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
 
                                   <div className="form-col-4">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_conselho_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         Conselho Profissional
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <select
-                                        className="input-select"
+                                        className={`input-select ${isFieldPending('rt_conselho_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
                                         value={rt.conselho}
                                         onChange={(e) => {
@@ -4549,20 +4710,24 @@ function ProjectDraftModalContent({
                                         <option value="CAU">CAU (Arquitetura e Urbanismo)</option>
                                         <option value="CFT">CFT (Técnicos Industriais)</option>
                                       </select>
+                                      {isFieldPending('rt_conselho_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_conselho_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
 
                                   <div className="form-col-4">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_registro_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         Nº Registro no Conselho
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <input
                                         type="text"
-                                        className="input-text"
+                                        className={`input-text ${isFieldPending('rt_registro_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        style={isRegPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
                                         placeholder="Ex: 05189283-BA"
                                         value={rt.n_registro_conselho}
                                         onChange={(e) => {
@@ -4576,20 +4741,24 @@ function ProjectDraftModalContent({
                                           });
                                         }}
                                       />
+                                      {isFieldPending('rt_registro_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_registro_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
 
                                   <div className="form-col-4">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_art_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         Nº ART / RRT / TRT
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <input
                                         type="text"
-                                        className="input-text"
+                                        className={`input-text ${isFieldPending('rt_art_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        style={isArtPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
                                         placeholder="Ex: BA20261628773"
                                         value={rt.n_art_rrt}
                                         onChange={(e) => {
@@ -4603,20 +4772,24 @@ function ProjectDraftModalContent({
                                           });
                                         }}
                                       />
+                                      {isFieldPending('rt_art_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_art_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
 
                                   <div className="form-col-6">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_email_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         E-mail do Responsável Técnico
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <input
                                         type="email"
-                                        className="input-text"
+                                        className={`input-text ${isFieldPending('rt_email_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        style={isEmailPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
                                         placeholder="engenheiro@email.com"
                                         value={rt.email_tecnico || ''}
                                         onChange={(e) => {
@@ -4630,20 +4803,24 @@ function ProjectDraftModalContent({
                                           });
                                         }}
                                       />
+                                      {isFieldPending('rt_email_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_email_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
 
                                   <div className="form-col-6">
-                                    <label className="field-label">
+                                    <label className={`field-label ${isFieldPending('rt_tel_' + idx) ? 'has-pending' : ''}`}>
                                       <span>
                                         Telefone do Responsável Técnico
                                         {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
                                       </span>
                                       <input
                                         type="text"
-                                        className="input-text"
+                                        className={`input-text ${isFieldPending('rt_tel_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        style={isTelPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
                                         placeholder="(71) 99999-9999"
                                         value={formatPhone(rt.telefone_tecnico)}
                                         onChange={(e) => {
@@ -4657,6 +4834,11 @@ function ProjectDraftModalContent({
                                           });
                                         }}
                                       />
+                                      {isFieldPending('rt_tel_' + idx) && (
+                                        <span className="field-pending-msg">
+                                          <CircleAlert size={12} /> {getFieldError('rt_tel_' + idx)}
+                                        </span>
+                                      )}
                                     </label>
                                   </div>
                                 </div>
@@ -4792,13 +4974,13 @@ function ProjectDraftModalContent({
 
                           <div className="form-grid">
                             <div className="form-col-4">
-                              <label className="field-label">
+                              <label className={`field-label ${isFieldPending('glp_quantidade') ? 'has-pending' : ''}`}>
                                 <span>Quantidade Total de GLP (kg) *</span>
                                 <input
                                   type="number"
                                   min={0}
                                   step="0.1"
-                                  className="input-text"
+                                  className={`input-text ${isFieldPending('glp_quantidade') ? 'input-pending-error' : ''}`}
                                   placeholder="Ex: 90"
                                   value={formData.glpData?.total_kg_glp || ''}
                                   onChange={(e) => {
@@ -4824,6 +5006,11 @@ function ProjectDraftModalContent({
                                     }));
                                   }}
                                 />
+                                {isFieldPending('glp_quantidade') && (
+                                  <span className="field-pending-msg">
+                                    <CircleAlert size={12} /> {getFieldError('glp_quantidade')}
+                                  </span>
+                                )}
                               </label>
                             </div>
 
@@ -5026,13 +5213,21 @@ function ProjectDraftModalContent({
                     ) : (
                       <div className="validation-error-banner">
                         <CircleAlert size={24} className="text-red" />
-                        <div>
+                        <div style={{ flex: 1 }}>
                           <strong>{localValidation.errors.length} Pendência(s) Encontrada(s):</strong>
-                          <ul>
+                          <div style={{ display: 'grid', gap: '6px', marginTop: '8px' }}>
                             {localValidation.errors.map((err, i) => (
-                              <li key={i}>{err}</li>
+                              <button
+                                key={i}
+                                type="button"
+                                className="pending-error-link"
+                                onClick={() => handleNavigateToPending(err)}
+                              >
+                                <span>{err}</span>
+                                <span className="pending-goto-badge">Corrigir &rarr;</span>
+                              </button>
                             ))}
-                          </ul>
+                          </div>
                         </div>
                       </div>
                     )}
