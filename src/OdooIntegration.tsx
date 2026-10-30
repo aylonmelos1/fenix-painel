@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Activity, AtSign, Building2, CalendarDays, Check, ChevronDown, CircleAlert, FileText, LoaderCircle, MessageCircle, Paperclip, Pencil, Plus, RefreshCw, Search, Send, UserRound, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, formatDate, type DocumentItem } from './types';
+import { WordCarouselLoader, OdooWorkspaceSkeleton, SkeletonBlock } from './WordCarouselLoader';
 
 type Relation = false | number | [number, string] | number[];
 type OdooBootstrap = { configured: boolean; projectId: number | null; buildingReference: string; reason: 'demo' | 'not_configured' | null };
@@ -87,6 +88,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
   const [assigneesLoading, setAssigneesLoading] = useState(false);
   const [sendingDocumentId, setSendingDocumentId] = useState<string | null>(null);
   const noteRequestId = useRef<string | null>(null);
+  const requestIdRef = useRef(0);
   const assigneesRequest = useRef<Promise<OdooAssignee[]> | null>(null);
   const noteEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const noteFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -109,18 +111,25 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     };
   }, [stageMenuOpen]);
 
-  async function refreshProject() {
+  async function refreshProject(expectedRequestId?: number) {
+    const reqId = expectedRequestId ?? ++requestIdRef.current;
     setRefreshing(true); setError('');
     try {
       const result = await api<OdooSnapshot>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo/project`);
+      if (requestIdRef.current !== reqId) return;
       setSnapshot(result);
       setChatterFilesOpen(false);
       setChatterPreviews({});
       setActivityTypeId((current) => result.activityTypes.some((item) => String(item.id) === current) ? current : String(result.activityTypes[0]?.id || ''));
     } catch (loadError) {
+      if (requestIdRef.current !== reqId) return;
       setSnapshot(null);
       setError(loadError instanceof Error ? loadError.message : 'Não foi possível consultar a Odoo.');
-    } finally { setRefreshing(false); }
+    } finally {
+      if (requestIdRef.current === reqId) {
+        setRefreshing(false);
+      }
+    }
   }
 
   async function changeProjectStage(value: string) {
@@ -153,29 +162,64 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     } finally { setStageOptionsLoading(false); }
   }
 
-  async function refreshSuggestions() {
+  async function refreshSuggestions(expectedRequestId?: number) {
+    const reqId = expectedRequestId ?? ++requestIdRef.current;
     setSuggestionsLoading(true); setSuggestionsError('');
     try {
       const result = await api<{ projects: OdooSuggestion[] }>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo/suggestions`);
+      if (requestIdRef.current !== reqId) return;
       setSuggestions(result.projects);
     } catch (loadError) {
+      if (requestIdRef.current !== reqId) return;
       setSuggestionsError(loadError instanceof Error ? loadError.message : 'Não foi possível buscar projetos semelhantes na Odoo.');
-    } finally { setSuggestionsLoading(false); }
+    } finally {
+      if (requestIdRef.current === reqId) {
+        setSuggestionsLoading(false);
+      }
+    }
   }
 
   useEffect(() => {
     let active = true;
-    setLoading(true); setError(''); setSnapshot(null); setProjectStages([]); setStageMenuOpen(false); setSuggestions([]); setSuggestionsError(''); setBootstrap(null); setPreview(null);
-    api<OdooBootstrap>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo`).then((result) => {
-      if (!active) return;
-      setBootstrap(result); setProjectId(result.projectId ? String(result.projectId) : '');
-      if (result.configured) {
-        if (result.projectId) void refreshProject();
-        else { setLinkEditorOpen(true); void refreshSuggestions(); }
+    const currentRequestId = ++requestIdRef.current;
+    setLoading(true);
+    setError('');
+    setSnapshot(null);
+    setProjectStages([]);
+    setStageMenuOpen(false);
+    setSuggestions([]);
+    setSuggestionsError('');
+    setBootstrap(null);
+    setPreview(null);
+    setAssignees([]);
+    assigneesRequest.current = null;
+
+    async function initialize() {
+      try {
+        const result = await api<OdooBootstrap>(`/api/buildings/${encodeURIComponent(buildingId)}/odoo`);
+        if (!active || requestIdRef.current !== currentRequestId) return;
+        setBootstrap(result);
+        setProjectId(result.projectId ? String(result.projectId) : '');
+        if (result.configured) {
+          if (result.projectId) {
+            await refreshProject(currentRequestId);
+          } else {
+            setLinkEditorOpen(true);
+            await refreshSuggestions(currentRequestId);
+          }
+        }
+      } catch (loadError) {
+        if (active && requestIdRef.current === currentRequestId) {
+          setError(loadError instanceof Error ? loadError.message : 'Não foi possível carregar a integração Odoo.');
+        }
+      } finally {
+        if (active && requestIdRef.current === currentRequestId) {
+          setLoading(false);
+        }
       }
-    }).catch((loadError) => {
-      if (active) setError(loadError instanceof Error ? loadError.message : 'Não foi possível carregar a integração Odoo.');
-    }).finally(() => { if (active) setLoading(false); });
+    }
+
+    void initialize();
     return () => { active = false; };
   }, [buildingId]);
 
@@ -386,7 +430,7 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     <header className="odoo-page-heading"><div><h3>Projeto no Odoo</h3><p>Dados do projeto e conversas do Chatter.</p></div><div className="odoo-heading-actions"><span className={`odoo-connection-state ${bootstrap?.configured && !demo ? 'ready' : ''}`}><i />{demo ? 'Demonstração' : bootstrap?.configured ? 'Configurado' : 'Não configurado'}</span>{bootstrap?.projectId && !demo && <button type="button" className="button button-outline odoo-change-link" onClick={() => linkEditorOpen ? setLinkEditorOpen(false) : void openLinkEditor()}><RefreshCw size={14} />{linkEditorOpen ? 'Fechar busca' : 'Alterar vínculo'}</button>}</div></header>
     {(!demo && bootstrap && !bootstrap.configured) && <div className="odoo-notice"><CircleAlert size={16} /><span>Configure a conexão para vincular um projeto. <Link to="/configuracoes?secao=integracoes">Abrir configurações Odoo <span aria-hidden="true">→</span></Link></span></div>}
     {demo && <div className="odoo-notice"><CircleAlert size={16} /><span>A integração Odoo está disponível em uma sessão conectada, não na demonstração.</span></div>}
-    {(!bootstrap?.projectId || linkEditorOpen) && !demo && bootstrap?.configured && <section className="odoo-link-workbench">
+    {(!bootstrap?.projectId || linkEditorOpen) && !demo && bootstrap?.configured && !loading && <section className="odoo-link-workbench">
       {bootstrap.projectId && <div className="odoo-current-link"><span>Vínculo atual</span><b>Projeto #{bootstrap.projectId}{snapshot ? ` · ${snapshot.project.name}` : ''}</b></div>}
       <form className="odoo-link-form" onSubmit={consultProjectId}>
         <label htmlFor="odoo-project-id"><span>ID do projeto Odoo</span><small>Informe o ID numérico do registro <code>project.project</code>.</small></label>
@@ -394,7 +438,22 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
         <button className="button button-teal" type="submit" disabled={Boolean(preview?.loading) || linking || !projectId.trim()}>{preview?.loading ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}{preview?.loading ? 'Consultando…' : 'Consultar'}</button>
       </form>
       <div className="odoo-suggestions-heading"><div><h4>Projetos com cliente semelhante</h4><small>Para “{bootstrap.buildingReference}” · ordenados por aderência estimada.</small></div><button type="button" className="button button-outline" onClick={() => void refreshSuggestions()} disabled={suggestionsLoading}><RefreshCw size={14} className={suggestionsLoading ? 'spin' : ''} />Atualizar</button></div>
-      {suggestionsLoading ? <div className="odoo-loading"><LoaderCircle size={17} className="spin" />Buscando projetos…</div>
+      {suggestionsLoading ? <div className="odoo-suggestions-loader-wrap">
+        <WordCarouselLoader size="sm" prefix="Buscando no Odoo" words={["projetos semelhantes", "clientes e referências", "sugestões de vínculo"]} />
+        <div className="odoo-suggestion-skeletons">
+          {Array.from({ length: 3 }, (_, idx) => (
+            <div key={idx} className="odoo-suggestion-skeleton-item">
+              <SkeletonBlock width={36} height={36} borderRadius={8} />
+              <div className="odoo-suggestion-skeleton-copy">
+                <SkeletonBlock width="65%" height={14} />
+                <SkeletonBlock width="85%" height={11} />
+                <SkeletonBlock width="45%" height={11} />
+              </div>
+              <SkeletonBlock width={64} height={30} borderRadius={6} />
+            </div>
+          ))}
+        </div>
+      </div>
         : suggestionsError ? <div className="odoo-feedback error" role="alert"><CircleAlert size={15} />{suggestionsError}</div>
           : suggestions.length ? <div className="odoo-suggestion-list">{suggestions.map((item) => <article className="odoo-suggestion" key={item.id}>
             <span className="odoo-suggestion-icon"><Building2 size={17} /></span><div className="odoo-suggestion-main"><b>{item.name}</b><small>Cliente: {relationName(item.customer)} · ID {item.id}</small><small>{relationName(item.stage)} · {item.openTaskCount} de {item.taskCount} tarefa(s) em aberto</small></div><span className="odoo-match-score">{item.matchScore}%<small>aderência</small></span><button type="button" className="button button-outline odoo-suggestion-link" onClick={() => void openPreview(item.id)} disabled={Boolean(preview?.loading) || linking}>Vincular</button>
@@ -403,7 +462,28 @@ export function OdooIntegration({ buildingId, documents, demo }: { buildingId: s
     </section>}
     {error && <div className="odoo-feedback error" role="alert"><CircleAlert size={15} />{error}</div>}
     {feedback && <div className={`odoo-feedback ${feedback.tone}`} role="status"><Check size={15} />{feedback.text}</div>}
-    {loading && <div className="odoo-loading"><LoaderCircle size={18} className="spin" />Carregando integração…</div>}
+    {((loading || (refreshing && !snapshot)) && !error) && (
+      <div className="odoo-full-loader-wrap">
+        <div className="odoo-loader-card">
+          <WordCarouselLoader
+            size="md"
+            prefix="Consultando no Odoo"
+            words={["vínculo do projeto", "etapas e tarefas da obra", "conversas do Chatter", "anexos e documentos", "atividades da equipe"]}
+            subtitle="Aguardando resposta em tempo real do servidor Odoo..."
+          />
+        </div>
+        <OdooWorkspaceSkeleton />
+      </div>
+    )}
+    {refreshing && snapshot && (
+      <div className="odoo-inline-refresh-bar">
+        <WordCarouselLoader
+          size="sm"
+          prefix="Atualizando"
+          words={["tarefas do projeto", "novas mensagens do Chatter", "anexos recentes"]}
+        />
+      </div>
+    )}
     {!loading && snapshot && <div className="odoo-workspace">
       <main className="odoo-project-column">
         <section className="odoo-project-overview">

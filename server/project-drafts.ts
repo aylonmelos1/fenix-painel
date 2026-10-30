@@ -181,14 +181,25 @@ export interface ProjectDraftEdification {
 
 export interface ProjectDraftTechnicalManager {
   tipo_numero?: 'CREA' | 'CAU' | 'CFT' | string;
-  crea_cau: string;
+  conselho?: 'CREA' | 'CAU' | 'CFT' | string;
+  crea_cau?: string;
+  n_registro_conselho?: string;
   name?: string;
   nome?: string;
+  nome_tecnico?: string;
   cpf_cnpj?: string;
+  cpf_cnpj_tecnico?: string;
   phone?: string;
   telefone?: string;
+  tel_tecnico?: string;
+  telefone_tecnico?: string;
+  responsible_technician_phone?: string;
   email?: string;
+  email_tecnico?: string;
+  responsible_technician_email?: string;
+  art?: string;
   art_rrt?: string;
+  n_art_rrt?: string;
 }
 
 export interface ProjectDraftSpecialRisks {
@@ -670,31 +681,138 @@ export function buildAndValidateFenixProjectPayload(
     );
   }
 
-  const responsaveisTecnicos: Array<Record<string, unknown>> = [];
-  if (Array.isArray(input.responsaveis_tecnicos) && input.responsaveis_tecnicos.length > 0) {
-    for (const rt of input.responsaveis_tecnicos) {
+  const rawRtList = Array.isArray(input.responsaveis_tecnicos) && input.responsaveis_tecnicos.length > 0
+    ? input.responsaveis_tecnicos
+    : (input.technical && Object.keys(input.technical).length > 0
+        ? [input.technical as Record<string, unknown>]
+        : []);
+
+  const responsaveisTecnicos: Array<{
+    tipo_numero: string;
+    conselho: string;
+    crea_cau: string;
+    n_registro_conselho: string;
+    name: string;
+    nome_tecnico: string;
+    cpf_cnpj: string;
+    cpf_cnpj_tecnico: string;
+    phone: string;
+    telefone_tecnico: string;
+    tel_tecnico: string;
+    email: string;
+    email_tecnico: string;
+    n_art_rrt: string;
+    art_rrt: string;
+  }> = [];
+
+  for (const rt of rawRtList) {
+    const rawConselho = String(rt.conselho || rt.tipo_numero || 'CREA').toUpperCase().trim();
+    const conselho = ['CREA', 'CAU', 'CFT'].includes(rawConselho) ? rawConselho : (rawConselho || 'CREA');
+    const regConselho = String(rt.n_registro_conselho || rt.crea_cau || '').trim();
+    const nome = String(rt.nome_tecnico || rt.name || rt.nome || '').trim();
+    const cpfCnpj = String(rt.cpf_cnpj_tecnico || rt.cpf_cnpj || (rt as any).cpf || '').replace(/\D/g, '');
+    const phone = String(rt.tel_tecnico || rt.telefone_tecnico || (rt as any).responsible_technician_phone || rt.phone || rt.telefone || '').replace(/\D/g, '');
+    const email = String(rt.email_tecnico || (rt as any).responsible_technician_email || rt.email || '').trim();
+    const art = String(rt.n_art_rrt || rt.art_rrt || (rt as any).art || '').trim();
+
+    // Adiciona se houver algum campo preenchido ou se não for opcional
+    if (nome || cpfCnpj || regConselho || email || phone || art || !rtOptional || input.incluir_rt_opcional) {
       responsaveisTecnicos.push({
-        tipo_numero: rt.tipo_numero || 'CREA',
-        crea_cau: String(rt.crea_cau || '').trim(),
-        name: String(rt.name || rt.nome || '').trim(),
-        cpf_cnpj: String(rt.cpf_cnpj || '').replace(/\D/g, ''),
-        phone: String(rt.phone || rt.telefone || '').trim(),
-        email: String(rt.email || '').trim()
+        tipo_numero: conselho,
+        conselho,
+        crea_cau: regConselho,
+        n_registro_conselho: regConselho,
+        name: nome,
+        nome_tecnico: nome,
+        cpf_cnpj: cpfCnpj,
+        cpf_cnpj_tecnico: cpfCnpj,
+        phone,
+        telefone_tecnico: phone,
+        tel_tecnico: phone,
+        email,
+        email_tecnico: email,
+        n_art_rrt: art,
+        art_rrt: art
       });
     }
-  } else if (input.technical && (input.technical.crea_cau || input.technical.name)) {
-    responsaveisTecnicos.push({
-      tipo_numero: input.technical.tipo_numero || 'CREA',
-      crea_cau: String(input.technical.crea_cau || '').trim(),
-      name: String(input.technical.name || '').trim(),
-      cpf_cnpj: String(input.technical.cpf_cnpj || input.technical.cpf || '').replace(/\D/g, ''),
-      phone: String(input.technical.phone || input.technical.telefone || '').trim(),
-      email: String(input.technical.email || '').trim()
-    });
   }
 
-  if (!rtOptional && responsaveisTecnicos.length === 0 && !input.n_art_rrt && !(input.technical as any)?.n_art_rrt) {
-    warnings.push('Responsável técnico não informado. Obrigatório para a emissão da ART/RRT antes da tramitação.');
+  // ART/RRT principal
+  let mainArt = String(input.n_art_rrt || responsaveisTecnicos[0]?.n_art_rrt || (input.technical as any)?.n_art_rrt || (input.technical as any)?.art_rrt || (input.technical as any)?.art || '').trim();
+  if (mainArt && responsaveisTecnicos[0] && !responsaveisTecnicos[0].n_art_rrt) {
+    responsaveisTecnicos[0].n_art_rrt = mainArt;
+    responsaveisTecnicos[0].art_rrt = mainArt;
+  }
+  if (!mainArt && responsaveisTecnicos[0]?.n_art_rrt) {
+    mainArt = responsaveisTecnicos[0].n_art_rrt;
+  }
+
+  // Validação bloqueante de RT e ART/RRT
+  if (!rtOptional) {
+    if (!mainArt) {
+      errors.push('Número de ART/RRT do projeto técnico é obrigatório.');
+    }
+    if (responsaveisTecnicos.length === 0) {
+      errors.push('Ao menos 1 Responsável Técnico pelo projeto deve ser informado.');
+    } else {
+      responsaveisTecnicos.forEach((rt, idx) => {
+        const idxMsg = responsaveisTecnicos.length > 1 ? ` #${idx + 1}` : '';
+        if (!rt.name) {
+          errors.push(`Nome do Responsável Técnico${idxMsg} é obrigatório.`);
+        }
+        if (!rt.cpf_cnpj || (rt.cpf_cnpj.length !== 11 && rt.cpf_cnpj.length !== 14)) {
+          errors.push(`CPF ou CNPJ do Responsável Técnico${idxMsg} é obrigatório e deve ter 11 ou 14 dígitos.`);
+        }
+        if (!['CREA', 'CAU', 'CFT'].includes(rt.tipo_numero)) {
+          errors.push(`Conselho profissional do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
+        }
+        if (!rt.crea_cau) {
+          errors.push(`Número de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
+        }
+        if (!rt.email || !rt.email.includes('@')) {
+          errors.push(`E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
+        }
+        if (!rt.phone || (rt.phone.length !== 10 && rt.phone.length !== 11)) {
+          errors.push(`Telefone com DDD do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos).`);
+        }
+        if (responsaveisTecnicos.length > 1 && !rt.n_art_rrt) {
+          errors.push(`Número de ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
+        }
+      });
+    }
+  } else {
+    // Quando rtOptional === true (PTSCLCB1 com saída direta):
+    const hasAnyRtField = responsaveisTecnicos.some(rt => rt.name || rt.cpf_cnpj || rt.crea_cau || rt.email || rt.phone || rt.n_art_rrt);
+    if (Boolean(input.incluir_rt_opcional) || (responsaveisTecnicos.length > 0 && hasAnyRtField)) {
+      if (responsaveisTecnicos.length === 0) {
+        errors.push('Ao optar por cadastrar Responsável Técnico, informe ao menos 1 profissional.');
+      } else {
+        responsaveisTecnicos.forEach((rt, idx) => {
+          const idxMsg = responsaveisTecnicos.length > 1 ? ` #${idx + 1}` : '';
+          if (!rt.name) {
+            errors.push(`Nome do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          if (!rt.cpf_cnpj || (rt.cpf_cnpj.length !== 11 && rt.cpf_cnpj.length !== 14)) {
+            errors.push(`CPF ou CNPJ do Responsável Técnico${idxMsg} é obrigatório e deve ter 11 ou 14 dígitos.`);
+          }
+          if (!['CREA', 'CAU', 'CFT'].includes(rt.tipo_numero)) {
+            errors.push(`Conselho profissional do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
+          }
+          if (!rt.crea_cau) {
+            errors.push(`Número de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          if (!rt.email || !rt.email.includes('@')) {
+            errors.push(`E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
+          }
+          if (!rt.phone || (rt.phone.length !== 10 && rt.phone.length !== 11)) {
+            errors.push(`Telefone com DDD do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos).`);
+          }
+          if (!rt.n_art_rrt && !mainArt) {
+            errors.push(`Número de ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+        });
+      }
+    }
   }
 
   const fenixPayload: Record<string, unknown> = {
@@ -755,12 +873,39 @@ export function buildAndValidateFenixProjectPayload(
     occupations_divisions: occupationsDivisions,
     proprietario: input.proprietario || {},
     responsavel: input.responsavel || {},
-    technical: input.technical || {},
-    projeto_responsavel_tecnico: responsaveisTecnicos,
+    technical: responsaveisTecnicos[0] ? {
+      tipo_numero: responsaveisTecnicos[0].tipo_numero,
+      conselho: responsaveisTecnicos[0].conselho,
+      crea_cau: responsaveisTecnicos[0].crea_cau,
+      n_registro_conselho: responsaveisTecnicos[0].n_registro_conselho,
+      name: responsaveisTecnicos[0].name,
+      nome: responsaveisTecnicos[0].nome_tecnico,
+      nome_tecnico: responsaveisTecnicos[0].nome_tecnico,
+      cpf_cnpj: responsaveisTecnicos[0].cpf_cnpj,
+      cpf_cnpj_tecnico: responsaveisTecnicos[0].cpf_cnpj_tecnico,
+      phone: responsaveisTecnicos[0].phone,
+      telefone: responsaveisTecnicos[0].phone,
+      telefone_tecnico: responsaveisTecnicos[0].phone,
+      tel_tecnico: responsaveisTecnicos[0].phone,
+      email: responsaveisTecnicos[0].email,
+      email_tecnico: responsaveisTecnicos[0].email,
+      n_art_rrt: responsaveisTecnicos[0].n_art_rrt || mainArt,
+      art_rrt: responsaveisTecnicos[0].n_art_rrt || mainArt
+    } : (input.technical || {}),
+    projeto_responsavel_tecnico: responsaveisTecnicos.map((rt) => ({
+      tipo_numero: rt.tipo_numero,
+      crea_cau: rt.crea_cau,
+      name: rt.name,
+      cpf_cnpj: rt.cpf_cnpj,
+      phone: rt.phone,
+      email: rt.email,
+      n_art_rrt: rt.n_art_rrt || mainArt
+    })),
+    responsaveis_tecnicos: responsaveisTecnicos,
     questionario: input.questionario || {},
     securityMeasures: input.securityMeasures || {},
     medida_seguranca,
-    n_art_rrt: String(input.n_art_rrt || (input.technical as any)?.n_art_rrt || ''),
+    n_art_rrt: mainArt,
     solicitante: { id: fenixUserId || 14574 }
   };
 

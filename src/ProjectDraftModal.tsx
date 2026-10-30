@@ -409,20 +409,27 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
     tel_responsavel_uso: '(71) 4000-2895'
   },
   technical: {
-    cpf: '',
-    name: 'ABA Incêndio - Engenharia e Projetos',
-    crea_cau: 'BA20261628773',
+    cpf: '09566970000123',
+    name: 'ENG. MARCOS VINICIUS ALMEIDA',
+    crea_cau: '05189283-BA',
     telephone: '(71) 4000-2895',
     email: 'engenharia@abaincendio.com.br'
   },
   responsaveis_tecnicos: [
     {
       tipo_numero: 'CREA',
-      crea_cau: 'BA20261628773',
-      name: 'ABA Incêndio - Engenharia e Projetos',
-      cpf_cnpj: '00000000000',
-      phone: '(71) 4000-2895',
-      email: 'engenharia@abaincendio.com.br'
+      conselho: 'CREA',
+      crea_cau: '05189283-BA',
+      n_registro_conselho: '05189283-BA',
+      name: 'ENG. MARCOS VINICIUS ALMEIDA',
+      nome_tecnico: 'ENG. MARCOS VINICIUS ALMEIDA',
+      cpf_cnpj: '09566970000123',
+      cpf_cnpj_tecnico: '09566970000123',
+      phone: '7140002895',
+      telefone_tecnico: '7140002895',
+      email: 'engenharia@abaincendio.com.br',
+      email_tecnico: 'engenharia@abaincendio.com.br',
+      n_art_rrt: 'BA20261628773'
     }
   ],
   incluir_rt_opcional: false,
@@ -741,7 +748,7 @@ export function ProjectDraftModal({
   const [view, setView] = useState<'list' | 'editor'>('list');
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [drafts, setDrafts] = useState<DraftRecord[]>([]);
-  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [draftsLoading, setDraftsLoading] = useState(true);
   const [currentDraft, setCurrentDraft] = useState<DraftRecord | null>(null);
   const [formData, setFormData] = useState<ProjectDraftInput>(INITIAL_EMPTY_DRAFT);
   const [domains, setDomains] = useState<FenixDomainResponse | null>(null);
@@ -1126,6 +1133,9 @@ export function ProjectDraftModal({
     const warnings: string[] = [];
 
     // Etapa 1: Edificação e Endereço
+    if (formData.edificacao_mode === 'existing' && !String(formData.edificacao_id || '').trim()) {
+      errors.push('Etapa 1: Informe o ID da edificação existente no Fênix.');
+    }
     if (!formData.edification.reference_name.trim()) {
       errors.push('Etapa 1: Nome de referência da edificação é obrigatório.');
     }
@@ -1165,6 +1175,13 @@ export function ProjectDraftModal({
     if (!cleanDigits(formData.institution.cnae)) {
       errors.push('Etapa 2: Código CNAE é obrigatório.');
     }
+    if (
+      (formData.institution.natureza_juridica === 'Outros' || (formData.institution as any).porte === 'Outros' || (formData as any).porte === 'Outros') &&
+      !formData.porte_outros?.trim() &&
+      !(formData.institution as any).porte_outros?.trim()
+    ) {
+      errors.push('Etapa 2: Especifique a Natureza Jurídica quando selecionar "Outros".');
+    }
     if (!formData.occupation.occupation_group_id || !formData.occupation.division_group_id) {
       errors.push('Etapa 2: Grupo e Divisão de ocupação IT 14 são obrigatórios.');
     }
@@ -1177,14 +1194,122 @@ export function ProjectDraftModal({
     if (!formData.proprietario.email_proprietario.trim() || !formData.proprietario.email_proprietario.includes('@')) {
       errors.push('Etapa 2: E-mail de contato do proprietário é obrigatório.');
     }
+    const propTel = cleanDigits(formData.proprietario.tel_proprietario);
+    if (!propTel || (propTel.length !== 10 && propTel.length !== 11)) {
+      errors.push('Etapa 2: Telefone do proprietário é obrigatório (com DDD).');
+    }
+
+    // Responsável pelo uso quando não for a mesma pessoa
+    const mesmoProp = Boolean(formData.responsavel?.responsavel_uso_igual_prop ?? (formData as any).mesmo_proprietario);
+    if (!mesmoProp) {
+      if (!formData.responsavel?.nome_responsavel?.trim()) {
+        errors.push('Etapa 2: Nome do responsável pelo uso é obrigatório.');
+      }
+      const respDoc = cleanDigits(formData.responsavel?.cpf_cnpj_resp);
+      if (!respDoc || (respDoc.length !== 11 && respDoc.length !== 14)) {
+        errors.push('Etapa 2: CPF/CNPJ do responsável pelo uso é obrigatório (11 ou 14 dígitos).');
+      }
+      const respEmail = String(formData.responsavel?.email_responsavel_uso || (formData.responsavel as any)?.email_responsavel || '').trim();
+      if (!respEmail || !respEmail.includes('@')) {
+        errors.push('Etapa 2: E-mail do responsável pelo uso é obrigatório.');
+      }
+      const respTel = cleanDigits(formData.responsavel?.tel_responsavel_uso || (formData.responsavel as any)?.tel_responsavel || '');
+      if (!respTel || (respTel.length !== 10 && respTel.length !== 11)) {
+        errors.push('Etapa 2: Telefone do responsável pelo uso é obrigatório (com DDD).');
+      }
+    }
+
+    // Riscos Especiais: GLP
+    const isGlpAtivo = Boolean(formData.specialRisks?.gas_liquefeito_petroleo || (formData as any).glp_quantidade_kg || formData.glpData?.total_kg_glp);
+    const qtdGlp = Number(formData.glpData?.total_kg_glp ?? (formData as any).glp_quantidade_kg ?? (formData as any).total_kg_glp ?? 0);
+    if (isGlpAtivo && !(qtdGlp > 0)) {
+      errors.push('Etapa 2: Informe a quantidade total de GLP (kg).');
+    }
+
+    // Validação de Responsável Técnico e ART/RRT
     const isPtsClcb1SaidaDireta = formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false;
-    if (!isPtsClcb1SaidaDireta && !formData.n_art_rrt?.trim()) {
-      warnings.push('Etapa 2: Número de ART/RRT não informado. Será obrigatório para este tipo de projeto técnico antes do protocolo oficial.');
+    const mainArt = String(formData.n_art_rrt?.trim() || formData.responsaveis_tecnicos?.[0]?.n_art_rrt?.trim() || '');
+
+    if (!isPtsClcb1SaidaDireta) {
+      if (!mainArt) {
+        errors.push('Etapa 2: Número de ART/RRT do projeto técnico é obrigatório.');
+      }
+      if (!formData.responsaveis_tecnicos || formData.responsaveis_tecnicos.length === 0) {
+        errors.push('Etapa 2: Cadastre ao menos 1 Responsável Técnico pelo projeto.');
+      } else {
+        formData.responsaveis_tecnicos.forEach((rt, idx) => {
+          const idxMsg = formData.responsaveis_tecnicos!.length > 1 ? ` #${idx + 1}` : '';
+          if (!rt.nome_tecnico?.trim()) {
+            errors.push(`Etapa 2: Nome do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          const cDigits = cleanDigits(rt.cpf_cnpj_tecnico);
+          if (!cDigits || (cDigits.length !== 11 && cDigits.length !== 14)) {
+            errors.push(`Etapa 2: CPF/CNPJ do Responsável Técnico${idxMsg} é obrigatório (11 ou 14 dígitos).`);
+          }
+          if (!rt.conselho || !['CREA', 'CAU', 'CFT'].includes(rt.conselho)) {
+            errors.push(`Etapa 2: Conselho do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
+          }
+          if (!rt.n_registro_conselho?.trim()) {
+            errors.push(`Etapa 2: Nº de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          if (formData.responsaveis_tecnicos!.length > 1 && !rt.n_art_rrt?.trim()) {
+            errors.push(`Etapa 2: Nº da ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          if (!rt.email_tecnico?.trim() || !rt.email_tecnico.includes('@')) {
+            errors.push(`Etapa 2: E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
+          }
+          const tDigits = cleanDigits(rt.telefone_tecnico);
+          if (!tDigits || (tDigits.length !== 10 && tDigits.length !== 11)) {
+            errors.push(`Etapa 2: Telefone do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos com DDD).`);
+          }
+        });
+      }
+    } else if (formData.incluir_rt_opcional) {
+      if (!formData.responsaveis_tecnicos || formData.responsaveis_tecnicos.length === 0) {
+        errors.push('Etapa 2: Ao optar por cadastrar Responsável Técnico, cadastre ao menos 1 profissional.');
+      } else {
+        formData.responsaveis_tecnicos.forEach((rt, idx) => {
+          const idxMsg = formData.responsaveis_tecnicos!.length > 1 ? ` #${idx + 1}` : '';
+          if (!rt.nome_tecnico?.trim()) {
+            errors.push(`Etapa 2: Nome do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          const cDigits = cleanDigits(rt.cpf_cnpj_tecnico);
+          if (!cDigits || (cDigits.length !== 11 && cDigits.length !== 14)) {
+            errors.push(`Etapa 2: CPF/CNPJ do Responsável Técnico${idxMsg} é obrigatório (11 ou 14 dígitos).`);
+          }
+          if (!rt.conselho || !['CREA', 'CAU', 'CFT'].includes(rt.conselho)) {
+            errors.push(`Etapa 2: Conselho do Responsável Técnico${idxMsg} deve ser CREA, CAU ou CFT.`);
+          }
+          if (!rt.n_registro_conselho?.trim()) {
+            errors.push(`Etapa 2: Nº de registro no conselho do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          if (!rt.n_art_rrt?.trim() && !mainArt) {
+            errors.push(`Etapa 2: Nº da ART/RRT do Responsável Técnico${idxMsg} é obrigatório.`);
+          }
+          if (!rt.email_tecnico?.trim() || !rt.email_tecnico.includes('@')) {
+            errors.push(`Etapa 2: E-mail do Responsável Técnico${idxMsg} é obrigatório e deve ser válido.`);
+          }
+          const tDigits = cleanDigits(rt.telefone_tecnico);
+          if (!tDigits || (tDigits.length !== 10 && tDigits.length !== 11)) {
+            errors.push(`Etapa 2: Telefone do Responsável Técnico${idxMsg} é obrigatório (10 ou 11 dígitos com DDD).`);
+          }
+        });
+      }
     }
 
     if ([2, 3, 7, 8].includes(formData.tipo_projeto_id || 0)) {
       if (!formData.data_inicio || !formData.data_fim) {
         errors.push('Etapa 2: Datas de início e término são obrigatórias para ocupações temporárias.');
+      }
+    }
+
+    // Modalidade PTS: limites e requisitos bloqueantes
+    if ([4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0)) {
+      if (calculatedTotalArea > 750 || Number(formData.edification.number_floors) > 3) {
+        errors.push('Etapa 2: Edificação acima de 750 m² ou 3 pavimentos exige Projeto Técnico Completo (PT).');
+      }
+      if (formData.questionario?.edf_saida_direta === false && !formData.questionario?.edf_regularizada_certificado) {
+        errors.push('Etapa 2: Sem saída direta para via pública, o PTS exige que a edificação principal possua AVCB/CLCB vigente (ou altere para PT Completo).');
       }
     }
 
@@ -1200,13 +1325,45 @@ export function ProjectDraftModal({
     };
   }, [formData, calculatedTotalArea, enquadramento]);
 
+  // Garante inicialização de ao menos 1 RT quando não for PTSCLCB1 com saída direta
+  useEffect(() => {
+    const isPtsClcb1SaidaDireta = formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false;
+    if (!isPtsClcb1SaidaDireta && (!formData.responsaveis_tecnicos || formData.responsaveis_tecnicos.length === 0)) {
+      setFormData((prev) => ({
+        ...prev,
+        responsaveis_tecnicos: [
+          {
+            nome_tecnico: '',
+            cpf_cnpj_tecnico: '',
+            conselho: 'CREA',
+            n_registro_conselho: '',
+            n_art_rrt: prev.n_art_rrt || '',
+            email_tecnico: '',
+            telefone_tecnico: ''
+          }
+        ]
+      }));
+    }
+  }, [formData.tipo_projeto_id, formData.questionario?.edf_saida_direta, formData.responsaveis_tecnicos?.length]);
+
   // Ações de criação, carga de gabarito e seleção de rascunhos
   const handleNewDraft = () => {
     setCurrentDraft(null);
     setFormData({
       ...INITIAL_EMPTY_DRAFT,
       id: crypto.randomUUID(),
-      name: `Rascunho ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+      name: `Rascunho ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`,
+      responsaveis_tecnicos: [
+        {
+          nome_tecnico: '',
+          cpf_cnpj_tecnico: '',
+          conselho: 'CREA',
+          n_registro_conselho: '',
+          n_art_rrt: '',
+          email_tecnico: '',
+          telefone_tecnico: ''
+        }
+      ]
     });
     setSubmissionResult(null);
     setConfirmKey('');
@@ -1256,6 +1413,20 @@ export function ProjectDraftModal({
     }
     if (!loadedData.form_mode) {
       loadedData.form_mode = [1, 2, 3].includes(loadedData.tipo_projeto_id) ? 'pt' : 'pts';
+    }
+    const isPtsClcb1SaidaDireta = loadedData.tipo_projeto_id === 4 && loadedData.questionario?.edf_saida_direta !== false;
+    if (!isPtsClcb1SaidaDireta && (!loadedData.responsaveis_tecnicos || loadedData.responsaveis_tecnicos.length === 0)) {
+      loadedData.responsaveis_tecnicos = [
+        {
+          nome_tecnico: '',
+          cpf_cnpj_tecnico: '',
+          conselho: 'CREA',
+          n_registro_conselho: '',
+          n_art_rrt: loadedData.n_art_rrt || '',
+          email_tecnico: '',
+          telefone_tecnico: ''
+        }
+      ];
     }
     setFormData(loadedData);
     setSubmissionResult(draft.lastSubmission ? { ok: draft.lastSubmission.ok, data: draft.lastSubmission.result, error: draft.lastSubmission.error } : null);
@@ -2294,7 +2465,7 @@ export function ProjectDraftModal({
 
                     <div className="cnpj-search-row">
                       <label className="field-label cnpj-input-label">
-                        <span>CNPJ da Edificação / Estabelecimento *</span>
+                        <span>CNPJ da Edificação / Estabelecimento (Busca rápida opcional)</span>
                         <div className="input-with-button">
                           <input
                             type="text"
@@ -2541,7 +2712,7 @@ export function ProjectDraftModal({
                       {/* Complemento */}
                       <div className="form-col-4">
                         <label className="field-label">
-                          <span>Complemento (Obrigatório) *</span>
+                          <span>Complemento (se vazio, enviamos *** automaticamente)</span>
                           <input
                             type="text"
                             className="input-text"
@@ -2953,20 +3124,55 @@ export function ProjectDraftModal({
                       <div className="form-col-3">
                         <label className="field-label">
                           <div className="flex-between">
-                            <span>Nº ART / RRT</span>
+                            <span>
+                              Nº ART / RRT
+                              {!(formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false) && (
+                                <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>
+                              )}
+                            </span>
                             {formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false ? (
                               <span className="badge-tag tag-green" style={{ fontSize: '0.65rem' }}>Dispensada no PTSCLCB1</span>
+                            ) : (formData.n_art_rrt?.trim() || formData.responsaveis_tecnicos?.[0]?.n_art_rrt?.trim()) ? (
+                              <span className="badge-tag tag-green" style={{ fontSize: '0.65rem' }}>Obrigatória · Preenchida</span>
                             ) : (
-                              <span className="badge-tag tag-amber" style={{ fontSize: '0.65rem' }}>Obrigatória</span>
+                              <span className="badge-tag tag-red" style={{ fontSize: '0.65rem' }}>Obrigatória · Pendente</span>
                             )}
                           </div>
                           <input
                             type="text"
                             className="input-text"
                             maxLength={30}
+                            required={!(formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false)}
                             placeholder="Ex: BA20261628773"
-                            value={formData.n_art_rrt || ''}
-                            onChange={(e) => setFormData((prev) => ({ ...prev, n_art_rrt: e.target.value.toUpperCase() }))}
+                            value={formData.n_art_rrt || formData.responsaveis_tecnicos?.[0]?.n_art_rrt || ''}
+                            style={
+                              !(formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false) &&
+                              !(formData.n_art_rrt?.trim() || formData.responsaveis_tecnicos?.[0]?.n_art_rrt?.trim())
+                                ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
+                                : undefined
+                            }
+                            onChange={(e) => {
+                              const val = e.target.value.toUpperCase();
+                              setFormData((prev) => {
+                                const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                  ? [...prev.responsaveis_tecnicos]
+                                  : [
+                                      {
+                                        nome_tecnico: '',
+                                        cpf_cnpj_tecnico: '',
+                                        conselho: 'CREA' as const,
+                                        n_registro_conselho: '',
+                                        n_art_rrt: '',
+                                        email_tecnico: '',
+                                        telefone_tecnico: ''
+                                      }
+                                    ];
+                                if (!list[0].n_art_rrt || list[0].n_art_rrt === prev.n_art_rrt) {
+                                  list[0] = { ...list[0], n_art_rrt: val };
+                                }
+                                return { ...prev, n_art_rrt: val, responsaveis_tecnicos: list };
+                              });
+                            }}
                           />
                         </label>
                         <small className="field-hint">Registro no CREA / CAU / CFT.</small>
@@ -3712,11 +3918,17 @@ export function ProjectDraftModal({
 
                           <div className="form-col-4 animate-fade-in">
                             <label className="field-label">
-                              <span>CPF / CNPJ do Responsável</span>
+                              <span>CPF / CNPJ do Responsável <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span></span>
                               <input
                                 type="text"
                                 className="input-text"
+                                required
                                 value={formatCnpjCpf(formData.responsavel.cpf_cnpj_resp)}
+                                style={
+                                  !cleanDigits(formData.responsavel.cpf_cnpj_resp) || ![11, 14].includes(cleanDigits(formData.responsavel.cpf_cnpj_resp).length)
+                                    ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
+                                    : undefined
+                                }
                                 onChange={(e) => {
                                   const digits = cleanDigits(e.target.value);
                                   setFormData((prev) => ({
@@ -3730,11 +3942,17 @@ export function ProjectDraftModal({
 
                           <div className="form-col-6 animate-fade-in">
                             <label className="field-label">
-                              <span>E-mail do Responsável pelo Uso</span>
+                              <span>E-mail do Responsável pelo Uso <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span></span>
                               <input
                                 type="email"
                                 className="input-text"
+                                required
                                 value={formData.responsavel.email_responsavel_uso || ''}
+                                style={
+                                  !formData.responsavel.email_responsavel_uso?.trim() || !formData.responsavel.email_responsavel_uso.includes('@')
+                                    ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
+                                    : undefined
+                                }
                                 onChange={(e) => setFormData((prev) => ({
                                   ...prev,
                                   responsavel: { ...prev.responsavel, email_responsavel_uso: e.target.value }
@@ -3745,11 +3963,17 @@ export function ProjectDraftModal({
 
                           <div className="form-col-6 animate-fade-in">
                             <label className="field-label">
-                              <span>Telefone do Responsável pelo Uso</span>
+                              <span>Telefone do Responsável pelo Uso <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span></span>
                               <input
                                 type="text"
                                 className="input-text"
+                                required
                                 value={formatPhone(formData.responsavel.tel_responsavel_uso)}
+                                style={
+                                  !cleanDigits(formData.responsavel.tel_responsavel_uso) || ![10, 11].includes(cleanDigits(formData.responsavel.tel_responsavel_uso).length)
+                                    ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' }
+                                    : undefined
+                                }
                                 onChange={(e) => {
                                   const digits = cleanDigits(e.target.value);
                                   setFormData((prev) => ({
@@ -3772,11 +3996,36 @@ export function ProjectDraftModal({
                         <HardHat size={18} className="text-teal" />
                         <h4>Responsável Técnico pelo Projeto (RT / ART / RRT)</h4>
                       </div>
-                      {formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false ? (
-                        <span className="badge-tag tag-green">Dispensado no PTSCLCB1 com Saída Direta</span>
-                      ) : (
-                        <span className="badge-tag tag-amber">Obrigatório no CBMBA</span>
-                      )}
+                      {(() => {
+                        const isPtsClcb1SaidaDireta = formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false;
+                        if (isPtsClcb1SaidaDireta) {
+                          return <span className="badge-tag tag-green">Dispensado no PTSCLCB1 com Saída Direta</span>;
+                        }
+                        const rtList = formData.responsaveis_tecnicos || [];
+                        if (rtList.length === 0) {
+                          return <span className="badge-tag tag-red">Obrigatório no CBMBA · Pendente</span>;
+                        }
+                        let pendenciasRt = 0;
+                        rtList.forEach((rt) => {
+                          if (!rt.nome_tecnico?.trim()) pendenciasRt++;
+                          const cDigits = cleanDigits(rt.cpf_cnpj_tecnico);
+                          if (!cDigits || (cDigits.length !== 11 && cDigits.length !== 14)) pendenciasRt++;
+                          if (!rt.conselho || !['CREA', 'CAU', 'CFT'].includes(rt.conselho)) pendenciasRt++;
+                          if (!rt.n_registro_conselho?.trim()) pendenciasRt++;
+                          if (!rt.n_art_rrt?.trim()) pendenciasRt++;
+                          if (!rt.email_tecnico?.trim() || !rt.email_tecnico.includes('@')) pendenciasRt++;
+                          const tDigits = cleanDigits(rt.telefone_tecnico);
+                          if (!tDigits || (tDigits.length !== 10 && tDigits.length !== 11)) pendenciasRt++;
+                        });
+                        if (pendenciasRt === 0) {
+                          return <span className="badge-tag tag-green">Obrigatório no CBMBA · Concluído</span>;
+                        }
+                        return (
+                          <span className="badge-tag tag-red">
+                            Obrigatório no CBMBA · {pendenciasRt} {pendenciasRt === 1 ? 'campo pendente' : 'campos pendentes'}
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     {formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false && (
@@ -3792,173 +4041,273 @@ export function ProjectDraftModal({
 
                     {(formData.tipo_projeto_id !== 4 || formData.questionario?.edf_saida_direta === false || formData.incluir_rt_opcional) && (
                       <div className="rt-list animate-fade-in">
-                        {(formData.responsaveis_tecnicos || []).map((rt, idx) => (
-                          <div key={idx} className="rt-card-item" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', marginBottom: '0.75rem' }}>
-                            <div className="rt-card-head flex-between" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                              <span className="rt-index-badge" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8' }}>
-                                Responsável Técnico #{idx + 1}
-                              </span>
-                              {(formData.responsaveis_tecnicos || []).length > 1 && (
-                                <button
-                                  type="button"
-                                  className="button button-outline button-xs text-danger"
-                                  onClick={() => {
-                                    setFormData((prev) => ({
-                                      ...prev,
-                                      responsaveis_tecnicos: (prev.responsaveis_tecnicos || []).filter((_, i) => i !== idx)
-                                    }));
-                                  }}
-                                >
-                                  <Trash2 size={13} /> Remover RT
-                                </button>
-                              )}
-                            </div>
+                        {(() => {
+                          const isPtsClcb1SaidaDireta = formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false;
+                          const isRtRequired = !isPtsClcb1SaidaDireta || Boolean(formData.incluir_rt_opcional);
+                          const rtList = formData.responsaveis_tecnicos && formData.responsaveis_tecnicos.length > 0
+                            ? formData.responsaveis_tecnicos
+                            : [
+                                {
+                                  nome_tecnico: '',
+                                  cpf_cnpj_tecnico: '',
+                                  conselho: 'CREA' as const,
+                                  n_registro_conselho: '',
+                                  n_art_rrt: formData.n_art_rrt || '',
+                                  email_tecnico: '',
+                                  telefone_tecnico: ''
+                                }
+                              ];
 
-                            <div className="form-grid">
-                              <div className="form-col-6">
-                                <label className="field-label">
-                                  <span>Nome Completo do Profissional *</span>
-                                  <input
-                                    type="text"
-                                    className="input-text"
-                                    placeholder="Ex: ENG. MARCOS VINICIUS ALMEIDA"
-                                    value={rt.nome_tecnico}
-                                    onChange={(e) => {
-                                      const val = e.target.value.toUpperCase();
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], nome_tecnico: val };
-                                        return { ...prev, responsaveis_tecnicos: list };
-                                      });
-                                    }}
-                                  />
-                                </label>
-                              </div>
+                          return rtList.map((rt, idx) => {
+                            const isNomePending = isRtRequired && !rt.nome_tecnico?.trim();
+                            const cDigits = cleanDigits(rt.cpf_cnpj_tecnico);
+                            const isCpfPending = isRtRequired && (!cDigits || ![11, 14].includes(cDigits.length));
+                            const isRegPending = isRtRequired && !rt.n_registro_conselho?.trim();
+                            const isArtPending = isRtRequired && !rt.n_art_rrt?.trim();
+                            const isEmailPending = isRtRequired && (!rt.email_tecnico?.trim() || !rt.email_tecnico.includes('@'));
+                            const tDigits = cleanDigits(rt.telefone_tecnico);
+                            const isTelPending = isRtRequired && (!tDigits || ![10, 11].includes(tDigits.length));
 
-                              <div className="form-col-6">
-                                <label className="field-label">
-                                  <span>CPF / CNPJ do RT *</span>
-                                  <input
-                                    type="text"
-                                    className="input-text"
-                                    placeholder="000.000.000-00"
-                                    value={formatCnpjCpf(rt.cpf_cnpj_tecnico)}
-                                    onChange={(e) => {
-                                      const val = cleanDigits(e.target.value);
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], cpf_cnpj_tecnico: val };
-                                        return { ...prev, responsaveis_tecnicos: list };
-                                      });
-                                    }}
-                                  />
-                                </label>
-                              </div>
+                            return (
+                              <div key={idx} className="rt-card-item" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', marginBottom: '0.75rem' }}>
+                                <div className="rt-card-head flex-between" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                  <span className="rt-index-badge" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8' }}>
+                                    Responsável Técnico #{idx + 1}
+                                  </span>
+                                  {rtList.length > 1 ? (
+                                    <button
+                                      type="button"
+                                      className="button button-outline button-xs text-danger"
+                                      onClick={() => {
+                                        setFormData((prev) => ({
+                                          ...prev,
+                                          responsaveis_tecnicos: (prev.responsaveis_tecnicos || []).filter((_, i) => i !== idx)
+                                        }));
+                                      }}
+                                    >
+                                      <Trash2 size={13} /> Remover RT
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="button button-outline button-xs"
+                                      onClick={() => {
+                                        setFormData((prev) => {
+                                          const list = [...(prev.responsaveis_tecnicos || [])];
+                                          list[idx] = {
+                                            nome_tecnico: '',
+                                            cpf_cnpj_tecnico: '',
+                                            conselho: 'CREA',
+                                            n_registro_conselho: '',
+                                            n_art_rrt: '',
+                                            email_tecnico: '',
+                                            telefone_tecnico: ''
+                                          };
+                                          return { ...prev, responsaveis_tecnicos: list, n_art_rrt: idx === 0 ? '' : prev.n_art_rrt };
+                                        });
+                                      }}
+                                      title="Limpar campos deste responsável técnico"
+                                    >
+                                      Limpar Campos
+                                    </button>
+                                  )}
+                                </div>
 
-                              <div className="form-col-4">
-                                <label className="field-label">
-                                  <span>Conselho Profissional *</span>
-                                  <select
-                                    className="input-select"
-                                    value={rt.conselho}
-                                    onChange={(e) => {
-                                      const val = e.target.value as 'CREA' | 'CAU' | 'CFT';
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], conselho: val };
-                                        return { ...prev, responsaveis_tecnicos: list };
-                                      });
-                                    }}
-                                  >
-                                    <option value="CREA">CREA (Engenharia e Agronomia)</option>
-                                    <option value="CAU">CAU (Arquitetura e Urbanismo)</option>
-                                    <option value="CFT">CFT (Técnicos Industriais)</option>
-                                  </select>
-                                </label>
-                              </div>
+                                <div className="form-grid">
+                                  <div className="form-col-6">
+                                    <label className="field-label">
+                                      <span>
+                                        Nome Completo do Profissional
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <input
+                                        type="text"
+                                        className="input-text"
+                                        required={isRtRequired}
+                                        style={isNomePending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
+                                        placeholder="Ex: ENG. MARCOS VINICIUS ALMEIDA"
+                                        value={rt.nome_tecnico}
+                                        onChange={(e) => {
+                                          const val = e.target.value.toUpperCase();
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], nome_tecnico: val };
+                                            return { ...prev, responsaveis_tecnicos: list };
+                                          });
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
 
-                              <div className="form-col-4">
-                                <label className="field-label">
-                                  <span>Nº Registro no Conselho *</span>
-                                  <input
-                                    type="text"
-                                    className="input-text"
-                                    placeholder="Ex: 05189283-BA"
-                                    value={rt.n_registro_conselho}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], n_registro_conselho: val };
-                                        return { ...prev, responsaveis_tecnicos: list };
-                                      });
-                                    }}
-                                  />
-                                </label>
-                              </div>
+                                  <div className="form-col-6">
+                                    <label className="field-label">
+                                      <span>
+                                        CPF / CNPJ do RT
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <input
+                                        type="text"
+                                        className="input-text"
+                                        required={isRtRequired}
+                                        style={isCpfPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
+                                        placeholder="000.000.000-00"
+                                        value={formatCnpjCpf(rt.cpf_cnpj_tecnico)}
+                                        onChange={(e) => {
+                                          const val = cleanDigits(e.target.value);
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], cpf_cnpj_tecnico: val };
+                                            return { ...prev, responsaveis_tecnicos: list };
+                                          });
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
 
-                              <div className="form-col-4">
-                                <label className="field-label">
-                                  <span>Nº ART / RRT / TRT *</span>
-                                  <input
-                                    type="text"
-                                    className="input-text"
-                                    placeholder="Ex: BA20261628773"
-                                    value={rt.n_art_rrt}
-                                    onChange={(e) => {
-                                      const val = e.target.value.toUpperCase();
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], n_art_rrt: val };
-                                        return { ...prev, responsaveis_tecnicos: list, n_art_rrt: val };
-                                      });
-                                    }}
-                                  />
-                                </label>
-                              </div>
+                                  <div className="form-col-4">
+                                    <label className="field-label">
+                                      <span>
+                                        Conselho Profissional
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <select
+                                        className="input-select"
+                                        required={isRtRequired}
+                                        value={rt.conselho}
+                                        onChange={(e) => {
+                                          const val = e.target.value as 'CREA' | 'CAU' | 'CFT';
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], conselho: val };
+                                            return { ...prev, responsaveis_tecnicos: list };
+                                          });
+                                        }}
+                                      >
+                                        <option value="CREA">CREA (Engenharia e Agronomia)</option>
+                                        <option value="CAU">CAU (Arquitetura e Urbanismo)</option>
+                                        <option value="CFT">CFT (Técnicos Industriais)</option>
+                                      </select>
+                                    </label>
+                                  </div>
 
-                              <div className="form-col-6">
-                                <label className="field-label">
-                                  <span>E-mail do Responsável Técnico</span>
-                                  <input
-                                    type="email"
-                                    className="input-text"
-                                    placeholder="engenheiro@email.com"
-                                    value={rt.email_tecnico || ''}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], email_tecnico: val };
-                                        return { ...prev, responsaveis_tecnicos: list };
-                                      });
-                                    }}
-                                  />
-                                </label>
-                              </div>
+                                  <div className="form-col-4">
+                                    <label className="field-label">
+                                      <span>
+                                        Nº Registro no Conselho
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <input
+                                        type="text"
+                                        className="input-text"
+                                        required={isRtRequired}
+                                        style={isRegPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
+                                        placeholder="Ex: 05189283-BA"
+                                        value={rt.n_registro_conselho}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], n_registro_conselho: val };
+                                            return { ...prev, responsaveis_tecnicos: list };
+                                          });
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
 
-                              <div className="form-col-6">
-                                <label className="field-label">
-                                  <span>Telefone do Responsável Técnico</span>
-                                  <input
-                                    type="text"
-                                    className="input-text"
-                                    placeholder="(71) 99999-9999"
-                                    value={formatPhone(rt.telefone_tecnico)}
-                                    onChange={(e) => {
-                                      const val = cleanDigits(e.target.value);
-                                      setFormData((prev) => {
-                                        const list = [...(prev.responsaveis_tecnicos || [])];
-                                        list[idx] = { ...list[idx], telefone_tecnico: val };
-                                        return { ...prev, responsaveis_tecnicos: list };
-                                      });
-                                    }}
-                                  />
-                                </label>
+                                  <div className="form-col-4">
+                                    <label className="field-label">
+                                      <span>
+                                        Nº ART / RRT / TRT
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <input
+                                        type="text"
+                                        className="input-text"
+                                        required={isRtRequired}
+                                        style={isArtPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
+                                        placeholder="Ex: BA20261628773"
+                                        value={rt.n_art_rrt}
+                                        onChange={(e) => {
+                                          const val = e.target.value.toUpperCase();
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], n_art_rrt: val };
+                                            return { ...prev, responsaveis_tecnicos: list, n_art_rrt: idx === 0 ? val : prev.n_art_rrt };
+                                          });
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
+
+                                  <div className="form-col-6">
+                                    <label className="field-label">
+                                      <span>
+                                        E-mail do Responsável Técnico
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <input
+                                        type="email"
+                                        className="input-text"
+                                        required={isRtRequired}
+                                        style={isEmailPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
+                                        placeholder="engenheiro@email.com"
+                                        value={rt.email_tecnico || ''}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], email_tecnico: val };
+                                            return { ...prev, responsaveis_tecnicos: list };
+                                          });
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
+
+                                  <div className="form-col-6">
+                                    <label className="field-label">
+                                      <span>
+                                        Telefone do Responsável Técnico
+                                        {isRtRequired && <span style={{ color: '#dc2626', fontWeight: 700 }}> *</span>}
+                                      </span>
+                                      <input
+                                        type="text"
+                                        className="input-text"
+                                        required={isRtRequired}
+                                        style={isTelPending ? { borderColor: '#fca5a5', backgroundColor: '#fffafa' } : undefined}
+                                        placeholder="(71) 99999-9999"
+                                        value={formatPhone(rt.telefone_tecnico)}
+                                        onChange={(e) => {
+                                          const val = cleanDigits(e.target.value);
+                                          setFormData((prev) => {
+                                            const list = prev.responsaveis_tecnicos && prev.responsaveis_tecnicos.length > 0
+                                              ? [...prev.responsaveis_tecnicos]
+                                              : [{ ...rt }];
+                                            list[idx] = { ...list[idx], telefone_tecnico: val };
+                                            return { ...prev, responsaveis_tecnicos: list };
+                                          });
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          </div>
-                        ))}
+                            );
+                          });
+                        })()}
 
                         <button
                           type="button"

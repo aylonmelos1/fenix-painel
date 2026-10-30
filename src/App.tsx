@@ -21,6 +21,7 @@ const ProjectDraftModal = lazy(() => import('./ProjectDraftModal').then((m) => (
 const OdooIntegration = lazy(() => import('./OdooIntegration').then((m) => ({ default: m.OdooIntegration })));
 import { downloadExcelReport, type ExcelCell } from './excel';
 import fireStationHero from './assets/fire-station-hero.webp';
+import { WordCarouselLoader, SkeletonBlock, BuildingDrawerSkeleton, TableRowsSkeleton } from './WordCarouselLoader';
 
 const logo = <span className="brand-mark"><Flame size={21} strokeWidth={2.5} /></span>;
 
@@ -728,12 +729,13 @@ function ProcessWorkspace({ view, processes, buildings, sourceAccounts, historyR
   </section>;
 }
 
-function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, windowMonths, onWindowChange, onSaveWindow, savingWindow, error, updatingId, onDisposition, onOpen }: {
+function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, windowMonths, onWindowChange, onSaveWindow, savingWindow, error, updatingId, onDisposition, onOpen, loading }: {
   records: RenewalRecord[]; list: 'active' | 'archived'; onListChange: (list: 'active' | 'archived') => void;
   sourceAccounts: Array<{ id: string; label: string }>;
   windowMonths: number; onWindowChange: (months: number) => void; onSaveWindow: () => void; savingWindow: boolean;
   error: string; updatingId: string; onDisposition: (item: RenewalRecord, disposition: 'archived' | 'lost' | 'active') => void;
   onOpen: (buildingId: string, processId: string) => void;
+  loading?: boolean;
 }) {
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
@@ -768,14 +770,34 @@ function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, window
     {error && <div className="settings-message error">{error}</div>}
     {list === 'active' && <ul className="renewal-legend"><li><i className="normal" /> <b>Verde:</b> Dentro do prazo (Normal/Seguro)</li><li><i className="attention" /> <b>Amarelo/Laranja:</b> Prazo próximo (Atenção)</li><li><i className="urgent" /> <b>Vermelho:</b> No limite do prazo (Alerta/Urgência)</li><li><i className="overdue" /> <b>Preto ou Roxo:</b> Prazo perdido (Vencido)</li></ul>}
     <div className="table-toolbar renewal-filters"><div className="renewal-filter-controls"><DateRangePicker from={dateFrom} to={dateTo} onApply={(from, to) => { setDateFrom(from); setDateTo(to); }} label="Renovação" /><label>Situação<select value={situation} onChange={(event) => setSituation(event.target.value)}><option value="all">Todas</option>{list === 'active' ? <><option value="normal">Dentro do prazo</option><option value="attention">Prazo próximo</option><option value="urgent">No limite</option><option value="overdue">Vencidas</option></> : <><option value="archived">Arquivados</option><option value="lost">Perdidos</option></>}</select></label><label>Mês<select value={month} onChange={(event) => setMonth(event.target.value)}><option value="all">Todos</option>{Array.from({ length: 12 }, (_, index) => { const value = String(index + 1).padStart(2, '0'); const label = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, index, 1))); return <option key={value} value={value}>{label}</option>; })}</select></label>{sourceAccounts.length > 0 && <label className="source-filter-label">Conta<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>}{hasFilters && <button className="text-link renewal-clear-filters" onClick={clearFilters}>Limpar filtros</button>}</div><label className="search-box renewal-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar edificação, município ou processo..." aria-label="Buscar renovações" /></label><span className="renewal-result-count">Exibindo {filteredRecords.length} de {records.length}</span></div>
-    <div className="table-wrap"><table><thead><tr><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>PROCESSO</th><th>HOMOLOGADO EM</th><th>RENOVAÇÃO EM</th><th>SITUAÇÃO</th><th>AÇÕES</th></tr></thead><tbody>
-      {filteredRecords.map((item) => <tr key={item.id} className="clickable-row" onClick={() => onOpen(item.buildingId, item.id)}>
-        <td><b>{item.buildingReference}</b><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></td><td>{item.municipality || '—'}</td><td><b className="protocol-text">{item.protocol || 'Sem protocolo'}</b><small className="table-subtext">{item.type}</small></td><td>{dateLabel(item.homologatedAt)}</td><td>{dateLabel(item.renewalAt)}</td>
-        <td><span className={`renewal-badge ${badgeClass(item)}`}>{dispositionLabel(item)}</span></td>
-        <td><div className="renewal-row-actions" onClick={(event) => event.stopPropagation()}>{list === 'active' ? <><button disabled={Boolean(updatingId)} title="Arquivar renovação" aria-label="Arquivar renovação" onClick={() => onDisposition(item, 'archived')}><Archive size={15} /></button><button disabled={Boolean(updatingId)} title="Marcar como perdido" aria-label="Marcar como perdido" onClick={() => onDisposition(item, 'lost')}><UserX size={15} /></button></> : <><button disabled={Boolean(updatingId)} title="Reativar renovação" aria-label="Reativar renovação" onClick={() => onDisposition(item, 'active')}><RotateCcw size={15} /></button><button disabled={Boolean(updatingId)} title={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} aria-label={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} onClick={() => onDisposition(item, item.disposition === 'lost' ? 'archived' : 'lost')}>{item.disposition === 'lost' ? <Archive size={15} /> : <UserX size={15} />}</button></>}</div></td>
-      </tr>)}
-      {!filteredRecords.length && <tr><td colSpan={7} className="empty-row">{records.length ? <><Search size={20} /><b>Nenhum resultado para esses filtros</b><span>Altere a pesquisa, o período, o mês ou a situação.</span></> : <><CalendarClock size={20} /><b>{list === 'active' ? 'Nenhuma renovação na janela' : 'Nenhum item arquivado'}</b><span>{list === 'active' ? 'A lista considera AVCBs e CLCBs homologados com histórico sincronizado.' : 'Ao arquivar ou marcar como perdido, o processo aparecerá aqui.'}</span></>}</td></tr>}
-    </tbody></table></div>
+    <div className="table-wrap">
+      {loading ? (
+        <>
+          <div style={{ padding: '14px 16px 12px' }}>
+            <WordCarouselLoader
+              prefix="Calculando"
+              words={["vencimentos de AVCB e CLCB", "janelas de renovação", "certificados homologados", "prazos prioritários"]}
+            />
+          </div>
+          <table>
+            <thead><tr><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>PROCESSO</th><th>HOMOLOGADO EM</th><th>RENOVAÇÃO EM</th><th>SITUAÇÃO</th><th>AÇÕES</th></tr></thead>
+            <TableRowsSkeleton rows={5} cols={7} />
+          </table>
+        </>
+      ) : (
+        <table>
+          <thead><tr><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>PROCESSO</th><th>HOMOLOGADO EM</th><th>RENOVAÇÃO EM</th><th>SITUAÇÃO</th><th>AÇÕES</th></tr></thead>
+          <tbody>
+            {filteredRecords.map((item) => <tr key={item.id} className="clickable-row" onClick={() => onOpen(item.buildingId, item.id)}>
+              <td><b>{item.buildingReference}</b><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></td><td>{item.municipality || '—'}</td><td><b className="protocol-text">{item.protocol || 'Sem protocolo'}</b><small className="table-subtext">{item.type}</small></td><td>{dateLabel(item.homologatedAt)}</td><td>{dateLabel(item.renewalAt)}</td>
+              <td><span className={`renewal-badge ${badgeClass(item)}`}>{dispositionLabel(item)}</span></td>
+              <td><div className="renewal-row-actions" onClick={(event) => event.stopPropagation()}>{list === 'active' ? <><button disabled={Boolean(updatingId)} title="Arquivar renovação" aria-label="Arquivar renovação" onClick={() => onDisposition(item, 'archived')}><Archive size={15} /></button><button disabled={Boolean(updatingId)} title="Marcar como perdido" aria-label="Marcar como perdido" onClick={() => onDisposition(item, 'lost')}><UserX size={15} /></button></> : <><button disabled={Boolean(updatingId)} title="Reativar renovação" aria-label="Reativar renovação" onClick={() => onDisposition(item, 'active')}><RotateCcw size={15} /></button><button disabled={Boolean(updatingId)} title={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} aria-label={item.disposition === 'lost' ? 'Mover para arquivados' : 'Marcar como perdido'} onClick={() => onDisposition(item, item.disposition === 'lost' ? 'archived' : 'lost')}>{item.disposition === 'lost' ? <Archive size={15} /> : <UserX size={15} />}</button></>}</div></td>
+            </tr>)}
+            {!filteredRecords.length && <tr><td colSpan={7} className="empty-row">{records.length ? <><Search size={20} /><b>Nenhum resultado para esses filtros</b><span>Altere a pesquisa, o período, o mês ou a situação.</span></> : <><CalendarClock size={20} /><b>{list === 'active' ? 'Nenhuma renovação na janela' : 'Nenhum item arquivado'}</b><span>{list === 'active' ? 'A lista considera AVCBs e CLCBs homologados com histórico sincronizado.' : 'Ao arquivar ou marcar como perdido, o processo aparecerá aqui.'}</span></>}</td></tr>}
+          </tbody>
+        </table>
+      )}
+    </div>
   </section>;
 }
 
@@ -800,6 +822,7 @@ function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [externalSyncRunning, setExternalSyncRunning] = useState(false);
   const [renewals, setRenewals] = useState<RenewalRecord[]>([]);
+  const [renewalsLoading, setRenewalsLoading] = useState(true);
   const [renewalList, setRenewalList] = useState<'active' | 'archived'>('active');
   const [renewalWindow, setRenewalWindow] = useState(2);
   const [renewalOverdueDays, setRenewalOverdueDays] = useState(60);
@@ -829,7 +852,14 @@ function DashboardPage() {
   useEffect(() => {
     if (view !== 'renewals') return;
     let active = true;
-    api<{ windowMonths: number; overdueLimitDays: number; renewals: RenewalRecord[] }>(`/api/renewals?view=${renewalList}`).then((result) => { if (active) { setRenewalWindow(result.windowMonths); setRenewalOverdueDays(result.overdueLimitDays); setRenewals(result.renewals); setRenewalError(''); } }).catch((e) => { if (active) setRenewalError(e.message); });
+    setRenewalsLoading(true);
+    api<{ windowMonths: number; overdueLimitDays: number; renewals: RenewalRecord[] }>(`/api/renewals?view=${renewalList}`).then((result) => {
+      if (active) { setRenewalWindow(result.windowMonths); setRenewalOverdueDays(result.overdueLimitDays); setRenewals(result.renewals); setRenewalError(''); }
+    }).catch((e) => {
+      if (active) setRenewalError(e.message);
+    }).finally(() => {
+      if (active) setRenewalsLoading(false);
+    });
     return () => { active = false; };
   }, [view, renewalList]);
   useEffect(() => {
@@ -841,7 +871,21 @@ function DashboardPage() {
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
   }, []);
-  if (loading) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /><span>Preparando seu painel...</span></div>;
+  if (loading) return (
+    <div className="loading-screen fenix-dashboard-loading-screen">
+      <div className="fenix-loading-header">
+        <WordCarouselLoader
+          prefix="Carregando"
+          words={["carteira de edificações", "situação no Fênix CBMBA", "notificações e prazos", "protocolos em andamento"]}
+        />
+      </div>
+      <div className="fenix-building-skeletons dashboard-loading-skeletons" aria-label="Carregando carteira de edificações">
+        {Array.from({ length: 6 }, (_, index) => (
+          <div key={index}><i /><span><b /><small /></span></div>
+        ))}
+      </div>
+    </div>
+  );
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
   const refreshAll = refresh;
   const buildings = data.buildings;
@@ -1014,7 +1058,7 @@ function DashboardPage() {
         <section className="metrics-grid">{contextualMetrics.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} trend={metric.trend} trendPlain={'trendPlain' in metric ? metric.trendPlain : false} icon={metric.icon} tone={metric.tone} onClick={'filter' in metric && metric.filter ? () => navigate(`/painel?view=${view}&filter=${encodeURIComponent(metric.filter!)}`) : undefined} />)}</section>
         {view === 'analysis' && <section className="average-breakdown"><h2>Tempo médio em análise por tipo</h2><p>Tempo decorrido desde a movimentação mais recente de entrada em análise, conforme o histórico do Fênix.</p><div className="average-breakdown-grid">{analysisGroups.map((group) => <div key={group.label}><b>{group.label}</b><strong>{group.value}</strong><small>{group.coverage}</small></div>)}</div></section>}
         <section className="ai-alert-card"><span className="ai-alert-icon"><Sparkles size={19} /></span><div className="ai-alert-copy"><b>Sinalização automática <span className="ai-label">DADOS</span></b><p>{data.metrics.attention ? `Encontramos ${data.metrics.attention} processo${data.metrics.attention > 1 ? 's' : ''} com status que merece${data.metrics.attention > 1 ? 'm' : ''} atenção. Abra uma edificação para entender os dados e próximos passos.` : 'Não há processos com pendências sinalizadas nos dados sincronizados.'}</p><small>Resumo baseado no status recebido do Fênix · {data.sync.lastSync ? `atualizado ${formatDate(data.sync.lastSync)}` : 'aguardando primeira consulta'}</small></div><button className="button button-ghost" onClick={() => launchAi(null, 'Analise a situação geral das edificações e processos acompanhados, destacando as pendências e prioridades de atenção.')}>Perguntar à IA <ArrowRight size={15} /></button></section>
-        {view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
+        {view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} loading={renewalsLoading} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
           <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações acompanhadas.</p></div><div className="section-actions"><ExcelExportButton filename="fenix-edificacoes" sheetName="Edificações" columns={['Conta Fênix', 'Edificação', 'Município', 'Área total', 'Pavimentos', 'Protocolo', 'Tipo de processo', 'Servidor Responsável', 'Status', 'Etapa atual', 'Última atualização', 'Quantidade de processos']} rows={buildingExportRows} /><button className="text-link" onClick={() => { setSearchFilters([]); setBuildingSearchQuery(''); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div></div>
           <div className="table-toolbar building-table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="building-filter-row"><BuildingFilterSearch filters={searchFilters} sourceAccounts={data.sourceAccounts || []} inputRef={searchInputRef} query={buildingSearchQuery} onQueryChange={setBuildingSearchQuery} onAdd={(nextFilter) => setSearchFilters((current) => [...current, nextFilter])} onRemove={(id) => setSearchFilters((current) => current.filter((item) => item.id !== id))} /><DateRangePicker from={appliedBuildingDateFrom} to={appliedBuildingDateTo} onApply={(from, to) => { setAppliedBuildingDateFrom(from); setAppliedBuildingDateTo(to); }} label="Última atualização" /></div></div>
           <div className="table-wrap"><table className="building-list-table"><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span className="building-cell-copy"><b>{item.reference}</b><span className="building-details-line"><small className="building-floor-count">{item.floors ? `${item.floors} ${item.floors === 1 ? 'pavimento' : 'pavimentos'}` : 'Edificação cadastrada'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></span></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small>{item.notifiedBy && <small className="table-subtext table-notified-by" title={`Servidor Responsável: ${item.notifiedBy}`}>Servidor Responsável: {item.notifiedBy}</small>}</td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
@@ -1526,6 +1570,13 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   const [aiInsightUnavailable, setAiInsightUnavailable] = useState(false);
   const [aiSourcesOpen, setAiSourcesOpen] = useState(false);
   const [aiInsightSources, setAiInsightSources] = useState<Array<{ protocol: string; type: string; status: string; updatedAt: string; movements: number; documents: string[] }>>([]);
+  const [odooMountedForId, setOdooMountedForId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tab === 'Odoo') {
+      setOdooMountedForId(building.id);
+    }
+  }, [tab, building.id]);
 
   const reloadDetail = useCallback(async () => {
     try {
@@ -1688,7 +1739,18 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
     return <div className="document-row" key={doc.id}><span className="pdf-icon">PDF</span><span className="doc-info"><b>{doc.name}</b><small>{doc.source === 'fenix' ? `${doc.type} · Documento oficial` : `${doc.type} · ${formatDate(doc.date)}`}</small>{errorMessage && <small className="document-error-text">{errorMessage}</small>}</span><span className={`document-state ${errorMessage || !doc.available ? 'document-state-warning' : 'document-state-ready'}`}>{stateLabel}</span>{retryMetadata ? (isSessionExpired ? <button className="button button-ghost document-retry document-reconnect" onClick={() => { navigate('/configuracoes?secao=contas-fenix#settings-fenix-primary'); onClose(); }} title="Reconectar conta Fênix em Configurações"><RefreshCw size={13} style={{ marginRight: 4 }} /> Reconectar</button> : <button className="button button-ghost document-retry" onClick={async () => { setDownloadingDocumentId(doc.id); try { const result = await api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`); setDetail(result); setDocumentErrors((current) => { const next = { ...current }; delete next[doc.id]; return next; }); } catch (error) { setDocumentErrors((current) => ({ ...current, [doc.id]: error instanceof Error ? error.message : 'Falha ao consultar o Fênix.' })); } finally { setDownloadingDocumentId(null); } }}>{downloadingDocumentId === doc.id ? 'Consultando…' : 'Tentar novamente'}</button>) : doc.source === 'fenix' ? <button className="icon-button doc-download" title={manualDae && doc.kind !== 'dae' ? 'A emissão do DAE exige uma etapa manual no portal da SEFAZ-BA' : !doc.available ? (errorMessage || 'Documento não disponível no Fênix.') : doc.kind === 'dae' ? 'Abrir DAE no portal SEFAZ-BA' : `Baixar ${doc.kind === 'protocol' ? 'comprovante de protocolo' : doc.kind === 'notification' ? 'notificação' : 'certificado'} oficial do Fênix`} aria-label={`${doc.kind === 'dae' ? 'Abrir' : 'Baixar'} ${doc.name}`} disabled={downloadingDocumentId === doc.id || (manualDae && doc.kind !== 'dae') || !doc.available} onClick={() => void downloadOfficialDocument(doc)}>{downloadingDocumentId === doc.id ? <LoaderCircle className="spin" size={16} /> : <ArrowDownToLine size={16} />}</button> : demo ? <button className="icon-button doc-download" title="Arquivo ilustrativo; clique para ver o aviso" onClick={() => setNotice('Demonstração: este registro ilustra a lista de anexos e não contém um arquivo oficial.')}><ArrowDownToLine size={16} /></button> : <button className="icon-button doc-download" title="O Fênix não forneceu um endereço de download validado para este anexo." disabled><ArrowDownToLine size={16} /></button>}</div>;
   })}</div> : <div className="documents-empty"><FileText size={17} /> O Fênix não retornou documentos ou certificados disponíveis para esta edificação.</div>}{notice && <div className="document-notice" role="status"><CircleAlert size={13} /> {notice}</div>}{!demo && documents.some((doc) => doc.source === 'fenix') && <small className="source-limit">Documentos de retificação podem não ser autorizados pela sessão Fênix. O DAE pode exigir emissão manual na SEFAZ-BA.</small>}</div>;
   const updatableHistoryCount = allProcesses.filter((item) => item.id.startsWith('technicalproject:')).length;
-  const historyPanel = <div className="history-list"><div className="timeline-title"><div><h4>Movimentações do processo</h4><small>Histórico oficial de status retornado pelo Fênix.</small></div><div className="history-actions"><button className="button button-outline history-refresh-button" onClick={() => void refreshBuildingHistory()} disabled={demo || historyRefreshing || updatableHistoryCount === 0} title={demo ? 'Disponível em contas conectadas ao Fênix.' : updatableHistoryCount === 0 ? 'Esta edificação não tem processos técnicos com histórico atualizável.' : 'Atualiza somente os processos técnicos desta edificação.'}><RefreshCw className={historyRefreshing ? 'spin' : ''} size={14} /> {historyRefreshing ? 'Atualizando…' : 'Atualizar histórico'}</button><button className="button button-ai-min" onClick={() => onAsk(`Resuma em ordem cronológica o histórico dos processos da edificação ${building.reference}. Explique as mudanças relevantes, a situação atual e o próximo passo que os dados permitem inferir.`)}><Sparkles size={13} /> Resumir histórico</button></div></div>{historyRefreshFeedback && <div className={`history-refresh-feedback ${historyRefreshFeedback.tone}`} role="status">{historyRefreshFeedback.message}</div>}{allProcesses.length ? allProcesses.map((item) => <section className="history-process" key={item.id}><div className="history-process-title"><span className="history-entry-icon"><ClipboardList size={15} /></span><div><b>{item.type} · {item.protocol || 'Protocolo não informado'}</b><small>{item.timeline.length ? `${item.timeline.length} movimentações` : item.stage || item.status}</small></div><StatusPill status={item.status} /></div>{item.timeline.length ? <div className="history-event-list">{item.timeline.map((event, index) => <div className="history-event" key={`${event.label}-${event.date}-${index}`}><span className={`history-event-dot ${event.current ? 'current' : event.done ? 'done' : ''}`} /><span><b>{event.label}</b><small>{event.date ? formatDate(event.date) : 'Data não informada'}</small></span></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas para este processo.</div>}</section>) : <div className="timeline-empty">Não há processos vinculados para compor o histórico.</div>}</div>;
+  const isHistoryUpdating = historyRefreshing || (detail as { historyRefresh?: { status?: string } } | null)?.historyRefresh?.status === 'running' || (detail as { historyRefresh?: { status?: string } } | null)?.historyRefresh?.status === 'queued';
+  const historyPanel = <div className="history-list"><div className="timeline-title"><div><h4>Movimentações do processo</h4><small>Histórico oficial de status retornado pelo Fênix.</small></div><div className="history-actions"><button className="button button-outline history-refresh-button" onClick={() => void refreshBuildingHistory()} disabled={demo || historyRefreshing || updatableHistoryCount === 0} title={demo ? 'Disponível em contas conectadas ao Fênix.' : updatableHistoryCount === 0 ? 'Esta edificação não tem processos técnicos com histórico atualizável.' : 'Atualiza somente os processos técnicos desta edificação.'}><RefreshCw className={historyRefreshing ? 'spin' : ''} size={14} /> {historyRefreshing ? 'Atualizando…' : 'Atualizar histórico'}</button><button className="button button-ai-min" onClick={() => onAsk(`Resuma em ordem cronológica o histórico dos processos da edificação ${building.reference}. Explique as mudanças relevantes, a situação atual e o próximo passo que os dados permitem inferir.`)}><Sparkles size={13} /> Resumir histórico</button></div></div>
+    {isHistoryUpdating && (
+      <div className="history-refresh-live-strip">
+        <WordCarouselLoader
+          size="sm"
+          prefix="Consultando no Fênix"
+          words={["movimentações do processo", "eventos de vistoria", "despachos e análises", "linha do tempo oficial"]}
+        />
+      </div>
+    )}
+    {historyRefreshFeedback && <div className={`history-refresh-feedback ${historyRefreshFeedback.tone}`} role="status">{historyRefreshFeedback.message}</div>}{allProcesses.length ? allProcesses.map((item) => <section className="history-process" key={item.id}><div className="history-process-title"><span className="history-entry-icon"><ClipboardList size={15} /></span><div><b>{item.type} · {item.protocol || 'Protocolo não informado'}</b><small>{item.timeline.length ? `${item.timeline.length} movimentações` : item.stage || item.status}</small></div><StatusPill status={item.status} /></div>{item.timeline.length ? <div className="history-event-list">{item.timeline.map((event, index) => <div className="history-event" key={`${event.label}-${event.date}-${index}`}><span className={`history-event-dot ${event.current ? 'current' : event.done ? 'done' : ''}`} /><span><b>{event.label}</b><small>{event.date ? formatDate(event.date) : 'Data não informada'}</small></span></div>)}</div> : isHistoryUpdating ? <div className="history-timeline-skeleton">{Array.from({ length: 3 }, (_, index) => <div key={index} className="history-skeleton-event"><SkeletonBlock width={10} height={10} borderRadius="50%" style={{ marginTop: 2 }} /><div style={{ flex: 1 }}><SkeletonBlock width={`${60 + (index % 2) * 20}%`} height={12} style={{ marginBottom: 4 }} /><SkeletonBlock width="40%" height={9} /></div></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas para este processo.</div>}</section>) : <div className="timeline-empty">Não há processos vinculados para compor o histórico.</div>}</div>;
   const relatedProcesses = (items: ProcessDetail[]) => items.length > 1 && (
     <div className="related-process-list">
       <div className="timeline-title">
@@ -1728,24 +1790,41 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
       </div>
     </div>
   );
+  const isOdooTab = tab === 'Odoo';
+  const shouldKeepOdooMounted = odooMountedForId === building.id;
+
   return <div className="drawer-backdrop"><section className="building-drawer" aria-label={`Detalhes de ${building.reference}`}>
     <header className="drawer-header"><div><span className="section-kicker">FICHA DA EDIFICAÇÃO</span><h2>Detalhes da edificação</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={19} /></button></header>
-    <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span><AccountSourceBadge name={building.sourceAccountName} paused={building.sourceAccountPaused} /></div><StatusPill status={building.status} />{validityHighlights.length > 0 && <div className="profile-validity">{validityHighlights.map((item) => <div key={item.key}><b>{item.label}</b><strong>{item.value}</strong><small>{item.detail}</small></div>)}</div>}</div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail && <div className="building-facts" aria-label="Características da edificação">{[
+    <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span><AccountSourceBadge name={building.sourceAccountName} paused={building.sourceAccountPaused} /></div><StatusPill status={building.status} />{validityHighlights.length > 0 && <div className="profile-validity">{validityHighlights.map((item) => <div key={item.key}><b>{item.label}</b><strong>{item.value}</strong><small>{item.detail}</small></div>)}</div>}</div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail ? <div className="building-facts" aria-label="Características da edificação">{[
       detail.building.use ? { label: 'Uso / ocupação', value: detail.building.use } : null,
       (detail.building.totalArea ?? detail.building.area) ? { label: 'Área total', value: formatArea(detail.building.totalArea ?? detail.building.area) } : null,
       detail.building.buildingArea ? { label: 'Área construída', value: formatArea(detail.building.buildingArea) } : null,
       detail.building.areaToBeBuilt ? { label: 'Área a construir', value: formatArea(detail.building.areaToBeBuilt) } : null,
       (detail.building.floors ?? building.floors) ? { label: 'Pavimentos', value: String(detail.building.floors ?? building.floors) } : null,
       detail.building.height ? { label: 'Altura', value: detail.building.height } : null,
-    ].filter((fact): fact is { label: string; value: string } => Boolean(fact)).map((fact) => <div className="building-fact" key={fact.label}><small>{fact.label}</small><b>{fact.value}</b></div>)}{detail.building.technicalFacts?.map((fact) => <div className="building-fact" key={`technical-${fact.label}`}><small>{fact.label}</small><b>{fact.value}</b></div>)}</div>}</div>
+    ].filter((fact): fact is { label: string; value: string } => Boolean(fact)).map((fact) => <div className="building-fact" key={fact.label}><small>{fact.label}</small><b>{fact.value}</b></div>)}{detail.building.technicalFacts?.map((fact) => <div className="building-fact" key={`technical-${fact.label}`}><small>{fact.label}</small><b>{fact.value}</b></div>)}</div> : <div className="building-facts building-facts-skeleton" aria-label="Carregando características da edificação">{Array.from({ length: 8 }, (_, i) => <div className="building-fact skeleton-fact" key={i}><SkeletonBlock width="45%" height={10} style={{ marginBottom: 4 }} /><SkeletonBlock width="75%" height={14} /></div>)}</div>}</div>
       <nav className="drawer-tabs">{['Edificação', 'Projetos', 'Odoo', 'Documentos', 'Histórico'].map((name) => <button key={name} onClick={() => setTab(name)} className={tab === name ? 'selected' : ''}>{name}</button>)}</nav>
-      {error ? <div className="drawer-error"><CircleAlert size={17} />{error}</div> : !detail ? <div className="detail-loading"><LoaderCircle className="spin" size={19} /> Carregando dados...</div> : <>
+      {error ? <div className="drawer-error"><CircleAlert size={17} />{error}</div> : !detail ? (
+        <div className="building-drawer-loading-view">
+          <div className="building-drawer-loader-card">
+            <WordCarouselLoader
+              prefix="Consultando no Fênix"
+              words={["cadastro da edificação", "protocolos e vistorias", "taxas DAE na SEFAZ-BA", "certificados e notificações", "histórico de tramitação"]}
+              subtitle="Sincronizando informações oficiais desta edificação..."
+            />
+          </div>
+          <BuildingDrawerSkeleton />
+        </div>
+      ) : <>
         <div className={`detail-content-grid ${tab === 'Odoo' ? 'odoo-active' : ''}`}><div className="detail-primary">
-           {tab === 'Odoo' ? (
-             <Suspense fallback={<div className="detail-loading"><LoaderCircle className="spin" size={19} /> Carregando Odoo...</div>}>
-               <OdooIntegration buildingId={building.id} documents={documents} demo={demo} />
-             </Suspense>
-           ) : tab === 'Documentos' ? documentsPanel : tab === 'Histórico' ? historyPanel : <>
+           {shouldKeepOdooMounted && (
+             <div style={{ display: isOdooTab ? 'block' : 'none' }}>
+               <Suspense fallback={<div className="detail-loading"><WordCarouselLoader size="md" prefix="Consultando no Odoo" words={["vínculo do projeto", "etapas e tarefas da obra", "conversas do Chatter", "anexos e documentos"]} subtitle="Aguardando resposta em tempo real do servidor Odoo..." /></div>}>
+                 <OdooIntegration buildingId={building.id} documents={documents} demo={demo} />
+               </Suspense>
+             </div>
+           )}
+           {!isOdooTab && (tab === 'Documentos' ? documentsPanel : tab === 'Histórico' ? historyPanel : <>
              <div className="detail-section-heading"><div><span className="section-kicker">SITUAÇÃO DO PROCESSO</span><h3>{tab === 'Edificação' ? 'Andamento atual' : tab}</h3></div>{process && <StatusPill status={process.status} />}</div>
              {process ? <>
                <div className="current-status-card fenix-status-card">
@@ -1794,8 +1873,8 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
                {tab !== 'Edificação' && relatedProcesses(tabProcesses)}
              </> : <div className="no-process-card"><FileCheck2 size={20} /><b>{tab === 'Projetos' ? 'Nenhum projeto, solicitação ou vistoria vinculado' : 'Nenhum processo vinculado'}</b><span>Não encontramos registros desta categoria para a edificação na sincronização atual.</span></div>}
              {tab === 'Edificação' && documentsPanel}
-           </>}
-        </div><aside className="detail-ai-aside"><div className="ai-aside-head"><span className="ai-icon"><Sparkles size={16} /></span><div><b>Assistente de IA</b><small>{aiInsightLoading ? 'Analisando dados do processo...' : 'Leitura contextual · fontes do Fênix'}</small></div><span className="ai-live-dot" /></div><div className="ai-answer-card"><span className="ai-answer-label"><Sparkles size={12} /> {aiInsight ? 'LEITURA DA IA' : 'LEITURA INICIAL DOS DADOS'}</span><p>{aiInsightLoading ? 'A IA está conferindo a situação, o histórico e os documentos disponíveis...' : aiInsight || (contextProcess ? `O processo está na etapa “${contextProcess.stage || contextProcess.status}”. ${contextProcess.status.toLowerCase().includes('document') || contextProcess.status.toLowerCase().includes('exig') ? 'Os dados indicam uma pendência documental ou exigência. Consulte a notificação original no Fênix para identificar o que foi solicitado.' : 'A etapa mais recente foi registrada em ' + formatDate(contextProcess.updatedAt) + '. Consulte o Fênix para confirmar se houve nova movimentação.'}` : 'Não há dados de processo suficientes para explicar a situação desta edificação.')}</p><small>{aiInsight ? 'Gerada com OpenAI a partir dos dados selecionados · confira as fontes abaixo' : aiInsightUnavailable ? 'IA indisponível ou não configurada · leitura baseada no último status sincronizado' : 'Leitura dos dados sincronizados · confirme a informação no Fênix'}</small></div>{aiInsightSources.length > 0 && <details className="ai-citations ai-insight-sources" open={aiSourcesOpen} onToggle={(event) => { const isOpen = event.currentTarget.open; setAiSourcesOpen(isOpen); }}><summary>FONTES CONSULTADAS <span>· {aiInsightSources.length}</span></summary>{aiInsightSources.map((source, index) => <div key={`${source.protocol}-${source.type}-${index}`}><b>{source.protocol || 'Processo vinculado'} · {source.type}</b><span>{source.status} · {source.movements} movimentações{source.documents.length ? ` · ${source.documents.join(" · ")}` : ""} · {formatDate(source.updatedAt)}</span></div>)}</details>}<div className="next-check"><b><ListChecks size={15} /> Próxima verificação sugerida</b><span>{nextCheckText}</span></div><button className="button button-teal button-wide" onClick={() => onAsk()}><MessageCircle size={15} /> Conversar com a IA <ArrowRight size={15} /></button><div className="ai-source-note"><ShieldCheck size={14} /><span>As respostas da IA são sugestões rastreadas às fontes exibidas. Confirme decisões no Fênix.</span></div></aside></div>
+           </>)}
+        </div><aside className="detail-ai-aside"><div className="ai-aside-head"><span className="ai-icon"><Sparkles size={16} /></span><div><b>Assistente de IA</b><small>{aiInsightLoading ? 'Analisando dados do processo...' : 'Leitura contextual · fontes do Fênix'}</small></div><span className="ai-live-dot" /></div><div className="ai-answer-card"><span className="ai-answer-label"><Sparkles size={12} /> {aiInsight ? 'LEITURA DA IA' : 'LEITURA INICIAL DOS DADOS'}</span>{aiInsightLoading ? <div className="ai-insight-loading-card"><WordCarouselLoader size="sm" prefix="Analisando" words={["situação do processo", "histórico de vistorias", "documentos e prazos", "próximos passos"]} /><div className="ai-skeleton-lines"><SkeletonBlock height={12} width="100%" /><SkeletonBlock height={12} width="92%" /><SkeletonBlock height={12} width="70%" /></div></div> : <p>{aiInsight || (contextProcess ? `O processo está na etapa “${contextProcess.stage || contextProcess.status}”. ${contextProcess.status.toLowerCase().includes('document') || contextProcess.status.toLowerCase().includes('exig') ? 'Os dados indicam uma pendência documental ou exigência. Consulte a notificação original no Fênix para identificar o que foi solicitado.' : 'A etapa mais recente foi registrada em ' + formatDate(contextProcess.updatedAt) + '. Consulte o Fênix para confirmar se houve nova movimentação.'}` : 'Não há dados de processo suficientes para explicar a situação desta edificação.')}</p>}<small>{aiInsight ? 'Gerada com OpenAI a partir dos dados selecionados · confira as fontes abaixo' : aiInsightUnavailable ? 'IA indisponível ou não configurada · leitura baseada no último status sincronizado' : 'Leitura dos dados sincronizados · confirme a informação no Fênix'}</small></div>{aiInsightSources.length > 0 && <details className="ai-citations ai-insight-sources" open={aiSourcesOpen} onToggle={(event) => { const isOpen = event.currentTarget.open; setAiSourcesOpen(isOpen); }}><summary>FONTES CONSULTADAS <span>· {aiInsightSources.length}</span></summary>{aiInsightSources.map((source, index) => <div key={`${source.protocol}-${source.type}-${index}`}><b>{source.protocol || 'Processo vinculado'} · {source.type}</b><span>{source.status} · {source.movements} movimentações{source.documents.length ? ` · ${source.documents.join(" · ")}` : ""} · {formatDate(source.updatedAt)}</span></div>)}</details>}<div className="next-check"><b><ListChecks size={15} /> Próxima verificação sugerida</b><span>{nextCheckText}</span></div><button className="button button-teal button-wide" onClick={() => onAsk()}><MessageCircle size={15} /> Conversar com a IA <ArrowRight size={15} /></button><div className="ai-source-note"><ShieldCheck size={14} /><span>As respostas da IA são sugestões rastreadas às fontes exibidas. Confirme decisões no Fênix.</span></div></aside></div>
       </>}
       <div className="drawer-sync-note"><Cloud size={14} /> Dados da última sincronização · {building.lastUpdated ? formatDate(building.lastUpdated) : 'sem data'} <button onClick={() => onAsk()}><Sparkles size={13} /> Perguntar</button></div>
     </div>
@@ -2874,9 +2953,31 @@ function OdooIntegrationSettings() {
   }
   const disabled = loading || busy || settings?.reason === 'demo';
   return <section className="settings-card">
-    <div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Integração Odoo</h2><p>Conecte o painel ao Odoo para consultar projetos e registrar ações no Chatter.</p></div><span className={`settings-status ${settings?.configured ? 'active' : ''}`}><i />{settings?.configured ? 'Configurado' : settings?.reason === 'demo' ? 'Indisponível na demonstração' : 'Precisa configurar'}</span></div>
+    <div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Integração Odoo</h2><p>Conecte o painel ao Odoo para consultar projetos e registrar ações no Chatter.</p></div>{loading ? <SkeletonBlock width={110} height={22} borderRadius={12} /> : <span className={`settings-status ${settings?.configured ? 'active' : ''}`}><i />{settings?.configured ? 'Configurado' : settings?.reason === 'demo' ? 'Indisponível na demonstração' : 'Precisa configurar'}</span>}</div>
     {settings?.reason === 'demo' && <div className="settings-message">A integração Odoo pode ser configurada pela conta Fênix da empresa.</div>}
-    {loading ? <div className="connection-empty"><LoaderCircle size={17} className="spin" /> Carregando configuração...</div> : <form className="settings-form odoo-settings-form" onSubmit={(event) => void save(event)}>
+    {loading ? <div className="odoo-settings-loading-wrap">
+      <div style={{ marginBottom: 14 }}>
+        <WordCarouselLoader
+          size="sm"
+          prefix="Verificando"
+          words={["configuração do Odoo", "credenciais salvas", "estado da integração"]}
+        />
+      </div>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div>
+          <SkeletonBlock width={130} height={12} style={{ marginBottom: 6 }} />
+          <SkeletonBlock width="100%" height={43} borderRadius={8} />
+        </div>
+        <div>
+          <SkeletonBlock width={100} height={12} style={{ marginBottom: 6 }} />
+          <SkeletonBlock width="100%" height={43} borderRadius={8} />
+        </div>
+        <div>
+          <SkeletonBlock width={140} height={12} style={{ marginBottom: 6 }} />
+          <SkeletonBlock width="100%" height={43} borderRadius={8} />
+        </div>
+      </div>
+    </div> : <form className="settings-form odoo-settings-form" onSubmit={(event) => void save(event)}>
       <label>URL base da Odoo<input type="url" inputMode="url" autoComplete="url" maxLength={2048} required placeholder="https://sua-instancia.odoo.com" value={url} onChange={(event) => setUrl(event.target.value)} disabled={disabled} /></label>
       <small className="field-hint">Use a origem HTTPS da instância, sem usuário, senha ou caminho /json/2. Para desenvolvimento local, HTTP em localhost é aceito.</small>
       <label>Banco de dados<input maxLength={150} autoComplete="off" placeholder="Opcional quando o domínio identifica a base" value={database} onChange={(event) => setDatabase(event.target.value)} disabled={disabled} /></label>
@@ -3017,36 +3118,37 @@ function FenixConnectionsPanel({ user, revision, onAdd, onManage, onReauthentica
   const [connections, setConnections] = useState<FenixConnectionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
+  const [syncingId, setSyncingId] = useState('');
   const [editingId, setEditingId] = useState('');
   const [editingLabel, setEditingLabel] = useState('');
   const [confirmRemoveId, setConfirmRemoveId] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  async function load() {
-    setLoading(true);
+  async function load(options?: { silent?: boolean }) {
+    if (!options?.silent) setLoading(true);
     try {
       const result = await api<{ connections: FenixConnectionSummary[] }>('/api/fenix-connections');
       setConnections(result.connections); setError('');
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível carregar as conexões.'); }
-    finally { setLoading(false); }
+    finally { if (!options?.silent) setLoading(false); }
   }
   useEffect(() => { void load(); }, [revision]);
   async function update(connection: FenixConnectionSummary, patch: Record<string, unknown>, successMessage: string) {
     setBusyId(connection.id); setMessage(''); setError('');
     try {
       await api(`/api/fenix-connections/${encodeURIComponent(connection.id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
-      setMessage(successMessage); await load(); await onChanged();
+      setMessage(successMessage); await load({ silent: true }); await onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível atualizar a conexão.'); }
     finally { setBusyId(''); }
   }
   async function sync(connection: FenixConnectionSummary) {
-    setBusyId(connection.id); setMessage(''); setError('');
+    setBusyId(connection.id); setSyncingId(connection.id); setMessage(''); setError('');
     try {
       const result = await api<{ syncWarning?: boolean; error?: string }>('/api/fenix-connections/' + encodeURIComponent(connection.id) + '/sync', { method: 'POST' });
       setMessage(result.syncWarning ? 'A conexão foi consultada, mas a atualização teve falhas.' : `Dados de ${connection.label} atualizados.`);
-      await load(); await onChanged();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível atualizar essa conta.'); await load(); }
-    finally { setBusyId(''); }
+      await load({ silent: true }); await onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível atualizar essa conta.'); await load({ silent: true }); }
+    finally { setBusyId(''); setSyncingId(''); }
   }
   async function saveLabel(connection: FenixConnectionSummary) {
     if (!editingLabel.trim()) { setError('Informe um nome para a conexão.'); return; }
@@ -3058,14 +3160,49 @@ function FenixConnectionsPanel({ user, revision, onAdd, onManage, onReauthentica
     try {
       const result = await api<{ deletedBuildings: number }>('/api/fenix-connections/' + encodeURIComponent(connection.id), { method: 'DELETE', body: JSON.stringify({ deleteLocalData: true }) });
       setConfirmRemoveId(''); setMessage(`${connection.label} removida. ${result.deletedBuildings} edificações e os dados locais relacionados foram excluídos.`);
-      await load(); await onChanged();
+      await load({ silent: true }); await onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível remover a conexão.'); }
     finally { setBusyId(''); }
   }
   return <section className="settings-card fenix-connections-card">
     <div className="settings-card-heading"><span className="settings-card-icon connection-icon"><Cloud size={19} /></span><div><h2>Contas Fênix acompanhadas</h2><p>Conecte contas de clientes e selecione quais edificações entram no painel.</p></div><button className="button button-teal" onClick={onAdd} disabled={user.demo}><Plus size={15} /> Conta Fênix</button></div>
     {message && <div className="settings-message">{message}</div>}{error && <div className="settings-message error">{error}</div>}
-    {loading ? <div className="connection-empty"><LoaderCircle size={18} className="spin" /> Carregando conexões...</div> : connections.length ? <div className="fenix-connection-list">{connections.map((connection) => <article className="fenix-connection-item" key={connection.id}>
+    {loading ? <div className="fenix-connections-loading-wrap">
+      <div style={{ marginBottom: 12 }}>
+        <WordCarouselLoader
+          size="sm"
+          prefix="Carregando"
+          words={["contas vinculadas", "sessões do Fênix", "clientes monitorados"]}
+        />
+      </div>
+      <div className="fenix-connection-skeletons">
+        {Array.from({ length: 2 }, (_, i) => (
+          <article className="fenix-connection-item connection-skeleton-card" key={i}>
+            <div className="fenix-connection-top">
+              <SkeletonBlock width={34} height={34} borderRadius={8} />
+              <div style={{ flex: 1, display: 'grid', gap: 6 }}>
+                <SkeletonBlock width="40%" height={15} />
+                <SkeletonBlock width="65%" height={11} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <SkeletonBlock width={140} height={32} borderRadius={7} />
+              <SkeletonBlock width={90} height={32} borderRadius={7} />
+              <SkeletonBlock width={80} height={32} borderRadius={7} />
+            </div>
+          </article>
+        ))}
+      </div>
+    </div> : connections.length ? <div className="fenix-connection-list">{connections.map((connection) => <article className="fenix-connection-item" key={connection.id}>
+      {syncingId === connection.id && (
+        <div className="connection-syncing-banner" style={{ marginBottom: 10 }}>
+          <WordCarouselLoader
+            size="sm"
+            prefix="Sincronizando"
+            words={["edificações da conta", "processos no Fênix", "vistorias e notificações"]}
+          />
+        </div>
+      )}
       <div className="fenix-connection-top"><span className="connection-company-icon"><Cloud size={18} /></span><div className="fenix-connection-title"><div><b>{connection.label}</b><span className={`settings-status ${connection.status === 'active' ? 'active' : ''}`}><i />{connectionStatusLabel(connection.status)}</span></div><small>{connection.selectedCount} {connection.selectedCount === 1 ? 'edificação acompanhada' : 'edificações acompanhadas'} · última consulta {connection.lastSync ? formatDate(connection.lastSync) : 'ainda não realizada'}</small>{connection.syncMessage && connection.status !== 'active' && <small className="connection-last-error">{connection.syncMessage}</small>}</div></div>
       {editingId === connection.id && <form className="connection-rename-form" onSubmit={(event) => { event.preventDefault(); void saveLabel(connection); }}><label>Nome desta conexão<input value={editingLabel} maxLength={60} onChange={(event) => setEditingLabel(event.target.value)} autoFocus /></label><button className="button button-teal button-sm" disabled={busyId === connection.id}><Check size={14} /> Salvar</button><button className="button button-outline button-sm" type="button" onClick={() => setEditingId('')}>Cancelar</button></form>}
       <div className="fenix-connection-actions"><button className="button button-outline button-sm" onClick={() => onManage(connection)}><Building2 size={14} /> Gerenciar edificações</button>{connection.status === 'reauth_required' && <button className="button button-outline button-sm" onClick={() => onReauthenticate(connection)}><KeyRound size={14} /> Reconectar</button>}<button className="button button-outline button-sm" onClick={() => void sync(connection)} disabled={busyId === connection.id || connection.paused || !connection.selectedCount} title={!connection.selectedCount ? 'Selecione edificações para consultar esta conta.' : undefined}>{busyId === connection.id ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} Atualizar</button><button className="button button-outline button-sm" onClick={() => void update(connection, { paused: !connection.paused }, connection.paused ? 'Sincronização retomada.' : 'Sincronização pausada.') } disabled={busyId === connection.id}>{connection.paused ? <Play size={14} /> : <Pause size={14} />}{connection.paused ? 'Retomar' : 'Pausar'}</button><button className="button button-outline button-sm" onClick={() => { setEditingId(connection.id); setEditingLabel(connection.label); setError(''); }}><Pencil size={14} /> Renomear</button><button className="button button-danger button-sm" onClick={() => setConfirmRemoveId(confirmRemoveId === connection.id ? '' : connection.id)} disabled={busyId === connection.id}><Trash2 size={14} /> Remover</button></div>
@@ -3222,7 +3359,20 @@ function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
         </form> : <div className="fenix-building-picker">
           <div className="fenix-selection-summary"><div><b>{selectedCount} {selectedCount === 1 ? 'selecionada' : 'selecionadas'}</b><small>{mode === 'new' ? 'Apenas as selecionadas serão adicionadas ao painel.' : 'As desmarcadas deixam as listas ativas e ficam guardadas para reativação.'}</small></div><label className="fenix-connection-label">{mode === 'new' ? 'Nome para identificar esta conta' : 'Nome da conexão'}<input value={label} maxLength={60} onChange={(event) => setLabel(event.target.value)} /></label></div>
           {!catalogAvailable && <div className="settings-message error fenix-catalog-retry" role="alert"><span>{error || (buildings.length ? 'Não foi possível atualizar a lista agora. A última lista salva continua disponível.' : 'Não foi possível carregar a lista desta conta.')}</span>{mode === 'new' && pendingId && error.toLocaleLowerCase('pt-BR').includes('expirou') ? <button className="button button-outline button-sm" type="button" onClick={restartExpiredLogin}>Fazer login novamente</button> : <button className="button button-outline button-sm" type="button" onClick={retryCatalog} disabled={loadingCatalog || (mode === 'new' && !pendingId)}>{loadingCatalog ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} Tentar carregar novamente</button>}</div>}
-          {loadingCatalog ? <div className="fenix-building-skeletons" aria-label="Carregando edificações">{Array.from({ length: 6 }, (_, index) => <div key={index}><i /><span><b /><small /></span></div>)}</div> : buildings.length ? <>
+          {loadingCatalog ? (
+            <div className="fenix-catalog-loading-wrap">
+              <div style={{ marginBottom: 10 }}>
+                <WordCarouselLoader
+                  size="sm"
+                  prefix="Carregando"
+                  words={["carteira de edificações", "situação no Fênix CBMBA", "notificações e prazos", "protocolos em andamento"]}
+                />
+              </div>
+              <div className="fenix-building-skeletons" aria-label="Carregando edificações">
+                {Array.from({ length: 6 }, (_, index) => <div key={index}><i /><span><b /><small /></span></div>)}
+              </div>
+            </div>
+          ) : buildings.length ? <>
             <label className="fenix-building-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar edificação ou município" /></label>
             <div className="fenix-building-list">{visibleBuildings.map((item) => {
               const selected = selectedIds.has(item.id);

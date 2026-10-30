@@ -41,6 +41,18 @@ test('Caso Real 1: VAL SAT #89735 -> PTSCLCB2 (434.11 m², 2 pavimentos, 5 medid
     discount_area: '0',
     number_floors: 2,
     height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
+    n_art_rrt: 'BA20261628773',
+    responsaveis_tecnicos: [
+      {
+        nome_tecnico: 'ENG. MARCOS VINICIUS ALMEIDA',
+        cpf_cnpj_tecnico: '09566970000123',
+        conselho: 'CREA',
+        n_registro_conselho: '05189283-BA',
+        email_tecnico: 'engenharia@abaincendio.com.br',
+        tel_tecnico: '7140002895',
+        n_art_rrt: 'BA20261628773'
+      }
+    ],
     address: {
       zip_code: '45355000',
       public_place: 'RUA OTACILIO PINHEIRO',
@@ -149,6 +161,18 @@ test('Caso Real 3: Bamaq #1069 -> PT (3.695,76 m², 12 medidas recomendadas)', (
     building_area: '3695.76',
     number_floors: 3,
     height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
+    n_art_rrt: 'BA20230506751',
+    responsaveis_tecnicos: [
+      {
+        nome_tecnico: 'ENG. CIVIL RESPONSAVEL BAMAQ',
+        cpf_cnpj_tecnico: '12345678901',
+        conselho: 'CREA',
+        n_registro_conselho: '123456-BA',
+        email_tecnico: 'engenharia@bamaq.com.br',
+        tel_tecnico: '71999998888',
+        n_art_rrt: 'BA20230506751'
+      }
+    ],
     address: {
       zip_code: '45355000',
       public_place: 'RODOVIA BA 026',
@@ -302,6 +326,18 @@ test('Persistência SQLite: ciclo completo de CRUD para fenix_project_drafts', (
       building_area: 250,
       number_floors: 2,
       height: 'Baixa = H <= 6,00 m',
+      n_art_rrt: 'BA20261628773',
+      responsaveis_tecnicos: [
+        {
+          nome_tecnico: 'ENG. TESTE CRUD',
+          cpf_cnpj_tecnico: '12345678901',
+          conselho: 'CREA',
+          n_registro_conselho: '99999-BA',
+          email_tecnico: 'eng@teste.com',
+          tel_tecnico: '71988887777',
+          n_art_rrt: 'BA20261628773'
+        }
+      ],
       address: {
         zip_code: '45355000',
         public_place: 'RUA DO TESTE',
@@ -877,6 +913,18 @@ test('Validação de eventos temporários: duração <= 180 dias em PTS e antece
     building_area: 500,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
+    n_art_rrt: 'BA20261628773',
+    responsaveis_tecnicos: [
+      {
+        nome_tecnico: 'ENG. RESPONSAVEL EVENTO',
+        cpf_cnpj_tecnico: '12345678901',
+        conselho: 'CREA',
+        n_registro_conselho: '54321-BA',
+        email_tecnico: 'evento@eng.com.br',
+        tel_tecnico: '71999990000',
+        n_art_rrt: 'BA20261628773'
+      }
+    ],
     address: { zip_code: '45355000', public_place: 'Praça Central', number: 'S/N', municipio_id: 22 },
     institution: { cnae: '9001901' },
     questionario: {
@@ -1236,5 +1284,101 @@ test('streamDraftAiAssistant emite eventos de progresso SSE (thinking, delta, do
   );
   // Não deve quebrar o processo e para graciosamente
   assert.ok(abortEvents.length <= 2);
+});
+
+test('Bloqueio estrito de RT e ART/RRT: rascunhos PTSCLCB2 ou PT sem RT ou sem ART/RRT retornam valid: false e erros explícitos', () => {
+  // 1. PTSCLCB2 sem ART/RRT e sem RT
+  const ptsSemRt: ProjectDraftInput = {
+    tipo_projeto_id: 5,
+    reference_name: 'Comércio Sem RT',
+    building_area: 300,
+    number_floors: 2,
+    height: 'Baixa = H <= 6,00 m',
+    address: { zip_code: '45355000', public_place: 'Rua Central', number: '10', municipio_id: 22 },
+    institution: { cnae: '4754701', razao_social: 'LOJA TESTE' }
+  };
+  const resPts = buildAndValidateFenixProjectPayload(ptsSemRt);
+  assert.equal(resPts.valid, false);
+  assert.equal(resPts.tipoProjetoSigla, 'PTSCLCB2');
+  assert.equal(resPts.rtOptional, false);
+  assert.ok(resPts.errors.some((e) => e.includes('Número de ART/RRT do projeto técnico é obrigatório.')));
+  assert.ok(resPts.errors.some((e) => e.includes('Ao menos 1 Responsável Técnico pelo projeto deve ser informado.')));
+
+  // 2. PT Completo com ART mas com campos incompletos no RT
+  const ptRtIncompleto: ProjectDraftInput = {
+    tipo_projeto_id: 1,
+    reference_name: 'Edifício PT Incompleto',
+    building_area: 1200,
+    number_floors: 4,
+    height: 'Média = 12,00 m < H <= 23,00 m',
+    n_art_rrt: 'BA20261234567',
+    address: { zip_code: '45355000', public_place: 'Av Central', number: '100', municipio_id: 22 },
+    institution: { cnae: '6821801', razao_social: 'EMPRESA PT' },
+    responsaveis_tecnicos: [
+      {
+        nome_tecnico: '', // Vazio
+        cpf_cnpj_tecnico: '123', // Dígitos inválidos
+        n_registro_conselho: '', // Vazio
+        email_tecnico: 'invalido', // Sem @
+        tel_tecnico: '123' // Menos de 10 dígitos
+      }
+    ]
+  };
+  const resPt = buildAndValidateFenixProjectPayload(ptRtIncompleto);
+  assert.equal(resPt.valid, false);
+  assert.ok(resPt.errors.some((e) => e.includes('Nome do Responsável Técnico é obrigatório.')));
+  assert.ok(resPt.errors.some((e) => e.includes('CPF ou CNPJ do Responsável Técnico é obrigatório e deve ter 11 ou 14 dígitos.')));
+  assert.ok(resPt.errors.some((e) => e.includes('Número de registro no conselho do Responsável Técnico é obrigatório.')));
+  assert.ok(resPt.errors.some((e) => e.includes('E-mail do Responsável Técnico é obrigatório e deve ser válido.')));
+  assert.ok(resPt.errors.some((e) => e.includes('Telefone com DDD do Responsável Técnico é obrigatório (10 ou 11 dígitos).')));
+});
+
+test('Mapeamento completo de RT: propriedades do frontend (nome_tecnico, tel_tecnico, etc.) populam fenixPayload corretamente', () => {
+  const input: ProjectDraftInput = {
+    tipo_projeto_id: 5,
+    reference_name: 'Loja com Mapeamento Completo',
+    building_area: 250,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355000', public_place: 'Rua Principal', number: '50', municipio_id: 22 },
+    institution: { cnae: '4754701', razao_social: 'COMERCIO TESTE' },
+    n_art_rrt: 'BA20269999999',
+    responsaveis_tecnicos: [
+      {
+        nome_tecnico: 'DRA. JULIANA ARQUITETA',
+        cpf_cnpj_tecnico: '123.456.789-01',
+        conselho: 'CAU',
+        n_registro_conselho: 'A12345-6',
+        email_tecnico: 'juliana@arquitetura.com',
+        tel_tecnico: '(71) 98765-4321',
+        n_art_rrt: 'BA20269999999'
+      }
+    ]
+  };
+
+  const res = buildAndValidateFenixProjectPayload(input);
+  assert.equal(res.valid, true);
+  assert.deepEqual(res.errors, []);
+
+  const payload = res.fenixPayload;
+  assert.equal(payload.n_art_rrt, 'BA20269999999');
+
+  const tech = payload.technical as any;
+  assert.equal(tech.name, 'DRA. JULIANA ARQUITETA');
+  assert.equal(tech.tipo_numero, 'CAU');
+  assert.equal(tech.crea_cau, 'A12345-6');
+  assert.equal(tech.cpf_cnpj, '12345678901');
+  assert.equal(tech.phone, '71987654321');
+  assert.equal(tech.email, 'juliana@arquitetura.com');
+
+  const rtList = payload.projeto_responsavel_tecnico as any[];
+  assert.equal(rtList.length, 1);
+  assert.equal(rtList[0].name, 'DRA. JULIANA ARQUITETA');
+  assert.equal(rtList[0].tipo_numero, 'CAU');
+  assert.equal(rtList[0].crea_cau, 'A12345-6');
+  assert.equal(rtList[0].cpf_cnpj, '12345678901');
+  assert.equal(rtList[0].phone, '71987654321');
+  assert.equal(rtList[0].email, 'juliana@arquitetura.com');
+  assert.equal(rtList[0].n_art_rrt, 'BA20269999999');
 });
 
