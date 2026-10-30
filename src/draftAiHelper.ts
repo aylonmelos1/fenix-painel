@@ -151,7 +151,7 @@ export const OFFICIAL_FENIX_MEASURES: OfficialSecurityMeasure[] = [
   { key: 'extintores', label: 'Extintores', desc: 'Extintores portáteis e sobrerrodas para combate imediato', basic: true },
   { key: 'saidas_emerg', label: 'Saídas de emergência', desc: 'Rotas de fuga, corredores e portas desobstruídas', basic: true },
   { key: 'control_mat_acab', label: 'Controle de material de acabamento', desc: 'Materiais de revestimento e acabamento com baixa propagação', basic: true },
-  // 16 Medidas Avançadas de Engenharia (exibidas APENAS no Projeto Téc. Completo form_mode === 'pt')
+  // 16 Medidas Avançadas de Engenharia (homologadas no Projeto Técnico Completo — PT)
   { key: 'comp_horizontal', label: 'Compartimentação horizontal', desc: 'Paredes e portas corta-fogo para contenção de chamas', basic: false },
   { key: 'comp_vertical', label: 'Compartimentação vertical', desc: 'Fechamentos de poços, fachadas e escadas de emergência', basic: false },
   { key: 'separacao_edific', label: 'Separação entre as edificações', desc: 'Distanciamento seguro e barreiras de irradiação térmica', basic: false },
@@ -223,6 +223,9 @@ export interface DraftAiAssistantResponse {
     name?: string;
     form_mode?: 'pts' | 'pt';
     tipo_projeto_id?: number;
+    process_category?: 'pts' | 'pt' | string;
+    license_type?: 'CLCB' | 'AVCB' | string;
+    evento?: 'S' | 'N';
     edification?: Partial<ProjectDraftInput['edification']>;
     address?: Partial<ProjectDraftInput['address']>;
     institution?: Partial<ProjectDraftInput['institution']>;

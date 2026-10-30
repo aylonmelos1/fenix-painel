@@ -378,54 +378,99 @@ export function buildAndValidateFenixProjectPayload(
 
   // 7. CNAE e Enquadramento de Tipo de Projeto
   const cleanCnae = String(input.institution?.cnae || '').replace(/\D/g, '');
-  const formMode =
-    input.form_mode ||
-    (input.process_category ? String(input.process_category).toLowerCase() : undefined) ||
-    (totalArea > 750 || floors > 3 || domains.blockedPtsCnaes.includes(cleanCnae) ? 'pt' : 'pts');
+
+  const ptsAllowedSet = new Set<string>([
+    'iluminacao_emerg',
+    'brigada_incendio',
+    'sinal_emerg',
+    'extintores',
+    'saidas_emerg',
+    'control_mat_acab'
+  ]);
+
+  const rawSecurity = (input.securityMeasures || {}) as Record<string, unknown>;
+  const activeAdvancedPtMeasures: string[] = [];
+  for (const key of FENIX_22_SECURITY_MEASURES) {
+    if (!ptsAllowedSet.has(key)) {
+      const val = rawSecurity[key] ??
+        (key === 'hidrante_mangot' ? rawSecurity.hidrante_mangotinhos :
+         key === 'acesso_viatura' ? rawSecurity.acesso_viatura_edificacao :
+         key === 'seguranca_estrutural' ? rawSecurity.seguranca_estrutural_contra_incendio :
+         key === 'chuveiros_auto' ? rawSecurity.chuveiros_automaticos :
+         key === 'plano_emerg_incendio' ? rawSecurity.plano_emergencia :
+         key === 'comp_horizontal' ? rawSecurity.compartimentacao_horizontal :
+         key === 'comp_vertical' ? rawSecurity.compartimentacao_vertical :
+         key === 'separacao_edific' ? rawSecurity.separacao_entre_edificacoes :
+         key === 'elevador_emerg' ? rawSecurity.elevador_emergencia :
+         key === 'control_fumaca' ? rawSecurity.controle_fumaca :
+         key === 'sis_fixo_gases' ? rawSecurity.sistema_fixo_gases_limpos :
+         key === 'sis_prot_cont_desc_elet' ? rawSecurity.spda : undefined);
+      if (val && val !== '0' && val !== 0 && val !== false) {
+        activeAdvancedPtMeasures.push(key);
+      }
+    }
+  }
+  const hasAdvancedPtMeasures = activeAdvancedPtMeasures.length > 0;
+
   let tipoProjetoId: number;
   let tipoProjetoSigla: string;
 
-  if (input.tipo_projeto_id && Number.isInteger(Number(input.tipo_projeto_id)) && Number(input.tipo_projeto_id) >= 1 && Number(input.tipo_projeto_id) <= 8) {
+  const hasExplicitTipoProjeto =
+    input.tipo_projeto_id !== undefined &&
+    input.tipo_projeto_id !== null &&
+    Number.isInteger(Number(input.tipo_projeto_id)) &&
+    Number(input.tipo_projeto_id) >= 1 &&
+    Number(input.tipo_projeto_id) <= 8;
+
+  if (hasExplicitTipoProjeto) {
     tipoProjetoId = Number(input.tipo_projeto_id);
     const foundType = domains.projectTypes.find((t) => t.id === tipoProjetoId);
     tipoProjetoSigla = foundType?.code || foundType?.sigla || (tipoProjetoId === 1 ? 'PT' : `TIPO_${tipoProjetoId}`);
-  } else if (formMode === 'pt') {
-    if (input.evento === 'S') {
-      if (input.occupation?.is_permanent_edification) {
-        tipoProjetoId = 3;
-        tipoProjetoSigla = 'PTOTEP';
-      } else {
-        tipoProjetoId = 2;
-        tipoProjetoSigla = 'PTIOT';
-      }
-    } else {
-      tipoProjetoId = 1;
-      tipoProjetoSigla = 'PT';
-    }
   } else {
-    // Processo PTS (padrão)
-    if (input.evento === 'S') {
-      if (input.occupation?.is_permanent_edification) {
-        tipoProjetoId = 8;
-        tipoProjetoSigla = 'PTSAVCBPTOTEP';
+    // Enquadramento automático no formulário unificado
+    const formMode =
+      input.form_mode ||
+      (input.process_category ? String(input.process_category).toLowerCase() : undefined) ||
+      (totalArea > 750 || floors > 3 || domains.blockedPtsCnaes.includes(cleanCnae) || hasAdvancedPtMeasures ? 'pt' : 'pts');
+
+    if (formMode === 'pt' || hasAdvancedPtMeasures) {
+      if (input.evento === 'S') {
+        if (input.occupation?.is_permanent_edification) {
+          tipoProjetoId = 3;
+          tipoProjetoSigla = 'PTOTEP';
+        } else {
+          tipoProjetoId = 2;
+          tipoProjetoSigla = 'PTIOT';
+        }
       } else {
-        tipoProjetoId = 7;
-        tipoProjetoSigla = 'PTSAVCBPTIOT';
+        tipoProjetoId = 1;
+        tipoProjetoSigla = 'PT';
       }
-    } else if (license_type === 'AVCB') {
-      tipoProjetoId = 6;
-      tipoProjetoSigla = 'PTSAVCB';
-    } else if (totalArea <= 200 && floors === 1 && height === 'Térrea = Um pavimento') {
-      tipoProjetoId = 4;
-      tipoProjetoSigla = 'PTSCLCB1';
     } else {
-      tipoProjetoId = 5;
-      tipoProjetoSigla = 'PTSCLCB2';
+      // Processo PTS (padrão)
+      if (input.evento === 'S') {
+        if (input.occupation?.is_permanent_edification) {
+          tipoProjetoId = 8;
+          tipoProjetoSigla = 'PTSAVCBPTOTEP';
+        } else {
+          tipoProjetoId = 7;
+          tipoProjetoSigla = 'PTSAVCBPTIOT';
+        }
+      } else if (license_type === 'AVCB') {
+        tipoProjetoId = 6;
+        tipoProjetoSigla = 'PTSAVCB';
+      } else if (totalArea <= 200 && floors === 1 && height === 'Térrea = Um pavimento') {
+        tipoProjetoId = 4;
+        tipoProjetoSigla = 'PTSCLCB1';
+      } else {
+        tipoProjetoId = 5;
+        tipoProjetoSigla = 'PTSCLCB2';
+      }
     }
   }
 
-  // Validações por modalidade
-  const isPtsMode = [4, 5, 6, 7, 8].includes(tipoProjetoId) || formMode === 'pts';
+  // Derivação do modo PTS diretamente de tipoProjetoId
+  const isPtsMode = [4, 5, 6, 7, 8].includes(tipoProjetoId);
   const special = input.specialRisks || {};
   const totalKgGlp = special.total_kg_glp ?? input.total_kg_glp ?? (input.questionario?.glp_12480kg === false ? 12481 : null);
   const classesGlp = Array.isArray(special.classes_glp) ? special.classes_glp : (Array.isArray(input.classes_glp) ? input.classes_glp : []);
@@ -457,13 +502,13 @@ export function buildAndValidateFenixProjectPayload(
     }
   }
 
-  // Warning bloqueioCadastroPTSviaCardPT
+  // Warning unificado quando imóvel se enquadra em PTS mas está com PT Completo selecionado
   if (tipoProjetoId === 1 && totalArea <= 750 && floors <= 3 && !domains.blockedPtsCnaes.includes(cleanCnae)) {
     const hasSevereRisk = Boolean(special.liquidos_inflamaveis || special.gas_liquefeito_petroleo || special.produtos_perigosos || special.fogos_artificio || special.vaso_pressao || (totalKgGlp !== null && totalKgGlp > 12480));
     const hasLargeUnderground = Boolean(input.occupation?.subsolo_maior_50m || input.questionario?.subsolo_maior_50m_pt);
-    if (!hasSevereRisk && !hasLargeUnderground) {
+    if (!hasSevereRisk && !hasLargeUnderground && !hasAdvancedPtMeasures) {
       warnings.push(
-        'O Fênix CBMBA bloqueia o cadastro de Projetos Técnicos Simplificados (PTS) através da tela de PT Completo. Esta edificação possui características de PTS (área até 750 m² e até 3 pavimentos); utilize o formulário de Projeto Técnico Simplificado.'
+        'Pelo porte informado (≤ 750 m², até 3 pavimentos e sem riscos especiais), o Fênix CBMBA enquadra este imóvel em modalidade Simplificada (PTSCLCB1, PTSCLCB2 ou PTSAVCB) no campo Tipo do Projeto Técnico.'
       );
     }
   }
@@ -591,16 +636,6 @@ export function buildAndValidateFenixProjectPayload(
   const rawCnpjCpf = String(input.institution?.cnpj_cpf || input.institution?.cnpj || input.institution?.cpf || '').replace(/\D/g, '');
   const tipoPessoa = input.institution?.tipo_pessoa || (rawCnpjCpf.length === 11 ? 'PF' : 'PJ');
 
-  const ptsAllowedSet = new Set<string>([
-    'iluminacao_emerg',
-    'brigada_incendio',
-    'sinal_emerg',
-    'extintores',
-    'saidas_emerg',
-    'control_mat_acab'
-  ]);
-
-  const rawSecurity = (input.securityMeasures || {}) as Record<string, unknown>;
   const medida_seguranca: Record<string, number> = {};
 
   for (const key of FENIX_22_SECURITY_MEASURES) {
@@ -625,8 +660,14 @@ export function buildAndValidateFenixProjectPayload(
          key === 'sis_fixo_gases' ? rawSecurity.sistema_fixo_gases_limpos :
          key === 'sis_prot_cont_desc_elet' ? rawSecurity.spda : undefined);
 
-      medida_seguranca[key] = val ? 1 : 0;
+      medida_seguranca[key] = val && val !== '0' && val !== 0 && val !== false ? 1 : 0;
     }
+  }
+
+  if (isPtsMode && hasAdvancedPtMeasures) {
+    warnings.push(
+      'Medidas avançadas de engenharia são exclusivas de Projeto Técnico Completo (PT) e são desconsideradas pelo Fênix na modalidade Simplificada (PTS).'
+    );
   }
 
   const responsaveisTecnicos: Array<Record<string, unknown>> = [];
@@ -1630,11 +1671,17 @@ export interface DraftAiAssistantResponse {
   formPatch?: {
     step?: 1 | 2 | 3;
     name?: string;
+    form_mode?: 'pts' | 'pt';
+    tipo_projeto_id?: number;
+    process_category?: 'pts' | 'pt' | string;
+    license_type?: 'CLCB' | 'AVCB' | string;
+    evento?: 'S' | 'N';
     edification?: Partial<ProjectDraftInput['edification']>;
     address?: Partial<ProjectDraftInput['address']>;
     occupation?: Partial<ProjectDraftInput['occupation']>;
     responsavel?: Partial<ProjectDraftInput['responsavel']>;
     securityMeasures?: Record<string, boolean>;
+    [key: string]: unknown;
   };
   suggestions: string[];
 }
@@ -1654,15 +1701,17 @@ async function runDeterministicDraftAssistant(
 
   // 0. Verificação de perguntas sobre situação de edificação e processos / métricas gerais
   const isNonRegisterView = Boolean(req.systemContext?.currentView && req.systemContext.currentView !== 'register');
-  const isExplicitDraftRequest = /(cadastr|preench|rascunho|formul[aá]rio|criar projeto|iniciar novo cadastro|mudar|alter|coloqu|configur|defin|ajust|aplic.*medida|\d+\s*(?:m²|m2|paviment))/i.test(message);
+  const isExplicitDraftRequest = /(cadastr|preench|rascunho|formul[aá]rio|criar projeto|iniciar novo cadastro|mudar|alter|coloc|coloqu|configur|defin|ajust|aplic.*medida|tipo|modalidade|pts|ptiot|ptotep|\d+\s*(?:m²|m2|paviment))/i.test(message);
   const shouldHandleDraftPatch = !isNonRegisterView || isExplicitDraftRequest;
-
-  const isDocumentOrHistoryQuery =
-    /(?:documento|indispon[ií]ve|docs?|dae|comprovante|protocolo|certificado|avcb|clcb|linha do tempo|hist[oó]rico|movimenta[çc]|anexo)/i.test(message);
 
   const isStartDraftQuery =
     Boolean(req.systemContext?.activeBuilding) &&
     /(?:iniciar|novo cadastro|preparar rascunho)/i.test(message);
+
+  const isDocumentOrHistoryQuery =
+    !isStartDraftQuery &&
+    !isExplicitDraftRequest &&
+    /(?:documento|indispon[ií]ve|docs?|dae|comprovante|protocolo|certificado|\bavcb\b|\bclcb\b|linha do tempo|hist[oó]rico|movimenta[çc]|anexo)/i.test(message);
 
   const isGeneralPortfolio =
     !isStartDraftQuery &&
@@ -1996,9 +2045,69 @@ async function runDeterministicDraftAssistant(
     }
   }
 
+  // 5.1 Extração de Tipo de Projeto / Modalidade Solicitada
+  const normMsg = message.toLowerCase();
+  let explicitTipoProjetoId: number | undefined;
+  let tipoProjetoNome: string | undefined;
+
+  if (/\b(?:ptsavcbptotep|pts\s*tempor[aá]ri[oa]\s*(?:em\s*)?edifica[cç][aã]o\s*permanente)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 8;
+    tipoProjetoNome = 'PTSAVCBPTOTEP (PTS Temporário em Edificação Permanente)';
+  } else if (/\b(?:ptsavcbptiot|pts\s*tempor[aá]ri[oa]|pts\s*evento\s*tempor[aá]ri[oa]|pts\s*instala[cç][aã]o\s*tempor[aá]ria)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 7;
+    tipoProjetoNome = 'PTSAVCBPTIOT (PTS Temporário para Instalação e Ocupação Temporária)';
+  } else if (/\b(?:ptotep|pt\s*(?:completo\s*)?tempor[aá]ri[oa]\s*(?:em\s*)?edifica[cç][aã]o\s*permanente)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 3;
+    tipoProjetoNome = 'PTOTEP (PT para Ocupação Temporária em Edificação Permanente)';
+  } else if (/\b(?:ptiot|pt\s*tempor[aá]ri[oa]|instala[cç][aã]o\s*tempor[aá]ria)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 2;
+    tipoProjetoNome = 'PTIOT (PT para Instalação e Ocupação Temporária)';
+  } else if (/\b(?:ocupa[cç][aã]o\s*tempor[aá]ria|evento\s*tempor[aá]ri[oa])\b/i.test(normMsg)) {
+    explicitTipoProjetoId = /\bpts\b/i.test(normMsg) ? 7 : 2;
+    tipoProjetoNome = explicitTipoProjetoId === 7
+      ? 'PTSAVCBPTIOT (PTS Temporário para Instalação e Ocupação Temporária)'
+      : 'PTIOT (PT para Instalação e Ocupação Temporária)';
+  } else if (/\b(?:ptsavcb|pts\s*(?:com\s*)?vistoria|simplificado\s*(?:com\s*)?vistoria|pts\s*avcb)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 6;
+    tipoProjetoNome = 'PTSAVCB (Projeto Técnico Simplificado com Vistoria)';
+  } else if (/\b(?:ptsclcb1|clcb1|pts\s*t[eé]rre[oa]|pts\s*at[eé]\s*200)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 4;
+    tipoProjetoNome = 'PTSCLCB1 (PTS até 200 m² e Térrea)';
+  } else if (/\b(?:ptsclcb2|clcb2|pts\s*at[eé]\s*750)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 5;
+    tipoProjetoNome = 'PTSCLCB2 (PTS até 750 m² e até 3 pavimentos)';
+  } else if (/\b(?:pt\s*completo|projeto\s*t[eé]cnico\s*completo|mudar\s*(?:o\s*tipo\s*)?para\s*pt|colocar\s*pt|definir\s*(?:como\s*)?pt)\b/i.test(normMsg)) {
+    explicitTipoProjetoId = 1;
+    tipoProjetoNome = 'PT (Projeto Técnico Completo)';
+  } else if (/\b(?:mudar\s*(?:o\s*tipo\s*)?para\s*pts|colocar\s*pts|definir\s*(?:como\s*)?pts|projeto\s*t[eé]cnico\s*simplificado)\b/i.test(normMsg)) {
+    const isSmall = ((formPatch.edification?.building_area ?? currentDraft.building_area ?? 100) as number) <= 200 &&
+      ((formPatch.edification?.number_floors ?? currentDraft.number_floors ?? 1) as number) === 1;
+    explicitTipoProjetoId = isSmall ? 4 : 5;
+    tipoProjetoNome = isSmall ? 'PTSCLCB1 (PTS até 200 m² e Térrea)' : 'PTSCLCB2 (PTS até 750 m² e até 3 pavimentos)';
+  } else {
+    const m = normMsg.match(/\btipo\s*(?:de\s*projeto\s*)?([1-8])\b/i);
+    if (m) {
+      explicitTipoProjetoId = Number(m[1]);
+      const found = domains.projectTypes.find((t) => t.id === explicitTipoProjetoId);
+      tipoProjetoNome = found ? `${found.code} - ${found.name}` : `Tipo ${explicitTipoProjetoId}`;
+    }
+  }
+
+  if (explicitTipoProjetoId) {
+    formPatch.tipo_projeto_id = explicitTipoProjetoId;
+    formPatch.form_mode = [4, 5, 6, 7, 8].includes(explicitTipoProjetoId) ? 'pts' : 'pt';
+    if ([2, 3, 7, 8].includes(explicitTipoProjetoId)) {
+      formPatch.evento = 'S';
+    }
+    thinkingSteps.push(`Tipo de Projeto Técnico ajustado para: ${tipoProjetoNome}.`);
+    appliedChangesSummary.push(`Tipo do Projeto Técnico definido para ${tipoProjetoNome}`);
+  }
+
   // 6. Enquadramento e Medidas de Segurança
   const mergedDraft: ProjectDraftInput = {
     ...currentDraft,
+    tipo_projeto_id: formPatch.tipo_projeto_id ?? currentDraft.tipo_projeto_id,
+    form_mode: formPatch.form_mode ?? currentDraft.form_mode,
     building_area:
       formPatch.edification?.building_area ??
       currentDraft.building_area ??
@@ -2023,6 +2132,10 @@ async function runDeterministicDraftAssistant(
     institution: {
       ...currentDraft.institution,
       cnae: currentDraft.institution?.cnae || '4754701'
+    },
+    securityMeasures: {
+      ...(typeof currentDraft.securityMeasures === 'object' ? currentDraft.securityMeasures : {}),
+      ...(formPatch.securityMeasures || {})
     }
   };
 
@@ -2163,7 +2276,7 @@ export async function runDraftAiAssistant(
   const validation = buildAndValidateFenixProjectPayload(currentDraft as ProjectDraftInput);
 
   const isNonRegisterView = Boolean(req.systemContext?.currentView && req.systemContext.currentView !== 'register');
-  const isExplicitDraftRequest = /(cadastr|preench|rascunho|formul[aá]rio|criar projeto|iniciar novo cadastro|mudar|alter|coloqu|configur|defin|ajust|aplic.*medida|\d+\s*(?:m²|m2|paviment))/i.test(req.message);
+  const isExplicitDraftRequest = /(cadastr|preench|rascunho|formul[aá]rio|criar projeto|iniciar novo cadastro|mudar|alter|coloc|coloqu|configur|defin|ajust|aplic.*medida|tipo|modalidade|pts|ptiot|ptotep|\d+\s*(?:m²|m2|paviment))/i.test(req.message);
   const shouldHandleDraftPatch = !isNonRegisterView || isExplicitDraftRequest;
 
   if (req.openaiApiKey) {
@@ -2191,6 +2304,8 @@ DIRETRIZES DE ATENDIMENTO:
    - NUNCA gere "formPatch" quando o usuário estiver apenas tirando dúvidas sobre processos ou documentos. Retorne "formPatch": null e "appliedChangesSummary": [].
 
 2. Preenchimento e Cadastro Técnico (quando na tela "register" ou solicitação explícita):
+   - O formulário unificado possui 8 opções oficiais de Tipo do Projeto Técnico: 1 (PT), 2 (PTIOT), 3 (PTOTEP), 4 (PTSCLCB1), 5 (PTSCLCB2), 6 (PTSAVCB), 7 (PTSAVCBPTIOT), 8 (PTSAVCBPTOTEP).
+   - Quando o usuário pedir para alterar a modalidade ou tipo de projeto (ex.: "mudar para ocupação temporária", "colocar PTSAVCB", "mudar para PT completo"), preencha "tipo_projeto_id" com o número correspondente (1 a 8) e "form_mode" ('pts' | 'pt').
    - Auxilie a preencher, conferir e otimizar projetos técnicos segundo o Decreto Estadual 16.302/2015 e a IT-14.
    - Alturas oficiais (6 opções): "Térrea = Um pavimento", "Baixa = H <= 6,00 m", "Baixa-Média = 6,00 m < H <= 12,00 m", "Média = 12,00 m < H <= 23,00 m", "Medianamente Alta = 23,00 m < H <= 30,00 m", "Alta = Acima de 30,00 m".
    - Complemento de endereço: se não houver, preencher com "***".

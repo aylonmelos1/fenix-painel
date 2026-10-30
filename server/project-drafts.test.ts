@@ -956,6 +956,7 @@ test('22 Medidas de Segurança: 6 básicas ativas em PTS e 16 avançadas zeradas
 
   const ptsInput: ProjectDraftInput = {
     reference_name: 'Mercadinho do Bairro',
+    tipo_projeto_id: 4,
     building_area: 180,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
@@ -1050,17 +1051,142 @@ test('Formatos oficiais do payload: registration_zip_code, subsolo dummy e warni
   assert.equal(underground.division_group_id, 58);
   assert.equal(underground.principal, false);
 
-  // 4. Warning bloqueioCadastroPTSviaCardPT quando imóvel se enquadra em PTS mas usuário selecionou tela PT
+  // 4. Warning unificado quando imóvel se enquadra em PTS mas usuário selecionou PT Completo
   const draftPtsInPtForm: ProjectDraftInput = {
     ...draftNullReg,
-    form_mode: 'pt' // Tentando cadastrar na tela de PT Completo
+    tipo_projeto_id: 1
   };
   const resBlockedWarning = buildAndValidateFenixProjectPayload(draftPtsInPtForm, 123);
   assert.ok(
     resBlockedWarning.warnings.some((w) =>
-      w.includes('bloqueia o cadastro de Projetos Técnicos Simplificados (PTS) através da tela de PT Completo')
+      w.includes('campo Tipo do Projeto Técnico')
     )
   );
+});
+
+test('Formulário unificado: derivação de modalidade diretamente por tipo_projeto_id sem depender de form_mode', () => {
+  const baseInput: ProjectDraftInput = {
+    reference_name: 'Loja Teste',
+    building_area: 150,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355000', public_place: 'Rua Central', number: '10', municipio_id: 22 },
+    institution: { cnae: '4754701' }
+  };
+
+  // 1. tipo_projeto_id = 4 (PTSCLCB1) mesmo com form_mode = 'pt'
+  const resPts = buildAndValidateFenixProjectPayload({
+    ...baseInput,
+    tipo_projeto_id: 4,
+    form_mode: 'pt' // form_mode não deve interferir
+  }, 123);
+  assert.equal(resPts.tipoProjetoId, 4);
+  assert.equal(resPts.tipoProjetoSigla, 'PTSCLCB1');
+  assert.equal(resPts.valid, true);
+
+  // 2. tipo_projeto_id = 1 (PT) mesmo com form_mode = 'pts'
+  const resPt = buildAndValidateFenixProjectPayload({
+    ...baseInput,
+    building_area: 2500,
+    number_floors: 4,
+    height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
+    tipo_projeto_id: 1,
+    form_mode: 'pts', // form_mode não deve interferir
+    responsaveis_tecnicos: [
+      { nome: 'Engenheiro Teste', crea_cau: '12345/BA', email: 'eng@teste.com', telefone: '71999999999' }
+    ]
+  }, 123);
+  assert.equal(resPt.tipoProjetoId, 1);
+  assert.equal(resPt.tipoProjetoSigla, 'PT');
+});
+
+test('Formulário unificado: 16 medidas avançadas de PT e enquadramento automático vs explicitamente PTS', () => {
+  const baseSmallInput: ProjectDraftInput = {
+    reference_name: 'Pequena Fábrica',
+    building_area: 180,
+    number_floors: 1,
+    height: 'Térrea = Um pavimento',
+    address: { zip_code: '45355000', public_place: 'Rua das Indústrias', number: '50', municipio_id: 22 },
+    institution: { cnae: '4754701' }
+  };
+
+  // 1. Enquadramento automático COM medida avançada (hidrante_mangot: true): deve enquadrar em PT (1)
+  const autoPt = buildAndValidateFenixProjectPayload({
+    ...baseSmallInput,
+    securityMeasures: {
+      hidrante_mangot: true
+    }
+  }, 123);
+  assert.equal(autoPt.tipoProjetoId, 1);
+  assert.equal(autoPt.tipoProjetoSigla, 'PT');
+  assert.equal((autoPt.fenixPayload as any).medida_seguranca.hidrante_mangot, 1);
+
+  // 2. Explicitamente PTS (tipo_projeto_id: 4) com medida avançada:
+  // - Zera a medida avançada no payload enviado ao Fênix para a API não rejeitar
+  // - Emite warning explicativo
+  const ptsWithAdvanced = buildAndValidateFenixProjectPayload({
+    ...baseSmallInput,
+    tipo_projeto_id: 4,
+    securityMeasures: {
+      extintores: true,
+      hidrante_mangot: true,
+      alarme_incendio: true
+    }
+  }, 123);
+  assert.equal(ptsWithAdvanced.tipoProjetoId, 4);
+  assert.equal((ptsWithAdvanced.fenixPayload as any).medida_seguranca.extintores, 1);
+  assert.equal((ptsWithAdvanced.fenixPayload as any).medida_seguranca.hidrante_mangot, 0);
+  assert.equal((ptsWithAdvanced.fenixPayload as any).medida_seguranca.alarme_incendio, 0);
+  assert.ok(
+    ptsWithAdvanced.warnings.some((w) =>
+      w.includes('Medidas avançadas de engenharia são exclusivas de Projeto Técnico Completo (PT)')
+    )
+  );
+});
+
+test('Copiloto IA atualiza tipo_projeto_id diretamente no formulário unificado', async () => {
+  const baseReq = {
+    currentDraft: {
+      reference_name: 'Edificação Teste',
+      building_area: 300,
+      number_floors: 1,
+      height: 'Térrea = Um pavimento',
+      address: { zip_code: '45355000', public_place: 'Rua A', number: '1', municipio_id: 22 }
+    }
+  };
+
+  // 1. "mudar para ocupação temporária"
+  const resTemp = await runDraftAiAssistant({
+    ...baseReq,
+    message: 'mudar para ocupação temporária'
+  });
+  assert.equal(resTemp.formPatch?.tipo_projeto_id, 2);
+  assert.equal(resTemp.formPatch?.evento, 'S');
+  assert.ok(resTemp.appliedChangesSummary.some((s) => s.includes('Tipo do Projeto Técnico')));
+
+  // 2. "colocar PTSAVCB"
+  const resAvcb = await runDraftAiAssistant({
+    ...baseReq,
+    message: 'colocar PTSAVCB no projeto'
+  });
+  assert.equal(resAvcb.formPatch?.tipo_projeto_id, 6);
+  assert.equal(resAvcb.formPatch?.form_mode, 'pts');
+
+  // 3. "mudar para PT completo"
+  const resPt = await runDraftAiAssistant({
+    ...baseReq,
+    message: 'mudar para PT completo'
+  });
+  assert.equal(resPt.formPatch?.tipo_projeto_id, 1);
+  assert.equal(resPt.formPatch?.form_mode, 'pt');
+
+  // 4. "colocar PTSCLCB2"
+  const resClcb2 = await runDraftAiAssistant({
+    ...baseReq,
+    message: 'colocar PTSCLCB2'
+  });
+  assert.equal(resClcb2.formPatch?.tipo_projeto_id, 5);
+  assert.equal(resClcb2.formPatch?.form_mode, 'pts');
 });
 
 test('streamDraftAiAssistant emite eventos de progresso SSE (thinking, delta, done) e suporta abort', async () => {

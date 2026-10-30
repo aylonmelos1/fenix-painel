@@ -680,6 +680,23 @@ export function ProjectDraftModal({
           next.license_type = targetType.license;
         }
         modifiedKeys.add('tipo_projeto_id');
+      } else if (patch.evento === 'S' && ![2, 3, 7, 8].includes(next.tipo_projeto_id || 0)) {
+        const isCurrentlyPt = [1, 2, 3].includes(next.tipo_projeto_id || 0) || next.form_mode === 'pt';
+        const targetId = isCurrentlyPt ? 2 : 7;
+        next.tipo_projeto_id = targetId;
+        const targetType = OFFICIAL_PROJECT_TYPES.find((t) => t.id === targetId);
+        if (targetType) {
+          next.form_mode = targetType.form_mode;
+          next.process_category = targetType.category;
+          next.license_type = targetType.license;
+        }
+        modifiedKeys.add('tipo_projeto_id');
+      }
+      if (patch.process_category) {
+        next.process_category = patch.process_category as 'pts' | 'pt';
+      }
+      if (patch.license_type) {
+        next.license_type = patch.license_type as 'CLCB' | 'AVCB';
       }
       if (patch.edification) {
         next.edification = { ...next.edification, ...patch.edification };
@@ -718,8 +735,7 @@ export function ProjectDraftModal({
         modifiedKeys.add('specialRisks');
       }
       if (patch.securityMeasures) {
-        const isPts = (next.form_mode || prev.form_mode || 'pts') === 'pts';
-        const normalized = normalizeSecurityMeasures(patch.securityMeasures, isPts);
+        const normalized = normalizeSecurityMeasures(patch.securityMeasures, false);
         next.securityMeasures = { ...next.securityMeasures, ...normalized };
         modifiedKeys.add('measures');
       }
@@ -855,23 +871,77 @@ export function ProjectDraftModal({
     const glpKg = parseFloat(String(formData.glpData?.total_kg_glp || 0)) || 0;
     const isGlpExceedingPts = glpKg > 12480 || (formData.glpData?.classe_glp && ['Classe V', 'Classe VI', 'Classe VII', 'Classe ESPECIAL'].includes(formData.glpData.classe_glp));
 
-    if (isCnaeBlocked || isGlpExceedingPts) {
+    // Verifica se alguma das 16 medidas avançadas de engenharia foi selecionada
+    const hasAdvancedMeasure = OFFICIAL_FENIX_MEASURES.some((m) => !m.basic && Boolean(formData.securityMeasures?.[m.key]));
+
+    // Se for ocupação temporária
+    const isCurrentTemporario = [2, 3, 7, 8].includes(formData.tipo_projeto_id || 0);
+
+    const requiresPt = totalArea > 750 || floors > 3 || isCnaeBlocked || isGlpExceedingPts || hasAdvancedMeasure;
+
+    if (requiresPt) {
+      let ptId = 1;
+      let ptSigla = 'PT';
+      let ptNome = 'Projeto Técnico Completo';
+      if (formData.tipo_projeto_id === 7 || (isCurrentTemporario && formData.tipo_projeto_id !== 3 && formData.tipo_projeto_id !== 8)) {
+        ptId = 2;
+        ptSigla = 'PTIOT';
+        ptNome = 'Projeto Técnico para Instalação e Ocupação Temporária (PTIOT)';
+      } else if (formData.tipo_projeto_id === 8 || formData.tipo_projeto_id === 3) {
+        ptId = 3;
+        ptSigla = 'PTOTEP';
+        ptNome = 'Projeto Técnico para Ocupação Temporária em Edificação Permanente (PTOTEP)';
+      }
+
+      let motivo = '';
+      if (totalArea > 750) motivo = `Área total de ${totalArea.toLocaleString('pt-BR')} m² supera o limite de 750 m²`;
+      else if (floors > 3) motivo = `Nº de pavimentos (${floors}) superior a 3 pavimentos`;
+      else if (isCnaeBlocked) motivo = 'CNAE de alto risco com bloqueio mandatório para PTS';
+      else if (isGlpExceedingPts) motivo = 'Armazenamento de GLP acima de 12.480 kg (exige sistemas fixos e PT)';
+      else if (hasAdvancedMeasure) motivo = 'Medidas avançadas de engenharia selecionadas (exigem PT Completo)';
+      else motivo = 'Edificação com características de Projeto Técnico Completo';
+
       return {
-        sigla: 'PT',
-        nome: 'Projeto Técnico (Completo)',
+        sigla: ptSigla,
+        nome: ptNome,
         badgeClass: 'badge-pt',
-        motivo: isCnaeBlocked
-          ? 'CNAE de alto risco com bloqueio mandatório para PTS (exige PT Completo)'
-          : 'Armazenamento de GLP acima de 12.480 kg (exige sistemas fixos e PT Completo)',
+        motivo,
         suggestedCategory: 'pt' as const,
         suggestedLicense: 'AVCB' as const,
         suggestedFormMode: 'pt' as const,
-        suggestedTipoProjetoId: 1,
+        suggestedTipoProjetoId: ptId,
         isPts: false
       };
     }
 
-    if (totalArea <= 200 && floors === 1) {
+    if (isCurrentTemporario) {
+      if (formData.tipo_projeto_id === 3 || formData.tipo_projeto_id === 8) {
+        return {
+          sigla: 'PTSAVCBPTOTEP',
+          nome: 'PTS para Ocupação Temporária em Edificação Permanente',
+          badgeClass: 'badge-avcb',
+          motivo: 'Ocupação temporária em edificação até 750 m²',
+          suggestedCategory: 'pts' as const,
+          suggestedLicense: 'AVCB' as const,
+          suggestedFormMode: 'pts' as const,
+          suggestedTipoProjetoId: 8,
+          isPts: true
+        };
+      }
+      return {
+        sigla: 'PTSAVCBPTIOT',
+        nome: 'PTS para Instalação e Ocupação Temporária',
+        badgeClass: 'badge-avcb',
+        motivo: 'Instalação e ocupação temporária simplificada (até 750 m²)',
+        suggestedCategory: 'pts' as const,
+        suggestedLicense: 'AVCB' as const,
+        suggestedFormMode: 'pts' as const,
+        suggestedTipoProjetoId: 7,
+        isPts: true
+      };
+    }
+
+    if (totalArea <= 200 && floors === 1 && formData.license_type !== 'AVCB' && formData.tipo_projeto_id !== 6) {
       return {
         sigla: 'PTSCLCB1',
         nome: 'PTS até 200 m² (CLCB Automático)',
@@ -914,16 +984,16 @@ export function ProjectDraftModal({
 
     return {
       sigla: 'PT',
-      nome: 'Projeto Técnico (Completo)',
+      nome: 'Projeto Técnico Completo',
       badgeClass: 'badge-pt',
-      motivo: totalArea > 750 ? `Área total de ${totalArea.toLocaleString('pt-BR')} m² supera o limite de 750 m²` : `Nº de pavimentos (${floors}) superior a 3`,
+      motivo: `Área de ${totalArea.toLocaleString('pt-BR')} m² ou ${floors} pavimentos`,
       suggestedCategory: 'pt' as const,
       suggestedLicense: 'AVCB' as const,
       suggestedFormMode: 'pt' as const,
       suggestedTipoProjetoId: 1,
       isPts: false
     };
-  }, [calculatedTotalArea, formData.edification.number_floors, formData.institution.cnae, formData.license_type, formData.tipo_projeto_id, formData.glpData, domains]);
+  }, [calculatedTotalArea, formData.edification.number_floors, formData.institution.cnae, formData.license_type, formData.tipo_projeto_id, formData.glpData, formData.securityMeasures, domains]);
 
   // Lista de erros e validações locais do rascunho
   const localValidation = useMemo(() => {
@@ -994,8 +1064,8 @@ export function ProjectDraftModal({
     }
 
     // Alertas de coerência
-    if (enquadramento.sigla === 'PT' && (formData.form_mode || formData.process_category) === 'pts') {
-      warnings.push('Atenção: Os dados informados excedem os limites de PTS; o CBMBA exige formulário de Projeto Técnico Completo.');
+    if (!enquadramento.isPts && [4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0)) {
+      warnings.push(`Atenção: Os dados informados (${enquadramento.motivo}) exigem Projeto Técnico Completo (PT).`);
     }
 
     return {
@@ -1004,33 +1074,6 @@ export function ProjectDraftModal({
       warnings
     };
   }, [formData, calculatedTotalArea, enquadramento]);
-
-  // Modo de formulário atual derivado (PTS ou PT Completo)
-  const currentFormMode: 'pts' | 'pt' = formData.form_mode || enquadramento.suggestedFormMode || 'pts';
-
-  // Alternador dos 2 formulários oficiais Fênix CBMBA
-  const handleSwitchFormMode = (mode: 'pts' | 'pt') => {
-    setFormData((prev) => {
-      let nextTipo = prev.tipo_projeto_id;
-      if (mode === 'pts') {
-        if (!nextTipo || ![4, 5, 6, 7, 8].includes(nextTipo)) {
-          nextTipo = enquadramento.suggestedLicense === 'CLCB' ? 4 : 6;
-        }
-      } else {
-        if (!nextTipo || ![1, 2, 3].includes(nextTipo)) {
-          nextTipo = 1;
-        }
-      }
-      return {
-        ...prev,
-        form_mode: mode,
-        process_category: mode,
-        tipo_projeto_id: nextTipo,
-        securityMeasures: normalizeSecurityMeasures(prev.securityMeasures, mode === 'pts')
-      };
-    });
-    showToast(`Formulário alternado para ${mode === 'pts' ? 'Projeto Técnico Simplificado (PTS)' : 'Projeto Técnico Completo (PT)'}.`, 'info');
-  };
 
   // Ações de criação, carga de gabarito e seleção de rascunhos
   const handleNewDraft = () => {
@@ -1085,11 +1128,11 @@ export function ProjectDraftModal({
       id: draft.id,
       name: draft.name
     };
-    if (!loadedData.form_mode) {
-      loadedData.form_mode = (loadedData.process_category === 'pt' || (loadedData.tipo_projeto_id && loadedData.tipo_projeto_id <= 3)) ? 'pt' : 'pts';
-    }
     if (!loadedData.tipo_projeto_id) {
-      loadedData.tipo_projeto_id = loadedData.form_mode === 'pt' ? 1 : 5;
+      loadedData.tipo_projeto_id = (loadedData.form_mode === 'pt' || loadedData.process_category === 'pt') ? 1 : 5;
+    }
+    if (!loadedData.form_mode) {
+      loadedData.form_mode = [1, 2, 3].includes(loadedData.tipo_projeto_id) ? 'pt' : 'pts';
     }
     setFormData(loadedData);
     if (draft.lastSimulation) {
@@ -1127,8 +1170,9 @@ export function ProjectDraftModal({
   const handleSaveDraft = async (silent = false) => {
     setSaving(true);
     try {
-      const activeFormMode = formData.form_mode || enquadramento.suggestedFormMode || 'pts';
-      const activeTipoProjetoId = formData.tipo_projeto_id || enquadramento.suggestedTipoProjetoId || (activeFormMode === 'pt' ? 1 : 5);
+      const activeTipoProjetoId = formData.tipo_projeto_id || enquadramento.suggestedTipoProjetoId || 4;
+      const isPt = [1, 2, 3].includes(activeTipoProjetoId);
+      const activeFormMode: 'pts' | 'pt' = isPt ? 'pt' : 'pts';
       const targetType = OFFICIAL_PROJECT_TYPES.find((t) => t.id === activeTipoProjetoId);
 
       const payload: ProjectDraftInput = {
@@ -1136,8 +1180,8 @@ export function ProjectDraftModal({
         id: currentDraft?.id || formData.id || crypto.randomUUID(),
         form_mode: activeFormMode,
         tipo_projeto_id: activeTipoProjetoId,
-        process_category: targetType?.category || (activeFormMode === 'pt' ? 'pt' : 'pts'),
-        license_type: targetType?.license || (activeFormMode === 'pt' ? 'AVCB' : 'CLCB'),
+        process_category: targetType?.category || (isPt ? 'pt' : 'pts'),
+        license_type: targetType?.license || (isPt ? 'AVCB' : 'CLCB'),
         edification: {
           ...formData.edification,
           total_area: calculatedTotalArea
@@ -1380,11 +1424,9 @@ export function ProjectDraftModal({
         const suggestedCat = res.it14.project_type_sugerido?.toLowerCase() === 'pt' ? 'pt' : 'pts';
         const suggestedLic = res.it14.tipo_processo_sugerido || (suggestedCat === 'pt' ? 'AVCB' : 'CLCB');
         const activeFormMode = prev.form_mode || suggestedCat;
-        const isPts = activeFormMode === 'pts';
-
         const nextMeasures = {
           ...prev.securityMeasures,
-          ...normalizeSecurityMeasures(res.it14.mappedMeasures, isPts)
+          ...normalizeSecurityMeasures(res.it14.mappedMeasures, false)
         };
 
         return {
@@ -1573,42 +1615,38 @@ export function ProjectDraftModal({
 
   // Marcar medidas recomendadas para o porte
   const handleAutoCheckMeasures = () => {
-    const isPts = (formData.form_mode || enquadramento.suggestedFormMode || 'pts') === 'pts';
-    const isBig = calculatedTotalArea > 750 || !isPts;
+    const isBig = calculatedTotalArea > 750;
 
     const baseMeasures: Record<string, number> = {
       extintores: 1,
       iluminacao_emerg: 1,
       sinal_emerg: 1,
       saidas_emerg: 1,
-      brigada_incendio: calculatedTotalArea > 200 || !isPts ? 1 : 0,
-      control_mat_acab: 1
+      brigada_incendio: calculatedTotalArea > 200 ? 1 : 0,
+      control_mat_acab: 1,
+      hidrante_mangot: isBig ? 1 : 0,
+      alarme_incendio: isBig ? 1 : 0,
+      deteccao_incendio: calculatedTotalArea > 1200 ? 1 : 0,
+      acesso_viatura: 1,
+      seguranca_estrutural: 1,
+      plano_emerg_incendio: isBig ? 1 : 0,
+      sis_prot_cont_desc_elet: calculatedTotalArea > 750 ? 1 : 0,
+      comp_horizontal: 0,
+      comp_vertical: 0,
+      separacao_edific: 0,
+      resfriamento: 0,
+      chuveiros_auto: 0,
+      elevador_emerg: 0,
+      control_fumaca: 0,
+      espuma: 0,
+      sis_fixo_gases: 0
     };
-
-    if (!isPts) {
-      baseMeasures.hidrante_mangot = isBig ? 1 : 0;
-      baseMeasures.alarme_incendio = isBig ? 1 : 0;
-      baseMeasures.deteccao_incendio = calculatedTotalArea > 1200 ? 1 : 0;
-      baseMeasures.acesso_viatura = 1;
-      baseMeasures.seguranca_estrutural = 1;
-      baseMeasures.plano_emerg_incendio = isBig ? 1 : 0;
-      baseMeasures.sis_prot_cont_desc_elet = calculatedTotalArea > 750 ? 1 : 0;
-      baseMeasures.comp_horizontal = 0;
-      baseMeasures.comp_vertical = 0;
-      baseMeasures.separacao_edific = 0;
-      baseMeasures.resfriamento = 0;
-      baseMeasures.chuveiros_auto = 0;
-      baseMeasures.elevador_emerg = 0;
-      baseMeasures.control_fumaca = 0;
-      baseMeasures.espuma = 0;
-      baseMeasures.sis_fixo_gases = 0;
-    }
 
     setFormData((prev) => ({
       ...prev,
-      securityMeasures: normalizeSecurityMeasures(baseMeasures, isPts)
+      securityMeasures: normalizeSecurityMeasures(baseMeasures, false)
     }));
-    showToast(`Medidas oficiais Fênix CBMBA ajustadas para ${isPts ? 'PTS (6 básicas)' : 'PT (22 medidas)'}.`, 'success');
+    showToast('Medidas oficiais CBMBA marcadas para a edificação.', 'success');
   };
 
   // Simular Dry-Run
@@ -1738,50 +1776,7 @@ export function ProjectDraftModal({
 
       // Aplica formPatch se retornado
       if (aiResult.formPatch) {
-        const patch = aiResult.formPatch;
-        const modifiedKeys = new Set<string>();
-
-        setFormData((prev) => {
-          const next = { ...prev };
-          if (patch.name) {
-            next.name = patch.name;
-            modifiedKeys.add('name');
-          }
-          if (patch.edification) {
-            next.edification = { ...next.edification, ...patch.edification };
-            modifiedKeys.add('edification');
-          }
-          if (patch.address) {
-            next.address = { ...next.address, ...patch.address };
-            modifiedKeys.add('address');
-          }
-          if (patch.occupation) {
-            next.occupation = { ...next.occupation, ...patch.occupation };
-            modifiedKeys.add('occupation');
-          }
-          if (patch.responsavel) {
-            next.responsavel = { ...next.responsavel, ...patch.responsavel };
-            modifiedKeys.add('responsavel');
-          }
-          if (patch.securityMeasures) {
-            const nextMeasures = { ...next.securityMeasures };
-            Object.entries(patch.securityMeasures).forEach(([k, v]) => {
-              nextMeasures[k] = v ? 1 : 0;
-            });
-            next.securityMeasures = nextMeasures;
-            modifiedKeys.add('measures');
-          }
-          return next;
-        });
-
-        if (patch.step && (patch.step === 1 || patch.step === 2 || patch.step === 3)) {
-          setStep(patch.step);
-        }
-
-        // Aciona animação de flash nos campos alterados por 2.5s
-        setFieldFlashKeys(modifiedKeys);
-        setTimeout(() => setFieldFlashKeys(new Set()), 2600);
-        showToast('Modificações sugeridas pela IA aplicadas ao formulário!', 'success');
+        applyFormPatch(aiResult.formPatch);
       }
 
       setCopilotMessages((prev) => [
@@ -2071,142 +2066,6 @@ export function ProjectDraftModal({
   // Conteúdo dos Steps de Formulário
   const renderStepPanels = () => (
     <>
-      {/* SELETOR DOS 2 FORMULÁRIOS OFICIAIS DO FÊNIX CBMBA */}
-      <div className="fenix-official-selector-wrap animate-fade-in" style={{ marginBottom: '1.25rem' }}>
-        <div className="fenix-selector-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-          <div className="fenix-selector-title">
-            <span className="section-kicker" style={{ display: 'block', fontSize: '0.72rem', letterSpacing: '0.08em', color: 'var(--color-primary, #0ea5e9)', fontWeight: 700, textTransform: 'uppercase' }}>
-              Cartões Oficiais de Entrada do Fênix CBMBA
-            </span>
-            <h4 style={{ margin: '0.2rem 0 0', fontSize: '1.05rem', fontWeight: 700 }}>Selecione o Tipo de Cadastro Oficial</h4>
-          </div>
-          <span className="badge-tag tag-purple" style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600 }}>
-            Paridade 1:1 com Fênix Oficial
-          </span>
-        </div>
-
-        <div className="fenix-form-cards-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '0.9rem' }}>
-          {/* Cartão 1: PT Completo */}
-          <div
-            className={`fenix-form-card ${currentFormMode === 'pt' ? 'selected' : ''}`}
-            onClick={() => handleSwitchFormMode('pt')}
-            role="button"
-            tabIndex={0}
-            style={{
-              padding: '1rem',
-              borderRadius: '12px',
-              border: currentFormMode === 'pt' ? '2px solid var(--color-primary, #0ea5e9)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
-              background: currentFormMode === 'pt' ? 'rgba(14, 165, 233, 0.08)' : 'var(--bg-card, rgba(255,255,255,0.03))',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              boxShadow: currentFormMode === 'pt' ? '0 0 16px rgba(14, 165, 233, 0.2)' : 'none'
-            }}
-          >
-            <div className="fenix-card-badge-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span className="fenix-card-code" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
-                Cartão 1 · PT Completo
-              </span>
-              {currentFormMode === 'pt' && (
-                <span className="fenix-card-active-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', fontWeight: 700, background: '#0ea5e9', color: '#fff', padding: '2px 8px', borderRadius: '999px' }}>
-                  <Check size={12} /> Ativo
-                </span>
-              )}
-            </div>
-            <h5 style={{ margin: '0 0 0.4rem', fontSize: '0.95rem', fontWeight: 700 }}>Cadastrar Projeto Téc. Completo</h5>
-            <p style={{ margin: '0 0 0.6rem', fontSize: '0.8rem', opacity: 0.82, lineHeight: 1.45 }}>
-              Para edificações acima de 750 m², com mais de 3 pavimentos, riscos especiais elevados, sistemas hidráulicos ou eventos temporários de grande porte.
-            </p>
-            <div className="fenix-card-types-list" style={{ fontSize: '0.72rem', opacity: 0.75, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.5rem' }}>
-              <span>Opções no Fênix: </span>
-              <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PT (1)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTIOT (2)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTOTEP (3)</code>
-            </div>
-          </div>
-
-          {/* Cartão 2: PTS Simplificado */}
-          <div
-            className={`fenix-form-card ${currentFormMode === 'pts' ? 'selected' : ''}`}
-            onClick={() => handleSwitchFormMode('pts')}
-            role="button"
-            tabIndex={0}
-            style={{
-              padding: '1rem',
-              borderRadius: '12px',
-              border: currentFormMode === 'pts' ? '2px solid var(--color-teal, #14b8a6)' : '1px solid var(--border-color, rgba(255,255,255,0.1))',
-              background: currentFormMode === 'pts' ? 'rgba(20, 184, 166, 0.08)' : 'var(--bg-card, rgba(255,255,255,0.03))',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              boxShadow: currentFormMode === 'pts' ? '0 0 16px rgba(20, 184, 166, 0.2)' : 'none'
-            }}
-          >
-            <div className="fenix-card-badge-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span className="fenix-card-code" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#2dd4bf', textTransform: 'uppercase' }}>
-                Cartão 2 · PTS Simplificado
-              </span>
-              {currentFormMode === 'pts' && (
-                <span className="fenix-card-active-pill" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', fontWeight: 700, background: '#14b8a6', color: '#fff', padding: '2px 8px', borderRadius: '999px' }}>
-                  <Check size={12} /> Ativo
-                </span>
-              )}
-            </div>
-            <h5 style={{ margin: '0 0 0.4rem', fontSize: '0.95rem', fontWeight: 700 }}>Cadastrar Projeto Téc. Simplificado</h5>
-            <p style={{ margin: '0 0 0.6rem', fontSize: '0.8rem', opacity: 0.82, lineHeight: 1.45 }}>
-              Para edificações até 750 m² e no máximo 3 pavimentos (altura ≤ 12m), sem riscos complexos. Emite CLCB (dispensa de vistoria prévia) ou AVCB simplificado.
-            </p>
-            <div className="fenix-card-types-list" style={{ fontSize: '0.72rem', opacity: 0.75, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.5rem' }}>
-              <span>Opções no Fênix: </span>
-              <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTSCLCB1 (4)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTSCLCB2 (5)</code> · <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 5px', borderRadius: '4px' }}>PTSAVCB (6)</code>
-            </div>
-          </div>
-        </div>
-
-        {/* Alertas de Migração e Bloqueios Oficiais CBMBA */}
-        {currentFormMode === 'pts' && (calculatedTotalArea > 750 || Number(formData.edification.number_floors) > 3 || (formData.specialRisks?.gas_liquefeito_petroleo && Number(formData.glpData?.total_kg_glp) > 12480)) && (
-          <div className="fenix-migration-alert alert-warning animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <AlertTriangle size={20} className="text-amber" />
-              <div style={{ fontSize: '0.82rem', lineHeight: 1.4 }}>
-                <strong>Atenção: A edificação excede os limites de Projeto Técnico Simplificado (PTS)!</strong>
-                <div>
-                  Área ({calculatedTotalArea} m² {calculatedTotalArea > 750 ? '> 750 m²' : ''})
-                  {Number(formData.edification.number_floors) > 3 ? ' ou Pavimentos (> 3 pavimentos)' : ''}
-                  {formData.specialRisks?.gas_liquefeito_petroleo && Number(formData.glpData?.total_kg_glp) > 12480 ? ' ou GLP (> 12.480 kg)' : ''}. O CBMBA bloqueará a homologação em PTS.
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="button button-outline button-xs"
-              style={{ whiteSpace: 'nowrap', borderColor: '#f59e0b', color: '#f59e0b' }}
-              onClick={() => handleSwitchFormMode('pt')}
-            >
-              <ArrowRight size={13} /> Migrar para PT Completo
-            </button>
-          </div>
-        )}
-
-        {currentFormMode === 'pt' && calculatedTotalArea > 0 && calculatedTotalArea <= 750 && Number(formData.edification.number_floors) <= 3 && (!formData.specialRisks?.gas_liquefeito_petroleo || Number(formData.glpData?.total_kg_glp) <= 12480) && formData.tipo_projeto_id === 1 && (
-          <div className="fenix-migration-alert alert-info animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: '10px', background: 'rgba(14, 165, 233, 0.12)', border: '1px solid rgba(14, 165, 233, 0.35)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <Info size={20} className="text-teal" />
-              <div style={{ fontSize: '0.82rem', lineHeight: 1.4 }}>
-                <strong>Aviso de Bloqueio Cadastral CBMBA (bloqueioCadastroPTSviaCardPT):</strong>
-                <div>
-                  Edificação possui ≤ 750 m² e até 3 pavimentos. O Fênix impede protocolar imóveis desse porte pelo cartão de Projeto Técnico Completo permanente.
-                </div>
-              </div>
-            </div>
-            <button
-              type="button"
-              className="button button-outline button-xs"
-              style={{ whiteSpace: 'nowrap', borderColor: '#0ea5e9', color: '#0ea5e9' }}
-              onClick={() => handleSwitchFormMode('pts')}
-            >
-              <ArrowRight size={13} /> Alternar para PTS Simplificado
-            </button>
-          </div>
-        )}
-      </div>
-
       {/* ETAPA 1: EDIFICAÇÃO & ENDEREÇO */}
               {step === 1 && (
                 <div className="step-panel animate-fade-in">
@@ -2776,14 +2635,22 @@ export function ProjectDraftModal({
                       </div>
                     </div>
 
-                    {/* Botão de aplicar sugestão se houver divergência com o sugerido pela IT-14 */}
-                    {(currentFormMode !== enquadramento.suggestedFormMode || formData.tipo_projeto_id !== enquadramento.suggestedTipoProjetoId) && (
+                    {/* Botão de ajustar tipo de projeto se houver divergência com o enquadramento CBMBA */}
+                    {formData.tipo_projeto_id !== enquadramento.suggestedTipoProjetoId && (
                       <div className="enquadramento-suggest-action animate-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginTop: '0.9rem', padding: '0.65rem 0.9rem', borderRadius: '8px', background: 'rgba(14, 165, 233, 0.12)', border: '1px solid rgba(14, 165, 233, 0.3)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem' }}>
                           <Sparkles size={16} className="text-teal" />
                           <span>
-                            A IT-14 sugere: <b>{enquadramento.suggestedFormMode.toUpperCase()} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === enquadramento.suggestedTipoProjetoId)?.sigla})</b>.
-                            Atual selecionado: <b>{currentFormMode.toUpperCase()} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === formData.tipo_projeto_id)?.sigla || 'Não definido'})</b>.
+                            {[4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0) && [1, 2, 3].includes(enquadramento.suggestedTipoProjetoId) ? (
+                              <>
+                                Os parâmetros informados ({enquadramento.motivo}) requerem <b>Projeto Técnico Completo ({enquadramento.sigla})</b>.
+                              </>
+                            ) : (
+                              <>
+                                Sugestão do enquadramento CBMBA: <b>{enquadramento.sigla} — {enquadramento.nome}</b>.
+                                Tipo atual: <b>{OFFICIAL_PROJECT_TYPES.find(t => t.id === formData.tipo_projeto_id)?.sigla || 'Não selecionado'}</b>.
+                              </>
+                            )}
                           </span>
                         </div>
                         <button
@@ -2791,12 +2658,21 @@ export function ProjectDraftModal({
                           className="button button-outline button-xs"
                           style={{ borderColor: '#0ea5e9', color: '#0ea5e9', whiteSpace: 'nowrap' }}
                           onClick={() => {
-                            handleSwitchFormMode(enquadramento.suggestedFormMode);
-                            setFormData(prev => ({ ...prev, tipo_projeto_id: enquadramento.suggestedTipoProjetoId }));
-                            showToast('Sugestão da IT-14 aplicada ao cadastro!', 'success');
+                            const newId = enquadramento.suggestedTipoProjetoId;
+                            const isPt = [1, 2, 3].includes(newId);
+                            setFormData(prev => ({
+                              ...prev,
+                              tipo_projeto_id: newId,
+                              form_mode: isPt ? 'pt' : 'pts',
+                              process_category: isPt ? 'pt' : 'pts',
+                              license_type: [4, 5].includes(newId) ? 'CLCB' : 'AVCB'
+                            }));
+                            showToast(`Tipo de projeto ajustado para ${enquadramento.sigla}!`, 'success');
                           }}
                         >
-                          <Check size={13} /> Aplicar Sugestão da IT-14
+                          <Check size={13} /> {[4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0) && [1, 2, 3].includes(enquadramento.suggestedTipoProjetoId)
+                            ? '✦ Ajustar Tipo para PT Completo'
+                            : `✦ Aplicar Sugestão (${enquadramento.sigla})`}
                         </button>
                       </div>
                     )}
@@ -2806,7 +2682,7 @@ export function ProjectDraftModal({
                   <div className="editor-card">
                     <div className="card-heading">
                       <ClipboardList size={18} className="text-teal" />
-                      <h4>Dados Gerais do Projeto Técnico ({currentFormMode === 'pts' ? 'Cartão 2 · PTS' : 'Cartão 1 · PT'})</h4>
+                      <h4>Dados Gerais do Projeto Técnico</h4>
                     </div>
 
                     <div className="form-grid">
@@ -2816,24 +2692,36 @@ export function ProjectDraftModal({
                           <span>Tipo Oficial de Projeto Técnico (Fênix CBMBA) *</span>
                           <select
                             className="input-select"
-                            value={formData.tipo_projeto_id || (currentFormMode === 'pts' ? 4 : 1)}
+                            value={formData.tipo_projeto_id || 4}
                             onChange={(e) => {
                               const tid = Number(e.target.value);
+                              const isPt = [1, 2, 3].includes(tid);
                               setFormData((prev) => ({
                                 ...prev,
                                 tipo_projeto_id: tid,
+                                form_mode: isPt ? 'pt' : 'pts',
+                                process_category: isPt ? 'pt' : 'pts',
                                 license_type: [4, 5].includes(tid) ? 'CLCB' : 'AVCB'
                               }));
                             }}
                           >
-                            {OFFICIAL_PROJECT_TYPES.filter((t) => t.form_mode === currentFormMode).map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.id}: {t.sigla} — {t.descricao}
-                              </option>
-                            ))}
+                            <optgroup label="Projeto Técnico Simplificado (PTS — até 750 m² e até 3 pav.)">
+                              {OFFICIAL_PROJECT_TYPES.filter((t) => t.form_mode === 'pts').map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.id}: {t.sigla} — {t.descricao}
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="Projeto Técnico Completo (PT)">
+                              {OFFICIAL_PROJECT_TYPES.filter((t) => t.form_mode === 'pt').map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.id}: {t.sigla} — {t.descricao}
+                                </option>
+                              ))}
+                            </optgroup>
                           </select>
                         </label>
-                        <small className="field-hint">Filtrado estritamente pelas opções oficiais do cartão selecionado.</small>
+                        <small className="field-hint">Todas as 8 modalidades oficiais do Fênix CBMBA em um único cadastro unificado.</small>
                       </div>
 
                       {/* Isenção de Taxa */}
@@ -3294,8 +3182,8 @@ export function ProjectDraftModal({
                             onChange={(e) => setFormData((prev) => ({ ...prev, qtde_funcionarios: Number(e.target.value) || 0 }))}
                           />
                         </label>
-                        {currentFormMode === 'pts' && Number(formData.qtde_funcionarios || 0) > 100 && (
-                          <small className="field-hint text-amber">Atenção: Divisões com &gt; 100 funcionários podem exigir brigada avançada.</small>
+                        {Number(formData.qtde_funcionarios || 0) > 100 && (
+                          <small className="field-hint text-amber">Atenção: Divisões com mais de 100 funcionários exigem formação de Brigada de Incêndio (IT-17).</small>
                         )}
                       </div>
 
@@ -3421,27 +3309,25 @@ export function ProjectDraftModal({
                             </div>
                           )}
 
-                          {currentFormMode === 'pts' && !formData.questionario?.edf_regularizada_certificado && (
-                            <div className="text-danger mt-1" style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <AlertTriangle size={14} /> Atenção Fênix: Estabelecimentos sem saída direta só podem tramitar por PTS se a edificação-mãe possuir certificado válido!
+                          {!formData.questionario?.edf_regularizada_certificado && (
+                            <div className="text-warning mt-1" style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px', color: '#f59e0b' }}>
+                              <AlertTriangle size={14} /> Atenção CBMBA: Estabelecimentos sem saída direta para a via pública exigem que a edificação maior possua certificado regularizado.
                             </div>
                           )}
                         </div>
                       )}
 
-                      {currentFormMode === 'pts' && (
-                        <div className="form-col-12 mt-1">
-                          <ToggleSlider
-                            checked={Boolean(formData.questionario?.renovacao_sap)}
-                            onChange={(checked) => setFormData((prev) => ({
-                              ...prev,
-                              questionario: { ...prev.questionario, renovacao_sap: checked }
-                            }))}
-                            label="Renovação de SAP (Sistema de Atendimento Presencial / Processo Legado)"
-                            description="Marque apenas se o imóvel possuir processo físico anterior a ser migrado para o Fênix digital."
-                          />
-                        </div>
-                      )}
+                      <div className="form-col-12 mt-1">
+                        <ToggleSlider
+                          checked={Boolean(formData.questionario?.renovacao_sap)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            questionario: { ...prev.questionario, renovacao_sap: checked }
+                          }))}
+                          label="Renovação de SAP (Sistema de Atendimento Presencial / Processo Legado)"
+                          description="Marque apenas se o imóvel possuir processo físico anterior a ser migrado para o Fênix digital."
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -4061,7 +3947,7 @@ export function ProjectDraftModal({
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <Flame size={18} className="text-teal" />
-                        <h4>Medidas de Segurança Contra Incêndio ({currentFormMode === 'pts' ? '6 Medidas Básicas do PTS' : '22 Medidas Oficiais do PT'})</h4>
+                        <h4>Medidas de Segurança Contra Incêndio (22 Medidas Oficiais CBMBA)</h4>
                       </div>
                       <button
                         type="button"
@@ -4073,17 +3959,17 @@ export function ProjectDraftModal({
                       </button>
                     </div>
 
-                    {currentFormMode === 'pts' && (
+                    {[4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0) && (
                       <div className="pts-measures-notice animate-fade-in mb-3" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.9rem', borderRadius: '8px', background: 'rgba(20, 184, 166, 0.08)', border: '1px solid rgba(20, 184, 166, 0.25)', fontSize: '0.82rem' }}>
                         <Info size={16} className="text-teal" />
                         <p style={{ margin: 0, lineHeight: 1.45 }}>
-                          No <b>Projeto Técnico Simplificado (PTS)</b>, o Corpo de Bombeiros analisa exclusivamente as <b>6 medidas básicas</b> abaixo. As 16 medidas avançadas (hidrantes, chuveiros automáticos, detecção, controle de fumaça, etc.) são exclusivas de Projeto Técnico Completo (PT).
+                          No envio de processos na modalidade <b>PTS ({OFFICIAL_PROJECT_TYPES.find(t => t.id === formData.tipo_projeto_id)?.sigla || 'Simplificado'})</b>, o Fênix CBMBA homologa as 6 medidas básicas. As 16 medidas de engenharia avançada podem ser marcadas e ficam registradas no seu rascunho técnico.
                         </p>
                       </div>
                     )}
 
                     <div className="measures-grid">
-                      {OFFICIAL_FENIX_MEASURES.filter((m) => currentFormMode === 'pt' || m.basic).map((measure) => {
+                      {OFFICIAL_FENIX_MEASURES.map((measure) => {
                         const isChecked = Boolean(formData.securityMeasures?.[measure.key]);
                         return (
                           <div key={measure.key} className={`measure-slider-card ${isChecked ? 'selected' : ''}`}>
@@ -4099,7 +3985,7 @@ export function ProjectDraftModal({
                                 }));
                               }}
                               label={measure.label}
-                              badge={measure.basic ? <span className="tag-basic">Básica</span> : <span className="tag-advanced" style={{ background: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', padding: '1px 6px', borderRadius: '4px', fontSize: '0.68rem', fontWeight: 600 }}>Avançada (PT)</span>}
+                              badge={measure.basic ? <span className="tag-basic">Básica (PTS/PT)</span> : <span className="tag-advanced" style={{ background: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', padding: '1px 6px', borderRadius: '4px', fontSize: '0.68rem', fontWeight: 600 }}>Engenharia (PT)</span>}
                               description={measure.desc}
                             />
                           </div>
@@ -4121,7 +4007,7 @@ export function ProjectDraftModal({
                         <h4>Documentos que o Fênix solicitará após gerar o protocolo</h4>
                       </div>
                       <span className="badge-tag tag-teal">
-                        Tipo de Projeto #{formData.tipo_projeto_id || (currentFormMode === 'pts' ? 4 : 1)} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === (formData.tipo_projeto_id || (currentFormMode === 'pts' ? 4 : 1)))?.sigla})
+                        Tipo de Projeto #{formData.tipo_projeto_id || 4} ({OFFICIAL_PROJECT_TYPES.find(t => t.id === (formData.tipo_projeto_id || 4))?.sigla})
                       </span>
                     </div>
 
@@ -4186,7 +4072,7 @@ export function ProjectDraftModal({
                           </div>
                         </>
                       )}
-                      {[1, 2, 3].includes(formData.tipo_projeto_id || (currentFormMode === 'pt' ? 1 : 0)) && (
+                      {[1, 2, 3].includes(formData.tipo_projeto_id || 0) && (
                         <>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.82rem', padding: '0.5rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
                             <CheckCircle2 size={16} className="text-teal" /><span>Pranchas Completas do Projeto de Segurança Contra Incêndio (PSCIP em DWG/PDF)</span>
