@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import React, { Component, useEffect, useMemo, useState, useCallback, useRef, type ErrorInfo, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -45,6 +45,339 @@ import {
 } from './draftAiHelper';
 
 export type { ProjectDraftInput, TechnicalManagerItem, DraftAiAssistantResponse };
+
+/**
+ * Normaliza um rascunho de projeto garantindo integridade defensiva e suporte a dados legados/planos.
+ */
+export function normalizeProjectDraftInput(
+  raw: any,
+  fallbackName?: string,
+  fallbackId?: string
+): ProjectDraftInput {
+  const base = INITIAL_EMPTY_DRAFT;
+  const src = raw || {};
+
+  const id = src.id || fallbackId || undefined;
+  const name = String(
+    src.name ||
+      fallbackName ||
+      src.reference_name ||
+      src?.edification?.reference_name ||
+      base.name ||
+      'Novo Rascunho de Projeto'
+  );
+
+  const tipo_projeto_id = Number(
+    src.tipo_projeto_id ||
+      (src.form_mode === 'pt' || src.process_category === 'pt' ? 1 : base.tipo_projeto_id)
+  );
+  const isPt = [1, 2, 3].includes(tipo_projeto_id) || src.form_mode === 'pt' || src.process_category === 'pt';
+  const form_mode: 'pt' | 'pts' = src.form_mode || (isPt ? 'pt' : 'pts');
+  const process_category: 'pt' | 'pts' = src.process_category || (isPt ? 'pt' : 'pts');
+  const license_type: 'CLCB' | 'AVCB' =
+    src.license_type ||
+    (isPt ? 'AVCB' : tipo_projeto_id === 6 || tipo_projeto_id === 7 || tipo_projeto_id === 8 ? 'AVCB' : 'CLCB');
+
+  // Sub-objeto: edification
+  const edRaw = src.edification || {};
+  const edification = {
+    reference_name: String(
+      edRaw.reference_name ?? src.reference_name ?? src.nome_referencia ?? base.edification.reference_name ?? ''
+    ),
+    registration: String(
+      edRaw.registration ?? src.registration ?? src.matricula ?? base.edification.registration ?? ''
+    ),
+    height: String(edRaw.height || src.altura || base.edification.height),
+    number_floors: Number(edRaw.number_floors ?? src.pavimentos ?? base.edification.number_floors) || 1,
+    building_area: Number(
+      edRaw.building_area ?? src.area_construida ?? src.area_total ?? base.edification.building_area ?? 0
+    ) || 0,
+    area_to_be_built: Number(
+      edRaw.area_to_be_built ?? src.area_a_construir ?? base.edification.area_to_be_built ?? 0
+    ) || 0,
+    discount_area: Number(
+      edRaw.discount_area ?? src.area_desconto ?? base.edification.discount_area ?? 0
+    ) || 0,
+    total_area: Number(edRaw.total_area ?? src.area_total ?? 0) || 0
+  };
+
+  // Sub-objeto: address
+  const addrRaw = src.address || {};
+  const address = {
+    zip_code: String(addrRaw.zip_code ?? src.cep ?? base.address.zip_code ?? ''),
+    public_place: String(addrRaw.public_place ?? src.logradouro ?? base.address.public_place ?? ''),
+    number: String(addrRaw.number ?? src.numero ?? base.address.number ?? ''),
+    complement: String(addrRaw.complement ?? src.complemento ?? base.address.complement ?? '***'),
+    district: String(addrRaw.district ?? src.district ?? src.neighborhood ?? src.bairro ?? base.address.district ?? ''),
+    county: String(addrRaw.county ?? src.cidade ?? src.municipio ?? base.address.county ?? 'SALVADOR'),
+    municipio_id:
+      addrRaw.municipio_id !== undefined && addrRaw.municipio_id !== null
+        ? Number(addrRaw.municipio_id)
+        : src.municipio_id !== undefined && src.municipio_id !== null
+        ? Number(src.municipio_id)
+        : base.address.municipio_id,
+    state: String(addrRaw.state ?? src.uf ?? base.address.state ?? 'BA'),
+    geographic_coordinates: String(
+      addrRaw.geographic_coordinates ??
+        src.coordenadas ??
+        src.geographic_coordinates ??
+        base.address.geographic_coordinates ??
+        ''
+    )
+  };
+
+  // Sub-objeto: institution
+  const instRaw = src.institution || {};
+  const institution = {
+    tipo_pessoa: (instRaw.tipo_pessoa || src.tipo_pessoa || base.institution.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
+    cnpj_cpf: String(instRaw.cnpj_cpf ?? src.cnpj_cpf ?? src.cnpj ?? src.cpf ?? base.institution.cnpj_cpf ?? ''),
+    razao_social: String(instRaw.razao_social ?? src.razao_social ?? base.institution.razao_social ?? ''),
+    nome_fantasia: String(instRaw.nome_fantasia ?? src.nome_fantasia ?? base.institution.nome_fantasia ?? ''),
+    natureza_juridica: String(instRaw.natureza_juridica ?? src.natureza_juridica ?? base.institution.natureza_juridica ?? 'ME'),
+    cnae: String(instRaw.cnae ?? src.cnae ?? src.cnae_id ?? base.institution.cnae ?? ''),
+    atividade_economica: String(
+      instRaw.atividade_economica ??
+        src.atividade_economica ??
+        src.descricao_ocupacao ??
+        base.institution.atividade_economica ??
+        ''
+    ),
+    risk: Number(instRaw.risk ?? src.risk ?? base.institution.risk ?? 300) || 300
+  };
+
+  // Sub-objeto: occupation
+  const occRaw = src.occupation || {};
+  const occupation = {
+    occupation_group_id: Number(occRaw.occupation_group_id ?? src.ocupacao_id ?? base.occupation.occupation_group_id) || 0,
+    division_group_id: Number(occRaw.division_group_id ?? src.divisao_id ?? base.occupation.division_group_id) || 0,
+    has_underground: Boolean(occRaw.has_underground ?? src.has_underground ?? base.occupation.has_underground ?? false),
+    underground_occupation_group_id:
+      Number(occRaw.underground_occupation_group_id ?? base.occupation.underground_occupation_group_id ?? 13) || 13,
+    underground_division_group_id:
+      Number(occRaw.underground_division_group_id ?? base.occupation.underground_division_group_id ?? 58) || 58
+  };
+
+  // Sub-objeto: proprietario
+  const propRaw = src.proprietario || {};
+  const proprietario = {
+    tipo_pessoa_prop: (propRaw.tipo_pessoa_prop ||
+      propRaw.tipo_pessoa ||
+      src.tipo_pessoa_prop ||
+      base.proprietario.tipo_pessoa_prop ||
+      'PJ') as 'PJ' | 'PF',
+    cpf_cnpj_prop: String(
+      propRaw.cpf_cnpj_prop ?? propRaw.cpf_cnpj ?? propRaw.cnpj_cpf ?? src.cpf_cnpj_prop ?? base.proprietario.cpf_cnpj_prop ?? ''
+    ),
+    nome_proprietario: String(
+      propRaw.nome_proprietario ?? propRaw.nome ?? src.nome_proprietario ?? base.proprietario.nome_proprietario ?? ''
+    ),
+    email_proprietario: String(
+      propRaw.email_proprietario ?? propRaw.email ?? src.email_proprietario ?? base.proprietario.email_proprietario ?? ''
+    ),
+    tel_proprietario: String(
+      propRaw.tel_proprietario ?? propRaw.telefone ?? propRaw.tel ?? src.tel_proprietario ?? base.proprietario.tel_proprietario ?? ''
+    )
+  };
+
+  // Sub-objeto: responsavel
+  const respRaw = src.responsavel || {};
+  const responsavel = {
+    responsavel_uso_igual_prop: Boolean(
+      respRaw.responsavel_uso_igual_prop ??
+        src.responsavel_uso_igual_prop ??
+        base.responsavel.responsavel_uso_igual_prop ??
+        true
+    ),
+    tipo_pessoa_resp: (respRaw.tipo_pessoa_resp ||
+      respRaw.tipo_pessoa ||
+      src.tipo_pessoa_resp ||
+      base.responsavel.tipo_pessoa_resp ||
+      'PJ') as 'PJ' | 'PF',
+    cpf_cnpj_resp: String(respRaw.cpf_cnpj_resp ?? respRaw.cpf_cnpj ?? src.cpf_cnpj_resp ?? base.responsavel.cpf_cnpj_resp ?? ''),
+    nome_responsavel: String(respRaw.nome_responsavel ?? respRaw.nome ?? src.nome_responsavel ?? base.responsavel.nome_responsavel ?? ''),
+    email_responsavel_uso: String(
+      respRaw.email_responsavel_uso ?? respRaw.email ?? src.email_responsavel_uso ?? base.responsavel.email_responsavel_uso ?? ''
+    ),
+    tel_responsavel_uso: String(
+      respRaw.tel_responsavel_uso ?? respRaw.telefone ?? respRaw.tel ?? src.tel_responsavel_uso ?? base.responsavel.tel_responsavel_uso ?? ''
+    )
+  };
+
+  // Sub-objeto: technical
+  const techRaw = src.technical || {};
+  const technical = {
+    cpf: String(techRaw.cpf ?? base.technical?.cpf ?? ''),
+    name: String(techRaw.name ?? base.technical?.name ?? ''),
+    crea_cau: String(techRaw.crea_cau ?? base.technical?.crea_cau ?? ''),
+    telephone: String(techRaw.telephone ?? base.technical?.telephone ?? ''),
+    email: String(techRaw.email ?? base.technical?.email ?? '')
+  };
+
+  // Sub-objeto: questionario
+  const qRaw = src.questionario || {};
+  const questionario = {
+    ...base.questionario,
+    ...qRaw,
+    edf_saida_direta:
+      qRaw.edf_saida_direta !== undefined
+        ? Boolean(qRaw.edf_saida_direta)
+        : src.edf_saida_direta !== undefined
+        ? Boolean(src.edf_saida_direta)
+        : (base.questionario?.edf_saida_direta ?? true),
+    edf_regularizada_certificado: Boolean(
+      qRaw.edf_regularizada_certificado ??
+        src.edf_regularizada_certificado ??
+        base.questionario?.edf_regularizada_certificado ??
+        false
+    ),
+    tipo_certificado: (qRaw.tipo_certificado ||
+      src.tipo_certificado ||
+      base.questionario?.tipo_certificado ||
+      'AVCB') as 'AVCB' | 'CLCB',
+    n_certificado: String(qRaw.n_certificado ?? src.n_certificado ?? base.questionario?.n_certificado ?? ''),
+    renovacao_sap: Boolean(qRaw.renovacao_sap ?? src.renovacao_sap ?? base.questionario?.renovacao_sap ?? false),
+    lotacao_max_pessoas: Boolean(
+      qRaw.lotacao_max_pessoas ?? src.lotacao_max_pessoas ?? base.questionario?.lotacao_max_pessoas ?? false
+    ),
+    existe_gases_inflamaveis: Boolean(
+      qRaw.existe_gases_inflamaveis ?? src.existe_gases_inflamaveis ?? base.questionario?.existe_gases_inflamaveis ?? false
+    ),
+    existe_liquidos_inflamaveis: Boolean(
+      qRaw.existe_liquidos_inflamaveis ??
+        src.existe_liquidos_inflamaveis ??
+        base.questionario?.existe_liquidos_inflamaveis ??
+        false
+    ),
+    glp_12480kg: Boolean(qRaw.glp_12480kg ?? src.glp_12480kg ?? base.questionario?.glp_12480kg ?? false),
+    gas_glp: Boolean(qRaw.gas_glp ?? src.gas_glp ?? base.questionario?.gas_glp ?? false),
+    armazena_produtos_perigosos: Boolean(
+      qRaw.armazena_produtos_perigosos ??
+        src.armazena_produtos_perigosos ??
+        base.questionario?.armazena_produtos_perigosos ??
+        false
+    ),
+    local_reuniao_publico: Boolean(
+      qRaw.local_reuniao_publico ?? src.local_reuniao_publico ?? base.questionario?.local_reuniao_publico ?? false
+    ),
+    subsolo_maior_50m_pt: Boolean(
+      qRaw.subsolo_maior_50m_pt ?? src.subsolo_maior_50m_pt ?? base.questionario?.subsolo_maior_50m_pt ?? false
+    ),
+    cobertura_fibras_sape: Boolean(
+      qRaw.cobertura_fibras_sape ?? src.cobertura_fibras_sape ?? base.questionario?.cobertura_fibras_sape ?? false
+    )
+  };
+
+  // Sub-objeto: specialRisks
+  const srRaw = src.specialRisks || {};
+  const specialRisks = {
+    ...base.specialRisks,
+    ...srRaw,
+    liquidos_inflamaveis: Boolean(
+      srRaw.liquidos_inflamaveis ?? src.liquidos_inflamaveis ?? base.specialRisks?.liquidos_inflamaveis ?? false
+    ),
+    gas_liquefeito_petroleo: Boolean(
+      srRaw.gas_liquefeito_petroleo ?? src.gas_liquefeito_petroleo ?? base.specialRisks?.gas_liquefeito_petroleo ?? false
+    ),
+    produtos_perigosos: Boolean(
+      srRaw.produtos_perigosos ?? src.produtos_perigosos ?? base.specialRisks?.produtos_perigosos ?? false
+    ),
+    fogos_artificio: Boolean(
+      srRaw.fogos_artificio ?? src.fogos_artificio ?? base.specialRisks?.fogos_artificio ?? false
+    ),
+    vaso_pressao: Boolean(srRaw.vaso_pressao ?? src.vaso_pressao ?? base.specialRisks?.vaso_pressao ?? false),
+    outros: String(srRaw.outros ?? src.outros ?? base.specialRisks?.outros ?? '')
+  };
+
+  // Sub-objeto: glpData
+  const glpRaw = src.glpData || {};
+  const glpData = {
+    total_kg_glp: glpRaw.total_kg_glp ?? src.total_kg_glp ?? src.glp_quantidade_kg ?? base.glpData?.total_kg_glp ?? '',
+    classe_glp: String(glpRaw.classe_glp ?? src.classe_glp ?? base.glpData?.classe_glp ?? 'Classe I')
+  };
+
+  // Sub-objeto: securityMeasures
+  const securityMeasures: Record<string, number | boolean> = {
+    ...base.securityMeasures
+  };
+  if (src.securityMeasures && typeof src.securityMeasures === 'object') {
+    for (const [k, v] of Object.entries(src.securityMeasures)) {
+      securityMeasures[k] = v ? 1 : 0;
+    }
+  }
+  if (src.medidas_seguranca && typeof src.medidas_seguranca === 'object') {
+    for (const [k, v] of Object.entries(src.medidas_seguranca)) {
+      securityMeasures[k] = v ? 1 : 0;
+    }
+  }
+
+  // Sub-objeto: responsaveis_tecnicos
+  const rawRts = Array.isArray(src.responsaveis_tecnicos)
+    ? src.responsaveis_tecnicos
+    : Array.isArray(src.rts)
+    ? src.rts
+    : Array.isArray(base.responsaveis_tecnicos)
+    ? base.responsaveis_tecnicos
+    : [];
+
+  const responsaveis_tecnicos: TechnicalManagerItem[] = rawRts.map((item: any) => ({
+    tipo_numero: String(item?.tipo_numero ?? item?.conselho ?? 'CREA'),
+    conselho: String(item?.conselho ?? item?.tipo_numero ?? 'CREA'),
+    crea_cau: String(item?.crea_cau ?? item?.n_registro_conselho ?? ''),
+    n_registro_conselho: String(item?.n_registro_conselho ?? item?.crea_cau ?? ''),
+    name: String(item?.name ?? item?.nome_tecnico ?? item?.nome ?? ''),
+    nome_tecnico: String(item?.nome_tecnico ?? item?.name ?? item?.nome ?? ''),
+    cpf_cnpj: String(item?.cpf_cnpj ?? item?.cpf_cnpj_tecnico ?? item?.cpf ?? ''),
+    cpf_cnpj_tecnico: String(item?.cpf_cnpj_tecnico ?? item?.cpf_cnpj ?? item?.cpf ?? ''),
+    phone: String(item?.phone ?? item?.telefone_tecnico ?? item?.telefone ?? ''),
+    telefone_tecnico: String(item?.telefone_tecnico ?? item?.phone ?? item?.telefone ?? ''),
+    email: String(item?.email ?? item?.email_tecnico ?? ''),
+    email_tecnico: String(item?.email_tecnico ?? item?.email ?? ''),
+    art: String(item?.art ?? item?.n_art_rrt ?? ''),
+    n_art_rrt: String(item?.n_art_rrt ?? item?.art ?? src.n_art_rrt ?? '')
+  }));
+
+  return {
+    ...base,
+    ...src,
+    id,
+    name,
+    edificacao_mode: (src.edificacao_mode || base.edificacao_mode || 'new') as 'new' | 'existing',
+    edificacao_id:
+      src.edificacao_id !== undefined && src.edificacao_id !== null
+        ? Number(src.edificacao_id)
+        : base.edificacao_id ?? null,
+    form_mode,
+    tipo_projeto_id,
+    process_category,
+    license_type,
+    isencao_id: Number(src.isencao_id ?? base.isencao_id ?? 1),
+    n_art_rrt: String(src.n_art_rrt ?? responsaveis_tecnicos[0]?.n_art_rrt ?? base.n_art_rrt ?? ''),
+    projeto_anterior: Boolean(src.projeto_anterior ?? base.projeto_anterior ?? false),
+    n_projeto_anterior: String(src.n_projeto_anterior ?? base.n_projeto_anterior ?? ''),
+    decreto_estadual_adotado_id: Number(src.decreto_estadual_adotado_id ?? base.decreto_estadual_adotado_id ?? 2),
+    cnae_not_in_it14: Boolean(src.cnae_not_in_it14 ?? base.cnae_not_in_it14 ?? false),
+    porte_outros: String(src.porte_outros ?? base.porte_outros ?? ''),
+    qtde_pessoas: src.qtde_pessoas ?? base.qtde_pessoas ?? '',
+    qtde_leitos: src.qtde_leitos ?? base.qtde_leitos ?? '',
+    qtde_funcionarios: src.qtde_funcionarios ?? base.qtde_funcionarios ?? '',
+    area_comum: src.area_comum ?? base.area_comum ?? '',
+    subsolo_maior_50m: Boolean(src.subsolo_maior_50m ?? base.subsolo_maior_50m ?? false),
+    cobertura_fsps_sup200: Boolean(src.cobertura_fsps_sup200 ?? base.cobertura_fsps_sup200 ?? false),
+    edification,
+    address,
+    institution,
+    occupation,
+    proprietario,
+    responsavel,
+    technical,
+    responsaveis_tecnicos,
+    incluir_rt_opcional: Boolean(src.incluir_rt_opcional ?? base.incluir_rt_opcional ?? false),
+    questionario,
+    specialRisks,
+    glpData,
+    securityMeasures
+  };
+}
 
 export interface DraftRecord {
   id: string;
@@ -596,8 +929,6 @@ export function parseBuildingAddressString(rawAddress?: string | null): {
   };
 }
 
-export const ProjectDraftPage = ProjectDraftModal;
-
 interface DraftAnchorItem {
   id: string;
   label: string;
@@ -732,7 +1063,7 @@ function DraftSectionAnchorRail({
   );
 }
 
-export function ProjectDraftModal({
+function ProjectDraftModalContent({
   open,
   isOpen: legacyIsOpen,
   onClose,
@@ -950,7 +1281,11 @@ export function ProjectDraftModal({
     setDraftsLoading(true);
     try {
       const res = await api<{ drafts: DraftRecord[] }>('/api/drafts');
-      setDrafts(res.drafts || []);
+      const normalized = (res.drafts || []).map((d) => ({
+        ...d,
+        data: normalizeProjectDraftInput(d?.data, d?.name, d?.id)
+      }));
+      setDrafts(normalized);
     } catch {
       // Falha silenciosa no carregamento inicial
     } finally {
@@ -984,17 +1319,17 @@ export function ProjectDraftModal({
 
   // Cálculo da área total reativo
   const calculatedTotalArea = useMemo(() => {
-    const built = parseFloat(String(formData.edification.building_area).replace(',', '.')) || 0;
-    const toBuild = parseFloat(String(formData.edification.area_to_be_built || 0).replace(',', '.')) || 0;
-    const discount = parseFloat(String(formData.edification.discount_area || 0).replace(',', '.')) || 0;
+    const built = parseFloat(String(formData.edification?.building_area ?? (formData as any)?.area_construida ?? 0).replace(',', '.')) || 0;
+    const toBuild = parseFloat(String(formData.edification?.area_to_be_built ?? (formData as any)?.area_a_construir ?? 0).replace(',', '.')) || 0;
+    const discount = parseFloat(String(formData.edification?.discount_area ?? (formData as any)?.area_desconto ?? 0).replace(',', '.')) || 0;
     return Math.max(0, +(built + toBuild - discount).toFixed(2));
-  }, [formData.edification.building_area, formData.edification.area_to_be_built, formData.edification.discount_area]);
+  }, [formData.edification?.building_area, formData.edification?.area_to_be_built, formData.edification?.discount_area, (formData as any)?.area_construida]);
 
   // Enquadramento automático em tempo real
   const enquadramento = useMemo(() => {
     const totalArea = calculatedTotalArea;
-    const floors = Number(formData.edification.number_floors) || 1;
-    const rawCnae = cleanDigits(formData.institution.cnae);
+    const floors = Number(formData.edification?.number_floors ?? (formData as any)?.pavimentos) || 1;
+    const rawCnae = cleanDigits(formData.institution?.cnae ?? (formData as any)?.cnae);
 
     const blockedList = domains?.blockedPtsCnaes || BLOCKED_PTS_CNAES_DEFAULT;
     const isCnaeBlocked = blockedList.includes(rawCnae);
@@ -1136,65 +1471,65 @@ export function ProjectDraftModal({
     if (formData.edificacao_mode === 'existing' && !String(formData.edificacao_id || '').trim()) {
       errors.push('Etapa 1: Informe o ID da edificação existente no Fênix.');
     }
-    if (!formData.edification.reference_name.trim()) {
+    if (!(formData.edification?.reference_name || '').trim()) {
       errors.push('Etapa 1: Nome de referência da edificação é obrigatório.');
     }
-    if (!formData.edification.height) {
+    if (!formData.edification?.height) {
       errors.push('Etapa 1: Altura da edificação é obrigatória.');
     }
-    if (formData.edification.height === 'Térrea = Um pavimento' && Number(formData.edification.number_floors) !== 1) {
+    if (formData.edification?.height === 'Térrea = Um pavimento' && Number(formData.edification?.number_floors) !== 1) {
       errors.push('Etapa 1: Quando a altura for "Térrea", o número de pavimentos deve ser exatamente 1.');
     }
     if (calculatedTotalArea <= 0) {
       errors.push('Etapa 1: A área total construída deve ser maior que zero.');
     }
-    if (cleanDigits(formData.address.zip_code).length !== 8) {
+    if (cleanDigits(formData.address?.zip_code).length !== 8) {
       errors.push('Etapa 1: CEP deve conter 8 dígitos.');
     }
-    if (!formData.address.public_place.trim()) {
+    if (!(formData.address?.public_place || '').trim()) {
       errors.push('Etapa 1: Logradouro é obrigatório.');
     }
-    if (!formData.address.number.trim()) {
+    if (!(formData.address?.number || '').trim()) {
       errors.push('Etapa 1: Número predial é obrigatório (use "S/N" caso não exista).');
     }
-    if (!formData.address.district.trim()) {
+    if (!(formData.address?.district || '').trim()) {
       errors.push('Etapa 1: Bairro é obrigatório.');
     }
-    if (!formData.address.municipio_id) {
+    if (!formData.address?.municipio_id) {
       errors.push('Etapa 1: Município deve ser selecionado na lista oficial do CBMBA.');
     }
 
     // Etapa 2: Projeto e Enquadramento
-    const rawCnpjCpf = cleanDigits(formData.institution.cnpj_cpf);
+    const rawCnpjCpf = cleanDigits(formData.institution?.cnpj_cpf);
     if (!rawCnpjCpf || (rawCnpjCpf.length !== 11 && rawCnpjCpf.length !== 14)) {
       errors.push('Etapa 2: CNPJ ou CPF do estabelecimento é obrigatório e deve ter 11 ou 14 dígitos.');
     }
-    if (!formData.institution.razao_social.trim()) {
+    if (!(formData.institution?.razao_social || '').trim()) {
       errors.push('Etapa 2: Razão Social do estabelecimento é obrigatória.');
     }
-    if (!cleanDigits(formData.institution.cnae)) {
+    if (!cleanDigits(formData.institution?.cnae)) {
       errors.push('Etapa 2: Código CNAE é obrigatório.');
     }
     if (
-      (formData.institution.natureza_juridica === 'Outros' || (formData.institution as any).porte === 'Outros' || (formData as any).porte === 'Outros') &&
+      (formData.institution?.natureza_juridica === 'Outros' || (formData.institution as any)?.porte === 'Outros' || (formData as any)?.porte === 'Outros') &&
       !formData.porte_outros?.trim() &&
-      !(formData.institution as any).porte_outros?.trim()
+      !(formData.institution as any)?.porte_outros?.trim()
     ) {
       errors.push('Etapa 2: Especifique a Natureza Jurídica quando selecionar "Outros".');
     }
-    if (!formData.occupation.occupation_group_id || !formData.occupation.division_group_id) {
+    if (!formData.occupation?.occupation_group_id || !formData.occupation?.division_group_id) {
       errors.push('Etapa 2: Grupo e Divisão de ocupação IT 14 são obrigatórios.');
     }
-    if (!formData.proprietario.nome_proprietario.trim()) {
+    if (!(formData.proprietario?.nome_proprietario || '').trim()) {
       errors.push('Etapa 2: Nome do proprietário é obrigatório.');
     }
-    if (!cleanDigits(formData.proprietario.cpf_cnpj_prop)) {
+    if (!cleanDigits(formData.proprietario?.cpf_cnpj_prop)) {
       errors.push('Etapa 2: CPF/CNPJ do proprietário é obrigatório.');
     }
-    if (!formData.proprietario.email_proprietario.trim() || !formData.proprietario.email_proprietario.includes('@')) {
+    if (!(formData.proprietario?.email_proprietario || '').trim() || !formData.proprietario?.email_proprietario?.includes('@')) {
       errors.push('Etapa 2: E-mail de contato do proprietário é obrigatório.');
     }
-    const propTel = cleanDigits(formData.proprietario.tel_proprietario);
+    const propTel = cleanDigits(formData.proprietario?.tel_proprietario);
     if (!propTel || (propTel.length !== 10 && propTel.length !== 11)) {
       errors.push('Etapa 2: Telefone do proprietário é obrigatório (com DDD).');
     }
@@ -1305,7 +1640,7 @@ export function ProjectDraftModal({
 
     // Modalidade PTS: limites e requisitos bloqueantes
     if ([4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0)) {
-      if (calculatedTotalArea > 750 || Number(formData.edification.number_floors) > 3) {
+      if (calculatedTotalArea > 750 || Number(formData.edification?.number_floors) > 3) {
         errors.push('Etapa 2: Edificação acima de 750 m² ou 3 pavimentos exige Projeto Técnico Completo (PT).');
       }
       if (formData.questionario?.edf_saida_direta === false && !formData.questionario?.edf_regularizada_certificado) {
@@ -1403,11 +1738,7 @@ export function ProjectDraftModal({
 
   const handleOpenDraft = (draft: DraftRecord) => {
     setCurrentDraft(draft);
-    const loadedData: ProjectDraftInput = {
-      ...draft.data,
-      id: draft.id,
-      name: draft.name
-    };
+    const loadedData: ProjectDraftInput = normalizeProjectDraftInput(draft?.data, draft?.name, draft?.id);
     if (!loadedData.tipo_projeto_id) {
       loadedData.tipo_projeto_id = (loadedData.form_mode === 'pt' || loadedData.process_category === 'pt') ? 1 : 5;
     }
@@ -2243,7 +2574,12 @@ export function ProjectDraftModal({
                 <Building2 size={20} />
               </div>
               <div className="draft-meta">
-                <h4>{draft.name || draft.data.edification.reference_name || 'Rascunho sem nome'}</h4>
+                <h4>
+                  {draft.name ||
+                    draft.data?.edification?.reference_name ||
+                    (draft.data as any)?.reference_name ||
+                    'Rascunho sem nome'}
+                </h4>
                 <span className="draft-date">Atualizado em {new Date(draft.updatedAt).toLocaleString('pt-BR')}</span>
               </div>
               <span className={`status-badge status-${isSub ? 'submitted' : isSim ? 'simulated' : 'draft'}`}>
@@ -2254,19 +2590,39 @@ export function ProjectDraftModal({
             <div className="draft-card-body">
               <div className="draft-info-row">
                 <span>Edificação:</span>
-                <strong>{draft.data.edification.reference_name || '—'}</strong>
+                <strong>
+                  {draft.data?.edification?.reference_name ||
+                    (draft.data as any)?.reference_name ||
+                    (draft.data as any)?.nome_referencia ||
+                    '—'}
+                </strong>
               </div>
               <div className="draft-info-row">
                 <span>Município:</span>
-                <strong>{draft.data.address.county || '—'}/BA</strong>
+                <strong>
+                  {draft.data?.address?.county ||
+                    (draft.data as any)?.cidade ||
+                    (draft.data as any)?.municipio ||
+                    '—'}/BA
+                </strong>
               </div>
               <div className="draft-info-row">
                 <span>Área total:</span>
-                <strong>{draft.data.edification.building_area ? `${draft.data.edification.building_area} m²` : '—'}</strong>
+                <strong>
+                  {draft.data?.edification?.building_area
+                    ? `${draft.data.edification.building_area} m²`
+                    : (draft.data as any)?.area_construida
+                    ? `${(draft.data as any).area_construida} m²`
+                    : (draft.data as any)?.area_total
+                    ? `${(draft.data as any).area_total} m²`
+                    : '—'}
+                </strong>
               </div>
               <div className="draft-info-row">
                 <span>Enquadramento:</span>
-                <span className="badge-tag">{draft.data.process_category?.toUpperCase() || 'PTS'}</span>
+                <span className="badge-tag">
+                  {(draft.data?.process_category || (draft.data as any)?.form_mode || 'PTS').toUpperCase()}
+                </span>
               </div>
             </div>
 
@@ -5080,6 +5436,112 @@ export function ProjectDraftModal({
   );
 }
 
+export class ProjectDraftErrorBoundary extends Component<
+  { children?: ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children?: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('ProjectDraftErrorBoundary capturou um erro:', error, errorInfo);
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+    window.location.reload();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          role="alert"
+          className="draft-error-boundary-card"
+          style={{
+            padding: '2.5rem 1.5rem',
+            maxWidth: '560px',
+            margin: '3rem auto',
+            textAlign: 'center',
+            background: 'var(--color-bg-surface, #ffffff)',
+            borderRadius: '16px',
+            border: '1px solid var(--color-border, #e5e7eb)',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          }}
+        >
+          <div
+            style={{
+              width: '56px',
+              height: '56px',
+              borderRadius: '50%',
+              backgroundColor: '#fee2e2',
+              color: '#dc2626',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 1.25rem'
+            }}
+          >
+            <AlertTriangle size={28} />
+          </div>
+          <h3
+            style={{
+              fontSize: '1.25rem',
+              fontWeight: 700,
+              color: 'var(--color-text-main, #111827)',
+              marginBottom: '0.5rem'
+            }}
+          >
+            Erro ao carregar o projeto
+          </h3>
+          <p
+            style={{
+              color: 'var(--color-text-muted, #4b5563)',
+              fontSize: '0.925rem',
+              lineHeight: 1.5,
+              marginBottom: '1.75rem'
+            }}
+          >
+            Ocorreu uma falha inesperada durante a exibição deste rascunho. O painel foi protegido contra tela branca.
+            {this.state.error?.message ? (
+              <span style={{ display: 'block', marginTop: '0.5rem', fontSize: '0.8rem', color: '#9ca3af', fontFamily: 'monospace' }}>
+                {this.state.error.message}
+              </span>
+            ) : null}
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '0.75rem' }}>
+            <button
+              type="button"
+              className="button button-teal"
+              onClick={this.handleReset}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <RefreshCw size={15} /> Recarregar Rascunhos
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+export function ProjectDraftModal(props: ProjectDraftModalProps) {
+  return (
+    <ProjectDraftErrorBoundary>
+      <ProjectDraftModalContent {...props} />
+    </ProjectDraftErrorBoundary>
+  );
+}
+
+export const ProjectDraftPage = ProjectDraftModal;
 export default ProjectDraftModal;
 export { generateLocalAiAssistantFallback, INITIAL_EMPTY_DRAFT };
 

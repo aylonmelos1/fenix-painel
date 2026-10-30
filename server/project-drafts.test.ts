@@ -1382,3 +1382,84 @@ test('Mapeamento completo de RT: propriedades do frontend (nome_tecnico, tel_tec
   assert.equal(rtList[0].n_art_rrt, 'BA20269999999');
 });
 
+test('normalizeProjectDraftInput: recupera rascunho legado plano e blinda contra undefined/null', async () => {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const modalModule = await (new Function('return import("../src/ProjectDraftModal.js")')() as Promise<any>);
+  const normalizeProjectDraftInput = modalModule.normalizeProjectDraftInput;
+
+  // Simula rascunho plano exatamente como o que causava o crash em ProjectDraftModal.tsx:2257
+  const legacyFlatDraftData = {
+    reference_name: 'Edifício Pituba Plaza',
+    cep: '41810-012',
+    logradouro: 'Avenida Paulo VI',
+    numero: '1234',
+    complemento: 'Sala 402',
+    bairro: 'Pituba',
+    cidade: 'Salvador',
+    uf: 'BA',
+    municipio_id: 323,
+    area_construida: 350.5,
+    area_total: 350.5,
+    pavimentos: 2,
+    altura: 'Baixa = H <= 6,00 m',
+    tipo_projeto_id: 5,
+    cnpj_cpf: '12.345.678/0001-90',
+    razao_social: 'PITUBA COMERCIO LTDA',
+    cnae_id: '4754701',
+    ocupacao_id: 3,
+    divisao_id: 6,
+    medidas_seguranca: {
+      iluminacao_emerg: true,
+      extintores: 1
+    }
+  };
+
+  const normalized = normalizeProjectDraftInput(legacyFlatDraftData, 'Pituba Plaza', 'draft-pituba-1');
+
+  // Valida que nenhum sub-objeto seja undefined ou null
+  assert.ok(normalized.edification, 'edification deve existir');
+  assert.ok(normalized.address, 'address deve existir');
+  assert.ok(normalized.institution, 'institution deve existir');
+  assert.ok(normalized.occupation, 'occupation deve existir');
+  assert.ok(normalized.proprietario, 'proprietario deve existir');
+  assert.ok(normalized.responsavel, 'responsavel deve existir');
+  assert.ok(normalized.technical, 'technical deve existir');
+  assert.ok(normalized.questionario, 'questionario deve existir');
+  assert.ok(normalized.specialRisks, 'specialRisks deve existir');
+  assert.ok(normalized.glpData, 'glpData deve existir');
+  assert.ok(normalized.securityMeasures, 'securityMeasures deve existir');
+
+  // Valida mapeamento de campos planos para os aninhados
+  assert.equal(normalized.edification.reference_name, 'Edifício Pituba Plaza');
+  assert.equal(normalized.edification.building_area, 350.5);
+  assert.equal(normalized.edification.number_floors, 2);
+  assert.equal(normalized.edification.height, 'Baixa = H <= 6,00 m');
+
+  assert.equal(normalized.address.zip_code, '41810-012');
+  assert.equal(normalized.address.public_place, 'Avenida Paulo VI');
+  assert.equal(normalized.address.number, '1234');
+  assert.equal(normalized.address.district, 'Pituba');
+  assert.equal(normalized.address.county, 'Salvador');
+  assert.equal(normalized.address.municipio_id, 323);
+
+  assert.equal(normalized.institution.cnpj_cpf, '12.345.678/0001-90');
+  assert.equal(normalized.institution.razao_social, 'PITUBA COMERCIO LTDA');
+  assert.equal(normalized.institution.cnae, '4754701');
+
+  assert.equal(normalized.occupation.occupation_group_id, 3);
+  assert.equal(normalized.occupation.division_group_id, 6);
+
+  assert.equal(normalized.securityMeasures.iluminacao_emerg, 1);
+  assert.equal(normalized.securityMeasures.extintores, 1);
+
+  // Testa entrada vazia/nula/parcial
+  const emptyNormalized = normalizeProjectDraftInput(null, 'Rascunho Vazio', 'draft-empty-1');
+  assert.equal(emptyNormalized.id, 'draft-empty-1');
+  assert.equal(emptyNormalized.name, 'Rascunho Vazio');
+  assert.ok(emptyNormalized.edification.reference_name !== undefined);
+  assert.ok(emptyNormalized.address.public_place !== undefined);
+  assert.ok(emptyNormalized.institution.cnpj_cpf !== undefined);
+  assert.ok(emptyNormalized.proprietario.nome_proprietario !== undefined);
+  assert.ok(emptyNormalized.responsavel.nome_responsavel !== undefined);
+});
+

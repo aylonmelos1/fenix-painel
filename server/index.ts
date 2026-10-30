@@ -2399,10 +2399,101 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
   const responsavel = ed?.responsavel || localBuildingPayload?.responsavel || null;
   const rts = proj?.rts || proj?.responsaveis_tecnicos || [];
 
+  const form_mode: 'pt' | 'pts' = [1, 2, 3].includes(tipo_projeto_id) ? 'pt' : 'pts';
+  const process_category = form_mode;
+
+  const defaultSecurityMeasures: Record<string, number> = {
+    iluminacao_emerg: 1,
+    sinal_emerg: 1,
+    extintores: 1,
+    saidas_emerg: 1,
+    brigada_incendio: 1,
+    control_mat_acab: 1
+  };
+  const activeMeasures: Record<string, unknown> = Object.keys(medidas).length ? medidas : defaultSecurityMeasures;
+
+  const normalizedRts = Array.isArray(rts) && rts.length ? rts : [
+    {
+      tipo_numero: 'CREA',
+      conselho: 'CREA',
+      crea_cau: String(proj?.crea_cau || 'BA20261628773'),
+      n_registro_conselho: String(proj?.crea_cau || 'BA20261628773'),
+      name: 'ABA Incêndio - Engenharia e Projetos',
+      nome_tecnico: 'ABA Incêndio - Engenharia e Projetos',
+      cpf_cnpj: '00000000000',
+      cpf_cnpj_tecnico: '00000000000',
+      phone: '(71) 4000-2895',
+      telefone_tecnico: '(71) 4000-2895',
+      email: 'engenharia@abaincendio.com.br',
+      email_tecnico: 'engenharia@abaincendio.com.br',
+      n_art_rrt: String(proj?.n_art_rrt || '')
+    }
+  ];
+
   const draftInput: ProjectDraftInput = {
     name,
     edificacao_mode,
     edificacao_id,
+    form_mode,
+    process_category,
+    tipo_projeto_id,
+    n_art_rrt: String(proj?.n_art_rrt || ''),
+    edification: {
+      reference_name: referencia,
+      registration: String(ed?.registration || ed?.matricula || ''),
+      height: altura || 'Térrea = Um pavimento',
+      number_floors: pavimentos || 1,
+      building_area: area_construida || area_total || 0,
+      area_to_be_built: Number(proj?.area_to_be_built || ed?.area_to_be_built || 0),
+      discount_area: Number(proj?.discount_area || ed?.discount_area || 0),
+      total_area: area_total || undefined
+    },
+    address: {
+      zip_code: cep,
+      public_place: logradouro,
+      number: numero || 'S/N',
+      complement: complemento || '***',
+      district: bairro,
+      county: cidade || 'SALVADOR',
+      municipio_id: ed?.address?.municipio_id || ed?.municipio_id || null,
+      state: uf || 'BA',
+      geographic_coordinates: String(ed?.address?.geographic_coordinates || ed?.coordenadas || '')
+    },
+    institution: {
+      tipo_pessoa: (ed?.institution?.tipo_pessoa || ed?.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
+      cnpj_cpf: String(ed?.institution?.cnpj_cpf || ed?.cnpj_cpf || ed?.cnpj || ed?.cpf || ''),
+      razao_social: String(ed?.institution?.razao_social || ed?.razao_social || referencia || ''),
+      nome_fantasia: String(ed?.institution?.nome_fantasia || ed?.nome_fantasia || referencia || ''),
+      natureza_juridica: String(ed?.institution?.natureza_juridica || ed?.natureza_juridica || 'ME'),
+      cnae: String(ed?.institution?.cnae || cnae_id || ''),
+      atividade_economica: String(ed?.institution?.atividade_economica || descricao_ocupacao || ''),
+      risk: Number(ed?.institution?.risk || 300)
+    },
+    occupation: {
+      occupation_group_id: ocupacao_id ? Number(ocupacao_id) : 3,
+      division_group_id: divisao_id ? Number(divisao_id) : 6,
+      has_underground: Boolean(ed?.occupation?.has_underground || ed?.has_underground || false),
+      underground_occupation_group_id: 13,
+      underground_division_group_id: 58
+    },
+    proprietario: {
+      tipo_pessoa_prop: (proprietario?.tipo_pessoa_prop || proprietario?.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
+      cpf_cnpj_prop: String(proprietario?.cpf_cnpj_prop || proprietario?.cpf_cnpj || proprietario?.cnpj || proprietario?.cpf || ''),
+      nome_proprietario: String(proprietario?.nome_proprietario || proprietario?.nome || referencia || ''),
+      email_proprietario: String(proprietario?.email_proprietario || proprietario?.email || 'engenharia@abaincendio.com.br'),
+      tel_proprietario: String(proprietario?.tel_proprietario || proprietario?.telefone || proprietario?.tel || '(71) 4000-2895')
+    },
+    responsavel: {
+      responsavel_uso_igual_prop: proprietario ? (responsavel ? Boolean(responsavel?.responsavel_uso_igual_prop) : true) : true,
+      tipo_pessoa_resp: (responsavel?.tipo_pessoa_resp || responsavel?.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
+      cpf_cnpj_resp: String(responsavel?.cpf_cnpj_resp || responsavel?.cpf_cnpj || proprietario?.cpf_cnpj_prop || proprietario?.cpf_cnpj || ''),
+      nome_responsavel: String(responsavel?.nome_responsavel || responsavel?.nome || proprietario?.nome_proprietario || proprietario?.nome || referencia || ''),
+      email_responsavel_uso: String(responsavel?.email_responsavel_uso || responsavel?.email || 'engenharia@abaincendio.com.br'),
+      tel_responsavel_uso: String(responsavel?.tel_responsavel_uso || responsavel?.telefone || '(71) 4000-2895')
+    },
+    responsaveis_tecnicos: normalizedRts,
+    securityMeasures: activeMeasures,
+    // Campos planos legados para máxima compatibilidade reversa
     reference_name: referencia,
     cep,
     logradouro,
@@ -2415,14 +2506,11 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
     area_construida: area_construida || undefined,
     pavimentos: pavimentos || undefined,
     altura: altura || undefined,
-    tipo_projeto_id,
     cnae_id,
     divisao_id,
     ocupacao_id,
     descricao_ocupacao,
     medidas_seguranca: Object.keys(medidas).length ? medidas : undefined,
-    proprietario: proprietario || undefined,
-    responsavel: responsavel || undefined,
     rts: Array.isArray(rts) && rts.length ? rts : undefined
   };
 
