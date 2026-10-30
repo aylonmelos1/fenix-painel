@@ -3215,3 +3215,435 @@
   background: #fef3c7 !important;
   color: #92400e !important;
 }
+
+/* ==========================================================================
+   Botões Oficiais de Ações do Fênix (/app/request) - BuildingDrawer
+   ========================================================================== */
+
+.current-status-card.fenix-status-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 14px 16px;
+}
+
+.status-card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.fenix-quick-actions-strip {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #edf2f7;
+  width: 100%;
+}
+
+.fenix-actions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.fenix-actions-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.text-flame-icon {
+  color: #e11d48;
+}
+
+.fenix-actions-buttons-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.fenix-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  outline: none;
+  white-space: nowrap;
+  line-height: 1;
+  user-select: none;
+}
+
+.fenix-action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.fenix-action-btn.compact {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.fenix-action-btn.is-loading {
+  cursor: wait;
+}
+
+/* Tone Wine: Vinho oficial do Fênix */
+.fenix-action-btn.tone-wine {
+  background: rgba(113, 41, 42, 0.08);
+  color: #71292a;
+  border: 1px solid rgba(113, 41, 42, 0.22);
+}
+
+.fenix-action-btn.tone-wine:hover:not(:disabled) {
+  background: rgba(113, 41, 42, 0.14);
+  border-color: rgba(113, 41, 42, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(113, 41, 42, 0.12);
+}
+
+.fenix-action-btn.tone-wine:active:not(:disabled) {
+  background: rgba(113, 41, 42, 0.20);
+  transform: translateY(0);
+}
+
+/* Tone Green: Verde oficial da nuvem de protocolo do Fênix */
+.fenix-action-btn.tone-green {
+  background: rgba(76, 175, 80, 0.10);
+  color: #2e9e4f;
+  border: 1px solid rgba(76, 175, 80, 0.28);
+}
+
+.fenix-action-btn.tone-green:hover:not(:disabled) {
+  background: rgba(76, 175, 80, 0.18);
+  border-color: rgba(76, 175, 80, 0.42);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(46, 158, 79, 0.14);
+}
+
+.fenix-action-btn.tone-green:active:not(:disabled) {
+  background: rgba(76, 175, 80, 0.25);
+  transform: translateY(0);
+}
+
+/* Tone Danger: Vermelho alerta */
+.fenix-action-btn.tone-danger {
+  background: rgba(182, 26, 26, 0.08);
+  color: #b61a1a;
+  border: 1px solid rgba(182, 26, 26, 0.24);
+}
+
+.fenix-action-btn.tone-danger:hover:not(:disabled) {
+  background: rgba(182, 26, 26, 0.15);
+  border-color: rgba(182, 26, 26, 0.38);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(182, 26, 26, 0.14);
+}
+
+.fenix-action-btn.tone-danger:active:not(:disabled) {
+  background: rgba(182, 26, 26, 0.22);
+  transform: translateY(0);
+}
+
+/* Feedback Inline */
+.fenix-action-feedback-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  margin-top: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.fenix-action-feedback-inline.success {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #047857;
+}
+
+.fenix-action-feedback-inline.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+}
+
+.fenix-action-feedback-content {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+
+.fenix-reconnect-btn {
+  padding: 2px 8px;
+  font-size: 10.5px;
+  height: 22px;
+  border-radius: 4px;
+}
+
+.fenix-feedback-close {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.7;
+}
+
+.fenix-feedback-close:hover {
+  opacity: 1;
+}
+
+/* Modal de Confirmação para Mutações Fênix */
+.fenix-action-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.fenix-action-confirm-box {
+  width: 100%;
+  max-width: 440px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: confirmPopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes confirmPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.fenix-action-confirm-header {
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  background: #f8fafc;
+}
+
+.fenix-action-confirm-icon-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.fenix-action-confirm-icon-badge.tone-wine {
+  background: rgba(113, 41, 42, 0.12);
+  color: #71292a;
+}
+
+.fenix-action-confirm-icon-badge.tone-green {
+  background: rgba(76, 175, 80, 0.14);
+  color: #2e9e4f;
+}
+
+.fenix-action-confirm-icon-badge.tone-danger {
+  background: rgba(182, 26, 26, 0.12);
+  color: #b61a1a;
+}
+
+.fenix-action-confirm-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.fenix-confirm-protocol {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+  display: block;
+}
+
+.fenix-confirm-protocol strong {
+  color: #334155;
+}
+
+.fenix-action-confirm-body {
+  padding: 16px 18px;
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fenix-action-confirm-body p {
+  margin: 0;
+}
+
+.fenix-confirm-warning-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #92400e;
+  line-height: 1.4;
+}
+
+.fenix-confirm-warning-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #d97706;
+}
+
+.fenix-action-error-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.fenix-action-confirm-footer {
+  padding: 12px 18px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.button-fenix-wine {
+  background: #71292a !important;
+  color: #ffffff !important;
+  border: 1px solid #5a2021 !important;
+}
+
+.button-fenix-wine:hover:not(:disabled) {
+  background: #5a2021 !important;
+  box-shadow: 0 4px 12px rgba(113, 41, 42, 0.3) !important;
+}
+
+/* Lista e Cards de Processos Relacionados */
+.related-process-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid #e7ebef;
+  border-radius: 9px;
+  background: #ffffff;
+}
+
+.related-process-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.related-process-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e7ebef;
+  border-radius: 8px;
+  background: #ffffff;
+  transition: all 0.15s ease;
+}
+
+.related-process-card:hover {
+  border-color: #cbd5e1;
+}
+
+.related-process-card.selected {
+  border-color: #50b8b3;
+  background: #f8fdfc;
+  box-shadow: 0 2px 8px rgba(80, 184, 179, 0.12);
+}
+
+.related-process-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.related-process-card-header > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.related-process-card-header b {
+  font-size: 11px;
+  color: #1e293b;
+}
+
+.related-process-card-header small {
+  font-size: 10px;
+  color: #64748b;
+}
+
+.related-process-actions-row {
+  display: flex;
+  align-items: center;
+  padding-top: 6px;
+  border-top: 1px dashed #e2e8f0;
+}

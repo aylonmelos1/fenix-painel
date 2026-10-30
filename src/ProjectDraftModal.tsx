@@ -591,6 +591,140 @@ export function parseBuildingAddressString(rawAddress?: string | null): {
 
 export const ProjectDraftPage = ProjectDraftModal;
 
+interface DraftAnchorItem {
+  id: string;
+  label: string;
+}
+
+const DRAFT_STEP_ANCHORS: Record<number, DraftAnchorItem[]> = {
+  1: [
+    { id: 'draft-s1-cnpj', label: 'Consulta Rápida CNPJ / IT-14' },
+    { id: 'draft-s1-origem', label: 'Origem do Imóvel' },
+    { id: 'draft-s1-endereco', label: 'Endereço Oficial' },
+    { id: 'draft-s1-estrutura', label: 'Características e Áreas' },
+    { id: 'draft-s1-resumo-area', label: 'Área Total do Projeto' }
+  ],
+  2: [
+    { id: 'draft-s2-enquadramento', label: 'Enquadramento CBMBA' },
+    { id: 'draft-s2-dados-gerais', label: 'Tipo de Projeto e Dados Gerais' },
+    { id: 'draft-s2-instituicao', label: 'Estabelecimento e CNAE' },
+    { id: 'draft-s2-ocupacao', label: 'Ocupação e Divisão (IT-14)' },
+    { id: 'draft-s2-questionario', label: 'Questionário Técnico' },
+    { id: 'draft-s2-proprietario', label: 'Proprietário e Responsável' },
+    { id: 'draft-s2-rt', label: 'Responsáveis Técnicos (RT)' },
+    { id: 'draft-s2-medidas', label: 'Medidas de Segurança (22)' },
+    { id: 'draft-s2-riscos-glp', label: 'Riscos Especiais e GLP' }
+  ],
+  3: [
+    { id: 'draft-s3-documentos', label: 'Documentos Pós-Protocolo' },
+    { id: 'draft-s3-conformidade', label: 'Diagnóstico de Conformidade' },
+    { id: 'draft-s3-transmissao', label: 'Envio Oficial ao Fênix' }
+  ]
+};
+
+function DraftSectionAnchorRail({
+  step,
+  edificacaoMode
+}: {
+  step: number;
+  edificacaoMode?: string;
+}) {
+  const [activeAnchors, setActiveAnchors] = useState<DraftAnchorItem[]>([]);
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    let observer: IntersectionObserver | null = null;
+    const candidates = DRAFT_STEP_ANCHORS[step] || [];
+
+    const updateAnchorsAndObserver = () => {
+      const available = candidates.filter((a) => Boolean(document.getElementById(a.id)));
+      setActiveAnchors(available);
+
+      if (!available.length) {
+        setVisibleIds(new Set());
+        return;
+      }
+
+      if (!('IntersectionObserver' in window)) {
+        setVisibleIds(new Set([available[0].id]));
+        return;
+      }
+
+      const visible = new Set<string>();
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const id = (entry.target as HTMLElement).id;
+            if (entry.isIntersecting) {
+              visible.add(id);
+            } else {
+              visible.delete(id);
+            }
+          }
+          setVisibleIds((current) => {
+            if (current.size === visible.size && [...current].every((id) => visible.has(id))) return current;
+            return new Set(visible);
+          });
+        },
+        { rootMargin: '-96px 0px -35% 0px', threshold: 0 }
+      );
+
+      available.forEach((a) => {
+        const el = document.getElementById(a.id);
+        if (el) observer?.observe(el);
+      });
+    };
+
+    const animFrame = requestAnimationFrame(updateAnchorsAndObserver);
+
+    return () => {
+      cancelAnimationFrame(animFrame);
+      if (observer) observer.disconnect();
+    };
+  }, [step, edificacaoMode]);
+
+  const scrollToAnchor = (id: string) => {
+    const target = document.getElementById(id);
+    if (!target) return;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    target.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'start'
+    });
+  };
+
+  if (!activeAnchors.length) return null;
+
+  const currentAnchorId = activeAnchors.find((anchor) => visibleIds.has(anchor.id))?.id;
+
+  return (
+    <nav
+      className="settings-anchor-rail"
+      aria-label="Atalhos para seções do cadastro"
+      style={{ top: 'calc(62px + 28vh)' }}
+    >
+      {activeAnchors.map((anchor) => {
+        const isVisible = visibleIds.has(anchor.id);
+        return (
+          <button
+            key={anchor.id}
+            type="button"
+            className={`settings-anchor-link ${isVisible ? 'is-current' : ''}`}
+            onClick={() => scrollToAnchor(anchor.id)}
+            aria-label={`Ir para ${anchor.label}`}
+            aria-current={anchor.id === currentAnchorId ? 'location' : undefined}
+          >
+            <span className="settings-anchor-mark" aria-hidden="true" />
+            <span className="settings-anchor-tooltip" aria-hidden="true">
+              {anchor.label}
+            </span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function ProjectDraftModal({
   open,
   isOpen: legacyIsOpen,
@@ -1129,6 +1263,43 @@ export function ProjectDraftModal({
     setStep(1);
     setView('editor');
   };
+
+  // Auto-abrir rascunho quando a URL tiver ?draftId=...
+  const autoOpenedDraftRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen || autoOpenedDraftRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const draftIdFromUrl = params.get('draftId');
+    if (!draftIdFromUrl) return;
+
+    autoOpenedDraftRef.current = true;
+
+    const loadTargetDraft = async () => {
+      try {
+        const res = await api<{ draft: DraftRecord }>(`/api/drafts/${encodeURIComponent(draftIdFromUrl)}`);
+        if (res.draft) {
+          handleOpenDraft(res.draft);
+          showToast(`Rascunho "${res.draft.name || 'Projeto'}" carregado para edição.`, 'info');
+        }
+      } catch {
+        const found = drafts.find((d) => d.id === draftIdFromUrl);
+        if (found) {
+          handleOpenDraft(found);
+        }
+      } finally {
+        try {
+          const currentUrl = new URL(window.location.href);
+          currentUrl.searchParams.delete('draftId');
+          window.history.replaceState({}, '', currentUrl.pathname + currentUrl.search);
+        } catch {
+          // ignora em navegadores sem suporte
+        }
+      }
+    };
+
+    void loadTargetDraft();
+  }, [isOpen, drafts]);
 
   const handleDeleteDraft = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1951,17 +2122,62 @@ export function ProjectDraftModal({
     </div>
   );
 
+  // Contadores de pendências em tempo real para os 3 passos
+  const step1Errors = useMemo(
+    () => localValidation.errors.filter((e) => e.startsWith('Etapa 1:')),
+    [localValidation.errors]
+  );
+  const step2Errors = useMemo(
+    () => localValidation.errors.filter((e) => !e.startsWith('Etapa 1:')),
+    [localValidation.errors]
+  );
+  const step1Pending = step1Errors.length;
+  const step2Pending = step2Errors.length;
+  const totalPending = localValidation.errors.length;
+
+  const isStep1Done = step1Pending === 0;
+  const isStep2Done = step2Pending === 0;
+  const isStep3Done = totalPending === 0;
+
   // Stepper Visual
   const stepperItems = (
     <>
       <button
         type="button"
-        className={`step-item ${step === 1 ? 'active' : ''} ${step > 1 ? 'completed' : ''}`}
+        className={`step-item ${step === 1 ? 'active' : ''} ${isStep1Done ? 'completed' : ''}`}
         onClick={() => setStep(1)}
+        title={step1Pending > 0 ? `Pendências na Etapa 1:\n${step1Errors.join('\n')}` : 'Etapa 1 preenchida e válida'}
       >
-        <span className="step-circle">{step > 1 ? <Check size={14} /> : '1'}</span>
+        <span
+          className="step-circle"
+          style={
+            step1Pending > 0
+              ? { background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', fontWeight: 700 }
+              : undefined
+          }
+        >
+          {isStep1Done ? <Check size={14} /> : '1'}
+        </span>
         <span className="step-label">
-          <strong>Edificação & Endereço</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <strong>Edificação & Endereço</strong>
+            {step1Pending > 0 && (
+              <span
+                style={{
+                  background: '#fef2f2',
+                  color: '#dc2626',
+                  border: '1px solid #fecaca',
+                  borderRadius: '999px',
+                  padding: '2px 8px',
+                  fontSize: '0.70rem',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {step1Pending} {step1Pending === 1 ? 'pendência' : 'pendências'}
+              </span>
+            )}
+          </div>
           <small>Localização física e estrutura</small>
         </span>
       </button>
@@ -1970,12 +2186,40 @@ export function ProjectDraftModal({
 
       <button
         type="button"
-        className={`step-item ${step === 2 ? 'active' : ''} ${step > 2 ? 'completed' : ''}`}
+        className={`step-item ${step === 2 ? 'active' : ''} ${isStep2Done ? 'completed' : ''}`}
         onClick={() => setStep(2)}
+        title={step2Pending > 0 ? `Pendências na Etapa 2:\n${step2Errors.join('\n')}` : 'Etapa 2 preenchida e válida'}
       >
-        <span className="step-circle">{step > 2 ? <Check size={14} /> : '2'}</span>
+        <span
+          className="step-circle"
+          style={
+            step2Pending > 0
+              ? { background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', fontWeight: 700 }
+              : undefined
+          }
+        >
+          {isStep2Done ? <Check size={14} /> : '2'}
+        </span>
         <span className="step-label">
-          <strong>Projeto & Enquadramento</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <strong>Projeto & Enquadramento</strong>
+            {step2Pending > 0 && (
+              <span
+                style={{
+                  background: '#fef2f2',
+                  color: '#dc2626',
+                  border: '1px solid #fecaca',
+                  borderRadius: '999px',
+                  padding: '2px 8px',
+                  fontSize: '0.70rem',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {step2Pending} {step2Pending === 1 ? 'pendência' : 'pendências'}
+              </span>
+            )}
+          </div>
           <small>CNAE, IT 14 e Medidas</small>
         </span>
       </button>
@@ -1984,12 +2228,40 @@ export function ProjectDraftModal({
 
       <button
         type="button"
-        className={`step-item ${step === 3 ? 'active' : ''}`}
+        className={`step-item ${step === 3 ? 'active' : ''} ${isStep3Done ? 'completed' : ''}`}
         onClick={() => setStep(3)}
+        title={totalPending > 0 ? `Pendências gerais do projeto:\n${localValidation.errors.join('\n')}` : 'Projeto totalmente validado e pronto para envio'}
       >
-        <span className="step-circle">3</span>
+        <span
+          className="step-circle"
+          style={
+            totalPending > 0
+              ? { background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', fontWeight: 700 }
+              : undefined
+          }
+        >
+          {isStep3Done ? <Check size={14} /> : '3'}
+        </span>
         <span className="step-label">
-          <strong>Validação & Envio</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <strong>Validação & Envio</strong>
+            {totalPending > 0 && (
+              <span
+                style={{
+                  background: '#fef2f2',
+                  color: '#dc2626',
+                  border: '1px solid #fecaca',
+                  borderRadius: '999px',
+                  padding: '2px 8px',
+                  fontSize: '0.70rem',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {totalPending} {totalPending === 1 ? 'pendência' : 'pendências'}
+              </span>
+            )}
+          </div>
           <small>Revisão e Transmissão</small>
         </span>
       </button>
@@ -2003,7 +2275,11 @@ export function ProjectDraftModal({
               {step === 1 && (
                 <div className="step-panel animate-fade-in">
                   {/* 0. Card de Consulta Rápida por CNPJ + Enquadramento IT-14 */}
-                  <div className={`editor-card cnpj-it14-hero-card ${cnpjLoading ? 'ai-shimmer-active ai-border-beam' : ''}`}>
+                  <div
+                    id="draft-s1-cnpj"
+                    style={{ scrollMarginTop: '96px' }}
+                    className={`editor-card cnpj-it14-hero-card ${cnpjLoading ? 'ai-shimmer-active ai-border-beam' : ''}`}
+                  >
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <Sparkles size={18} className="text-teal" />
@@ -2122,7 +2398,7 @@ export function ProjectDraftModal({
                       </div>
                     )}
                   </div>
-                  <div className="step-section-banner">
+                  <div className="step-section-banner" id="draft-s1-origem" style={{ scrollMarginTop: '96px' }}>
                     <div>
                       <h3>1. Origem e Localização do Imóvel</h3>
                       <p>Cadastre uma nova edificação ou reaproveite um imóvel já cadastrado na conta Fênix.</p>
@@ -2171,7 +2447,7 @@ export function ProjectDraftModal({
                   )}
 
                   {/* Bloco de Endereço */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s1-endereco" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <MapPin size={18} className="text-teal" />
                       <h4>Endereço Oficial no CBMBA</h4>
@@ -2352,7 +2628,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco de Dados Estruturais da Edificação */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s1-estrutura" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <Building2 size={18} className="text-teal" />
                       <h4>Características Estruturais e Geométricas</h4>
@@ -2513,7 +2789,7 @@ export function ProjectDraftModal({
                     </div>
 
                     {/* Resumo da Área Total Calculada */}
-                    <div className="area-calculation-banner">
+                    <div className="area-calculation-banner" id="draft-s1-resumo-area" style={{ scrollMarginTop: '96px' }}>
                       <div className="calc-details">
                         <span className="calc-formula">
                           Fórmula Fênix: <code>Área Construída + A Construir - Desconto</code>
@@ -2532,7 +2808,7 @@ export function ProjectDraftModal({
               {step === 2 && (
                 <div className="step-panel animate-fade-in">
                   {/* Card Executivo de Enquadramento em Tempo Real */}
-                  <div className="enquadramento-hero-card">
+                  <div className="enquadramento-hero-card" id="draft-s2-enquadramento" style={{ scrollMarginTop: '96px' }}>
                     <div className="enquadramento-header-row">
                       <div className="enquadramento-title-group">
                         <span className={`enquadramento-badge-pill ${enquadramento.badgeClass}`}>
@@ -2612,7 +2888,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco de Dados Gerais do Projeto Técnico */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-dados-gerais" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <ClipboardList size={18} className="text-teal" />
                       <h4>Dados Gerais do Projeto Técnico</h4>
@@ -2789,7 +3065,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco do Estabelecimento (Pessoa Jurídica ou Física) */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-instituicao" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <Building2 size={18} className="text-teal" />
                       <h4>Estabelecimento & Atividade Econômica (CNAE)</h4>
@@ -2988,7 +3264,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco de Ocupação e Divisão IT 14 */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-ocupacao" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <Layers size={18} className="text-teal" />
                       <h4>Ocupação e Divisão (Instrução Técnica 14)</h4>
@@ -3175,7 +3451,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco de Questionário Técnico CBMBA */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-questionario" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <HelpCircle size={18} className="text-teal" />
                       <h4>Questionário Técnico CBMBA (Acesso & Regularização)</h4>
@@ -3264,172 +3540,8 @@ export function ProjectDraftModal({
                     </div>
                   </div>
 
-                  {/* Bloco de Riscos Especiais & GLP */}
-                  <div className="editor-card">
-                    <div className="card-heading flex-between">
-                      <div className="flex-row items-center gap-2">
-                        <AlertTriangle size={18} className="text-amber" />
-                        <h4>Riscos Especiais & GLP (Gás Liquefeito de Petróleo)</h4>
-                      </div>
-                      <span className="badge-tag">Controle de Riscos CBMBA</span>
-                    </div>
-
-                    <p className="field-hint">
-                      Indique se o estabelecimento armazena ou manipula substâncias ou instalações que apresentem risco especial segundo as Instruções Técnicas do CBMBA.
-                    </p>
-
-                    <div className="form-grid">
-                      <div className="form-col-12">
-                        <ToggleSlider
-                          checked={Boolean(formData.specialRisks?.liquidos_inflamaveis)}
-                          onChange={(checked) => setFormData((prev) => ({
-                            ...prev,
-                            specialRisks: { ...prev.specialRisks, liquidos_inflamaveis: checked }
-                          }))}
-                          label="Líquidos combustíveis ou inflamáveis (> 250 L)"
-                          description="Armazenamento ou manipulação de diesel, gasolina, solventes ou tintas."
-                        />
-                      </div>
-
-                      <div className="form-col-12">
-                        <ToggleSlider
-                          checked={Boolean(formData.specialRisks?.gas_liquefeito_petroleo)}
-                          onChange={(checked) => setFormData((prev) => ({
-                            ...prev,
-                            specialRisks: { ...prev.specialRisks, gas_liquefeito_petroleo: checked }
-                          }))}
-                          label="Gás Liquefeito de Petróleo (GLP - Central ou Botijões)"
-                          description="Utilização de recipientes de gás para cocção, caldeiras ou processos industriais."
-                        />
-                      </div>
-
-                      {/* Sub-bloco GLP se gas_liquefeito_petroleo estiver ativo */}
-                      {formData.specialRisks?.gas_liquefeito_petroleo && (
-                        <div className="form-col-12 animate-fade-in" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: '#f59e0b', fontWeight: 600, fontSize: '0.85rem' }}>
-                            <Flame size={16} /> Detalhamento da Central de GLP (IT-28 CBMBA)
-                          </div>
-
-                          <div className="form-grid">
-                            <div className="form-col-4">
-                              <label className="field-label">
-                                <span>Quantidade Total de GLP (kg) *</span>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  step="0.1"
-                                  className="input-text"
-                                  placeholder="Ex: 90"
-                                  value={formData.glpData?.total_kg_glp || ''}
-                                  onChange={(e) => {
-                                    const kg = e.target.value;
-                                    const num = Number(kg) || 0;
-                                    let autoClass = formData.glpData?.classe_glp || 'Classe I';
-                                    if (num <= 26) autoClass = 'Classe I';
-                                    else if (num <= 135) autoClass = 'Classe II';
-                                    else if (num <= 520) autoClass = 'Classe III';
-                                    else if (num <= 1560) autoClass = 'Classe IV';
-                                    else if (num <= 6240) autoClass = 'Classe V';
-                                    else if (num <= 12480) autoClass = 'Classe VI';
-                                    else if (num <= 24960) autoClass = 'Classe VII';
-                                    else autoClass = 'Classe VIII';
-
-                                    setFormData((prev) => ({
-                                      ...prev,
-                                      glpData: {
-                                        ...prev.glpData,
-                                        total_kg_glp: kg,
-                                        classe_glp: autoClass
-                                      }
-                                    }));
-                                  }}
-                                />
-                              </label>
-                            </div>
-
-                            <div className="form-col-8">
-                              <label className="field-label">
-                                <span>Classe Oficial de GLP (Tabela 1 IT-28)</span>
-                                <select
-                                  className="input-select"
-                                  value={formData.glpData?.classe_glp || 'Classe I'}
-                                  onChange={(e) => setFormData((prev) => ({
-                                    ...prev,
-                                    glpData: { ...prev.glpData, classe_glp: e.target.value }
-                                  }))}
-                                >
-                                  {GLP_CLASSES.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.label} ({c.limit})</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                          </div>
-
-                          {Number(formData.glpData?.total_kg_glp) > 12480 && (
-                            <div className="text-danger mt-2" style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <AlertTriangle size={15} /> <b>Atenção:</b> Capacidade de GLP superior a 12.480 kg (Classe VII e VIII) exige obrigatoriamente Projeto Técnico Completo (PT) com sistema fixo.
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      <div className="form-col-12">
-                        <ToggleSlider
-                          checked={Boolean(formData.specialRisks?.produtos_perigosos)}
-                          onChange={(checked) => setFormData((prev) => ({
-                            ...prev,
-                            specialRisks: { ...prev.specialRisks, produtos_perigosos: checked }
-                          }))}
-                          label="Produtos Perigosos ou Tóxicos"
-                          description="Substâncias químicas oxidantes, corrosivas ou perigosas à saúde humana."
-                        />
-                      </div>
-
-                      <div className="form-col-12">
-                        <ToggleSlider
-                          checked={Boolean(formData.specialRisks?.fogos_artificio)}
-                          onChange={(checked) => setFormData((prev) => ({
-                            ...prev,
-                            specialRisks: { ...prev.specialRisks, fogos_artificio: checked }
-                          }))}
-                          label="Fogos de artifício ou artefatos pirotécnicos"
-                          description="Armazenamento, venda ou queima controlada de pirotecnia."
-                        />
-                      </div>
-
-                      <div className="form-col-12">
-                        <ToggleSlider
-                          checked={Boolean(formData.specialRisks?.vaso_pressao)}
-                          onChange={(checked) => setFormData((prev) => ({
-                            ...prev,
-                            specialRisks: { ...prev.specialRisks, vaso_pressao: checked }
-                          }))}
-                          label="Caldeiras e vasos sob pressão"
-                          description="Compressores industriais, autoclaves ou reservatórios de ar comprimido."
-                        />
-                      </div>
-
-                      <div className="form-col-12">
-                        <label className="field-label">
-                          <span>Outros Riscos Especiais (Descrição livre)</span>
-                          <input
-                            type="text"
-                            className="input-text"
-                            placeholder="Opcional. Ex: Cabine primária de alta tensão, gerador diesel 150 kVA..."
-                            value={formData.specialRisks?.outros || ''}
-                            onChange={(e) => setFormData((prev) => ({
-                              ...prev,
-                              specialRisks: { ...prev.specialRisks, outros: e.target.value }
-                            }))}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-
                   {/* Bloco de Proprietário e Responsável pelo Uso */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-proprietario" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <ShieldCheck size={18} className="text-teal" />
@@ -3654,7 +3766,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco de Responsável Técnico */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-rt" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <HardHat size={18} className="text-teal" />
@@ -3876,7 +3988,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Bloco de Medidas de Segurança Contra Incêndio */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s2-medidas" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <Flame size={18} className="text-teal" />
@@ -3926,6 +4038,170 @@ export function ProjectDraftModal({
                       })}
                     </div>
                   </div>
+
+                  {/* Bloco de Riscos Especiais & GLP */}
+                  <div className="editor-card" id="draft-s2-riscos-glp" style={{ scrollMarginTop: '96px' }}>
+                    <div className="card-heading flex-between">
+                      <div className="flex-row items-center gap-2">
+                        <AlertTriangle size={18} className="text-amber" />
+                        <h4>Riscos Especiais & GLP (Gás Liquefeito de Petróleo)</h4>
+                      </div>
+                      <span className="badge-tag">Controle de Riscos CBMBA</span>
+                    </div>
+
+                    <p className="field-hint">
+                      Indique se o estabelecimento armazena ou manipula substâncias ou instalações que apresentem risco especial segundo as Instruções Técnicas do CBMBA.
+                    </p>
+
+                    <div className="form-grid">
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.liquidos_inflamaveis)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, liquidos_inflamaveis: checked }
+                          }))}
+                          label="Líquidos combustíveis ou inflamáveis (> 250 L)"
+                          description="Armazenamento ou manipulação de diesel, gasolina, solventes ou tintas."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.gas_liquefeito_petroleo)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, gas_liquefeito_petroleo: checked }
+                          }))}
+                          label="Gás Liquefeito de Petróleo (GLP - Central ou Botijões)"
+                          description="Utilização de recipientes de gás para cocção, caldeiras ou processos industriais."
+                        />
+                      </div>
+
+                      {/* Sub-bloco GLP se gas_liquefeito_petroleo estiver ativo */}
+                      {formData.specialRisks?.gas_liquefeito_petroleo && (
+                        <div className="form-col-12 animate-fade-in" style={{ background: 'rgba(255,255,255,0.03)', padding: '0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', color: '#f59e0b', fontWeight: 600, fontSize: '0.85rem' }}>
+                            <Flame size={16} /> Detalhamento da Central de GLP (IT-28 CBMBA)
+                          </div>
+
+                          <div className="form-grid">
+                            <div className="form-col-4">
+                              <label className="field-label">
+                                <span>Quantidade Total de GLP (kg) *</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.1"
+                                  className="input-text"
+                                  placeholder="Ex: 90"
+                                  value={formData.glpData?.total_kg_glp || ''}
+                                  onChange={(e) => {
+                                    const kg = e.target.value;
+                                    const num = Number(kg) || 0;
+                                    let autoClass = formData.glpData?.classe_glp || 'Classe I';
+                                    if (num <= 26) autoClass = 'Classe I';
+                                    else if (num <= 135) autoClass = 'Classe II';
+                                    else if (num <= 520) autoClass = 'Classe III';
+                                    else if (num <= 1560) autoClass = 'Classe IV';
+                                    else if (num <= 6240) autoClass = 'Classe V';
+                                    else if (num <= 12480) autoClass = 'Classe VI';
+                                    else if (num <= 24960) autoClass = 'Classe VII';
+                                    else autoClass = 'Classe VIII';
+
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      glpData: {
+                                        ...prev.glpData,
+                                        total_kg_glp: kg,
+                                        classe_glp: autoClass
+                                      }
+                                    }));
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            <div className="form-col-8">
+                              <label className="field-label">
+                                <span>Classe Oficial de GLP (Tabela 1 IT-28)</span>
+                                <select
+                                  className="input-select"
+                                  value={formData.glpData?.classe_glp || 'Classe I'}
+                                  onChange={(e) => setFormData((prev) => ({
+                                    ...prev,
+                                    glpData: { ...prev.glpData, classe_glp: e.target.value }
+                                  }))}
+                                >
+                                  {GLP_CLASSES.map((c) => (
+                                    <option key={c.id} value={c.id}>{c.label} ({c.limit})</option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+
+                          {Number(formData.glpData?.total_kg_glp) > 12480 && (
+                            <div className="text-danger mt-2" style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <AlertTriangle size={15} /> <b>Atenção:</b> Capacidade de GLP superior a 12.480 kg (Classe VII e VIII) exige obrigatoriamente Projeto Técnico Completo (PT) com sistema fixo.
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.produtos_perigosos)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, produtos_perigosos: checked }
+                          }))}
+                          label="Produtos Perigosos ou Tóxicos"
+                          description="Substâncias químicas oxidantes, corrosivas ou perigosas à saúde humana."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.fogos_artificio)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, fogos_artificio: checked }
+                          }))}
+                          label="Fogos de artifício ou artefatos pirotécnicos"
+                          description="Armazenamento, venda ou queima controlada de pirotecnia."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <ToggleSlider
+                          checked={Boolean(formData.specialRisks?.vaso_pressao)}
+                          onChange={(checked) => setFormData((prev) => ({
+                            ...prev,
+                            specialRisks: { ...prev.specialRisks, vaso_pressao: checked }
+                          }))}
+                          label="Caldeiras e vasos sob pressão"
+                          description="Compressores industriais, autoclaves ou reservatórios de ar comprimido."
+                        />
+                      </div>
+
+                      <div className="form-col-12">
+                        <label className="field-label">
+                          <span>Outros Riscos Especiais (Descrição livre)</span>
+                          <input
+                            type="text"
+                            className="input-text"
+                            placeholder="Opcional. Ex: Cabine primária de alta tensão, gerador diesel 150 kVA..."
+                            value={formData.specialRisks?.outros || ''}
+                            onChange={(e) => setFormData((prev) => ({
+                              ...prev,
+                              specialRisks: { ...prev.specialRisks, outros: e.target.value }
+                            }))}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -3933,7 +4209,7 @@ export function ProjectDraftModal({
               {step === 3 && (
                 <div className="step-panel animate-fade-in">
                   {/* Card Informativo de Documentos Exigidos pelo Fênix pós-protocolo */}
-                  <div className="editor-card official-docs-checklist-card animate-fade-in" style={{ borderLeft: '4px solid #14b8a6' }}>
+                  <div className="editor-card official-docs-checklist-card animate-fade-in" id="draft-s3-documentos" style={{ borderLeft: '4px solid #14b8a6', scrollMarginTop: '96px' }}>
                     <div className="card-heading flex-between">
                       <div className="flex-row items-center gap-2">
                         <FileText size={18} className="text-teal" />
@@ -4028,7 +4304,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Resumo de Validação do Rascunho */}
-                  <div className="editor-card">
+                  <div className="editor-card" id="draft-s3-conformidade" style={{ scrollMarginTop: '96px' }}>
                     <div className="card-heading">
                       <ShieldCheck size={18} className="text-teal" />
                       <h4>Diagnóstico de Conformidade do Rascunho</h4>
@@ -4072,7 +4348,7 @@ export function ProjectDraftModal({
                   </div>
 
                   {/* Trava de Segurança e Transmissão para o Fênix Real */}
-                  <div className="secure-submission-card">
+                  <div className="secure-submission-card" id="draft-s3-transmissao" style={{ scrollMarginTop: '96px' }}>
                     <div className="submission-warning-head">
                       <AlertTriangle size={24} className="text-amber" />
                       <div>
@@ -4297,7 +4573,12 @@ export function ProjectDraftModal({
             <nav className="draft-stepper draft-page-stepper" aria-label="Etapas de Cadastro">
               {stepperItems}
             </nav>
-            {renderStepPanels()}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', columnGap: '16px', alignItems: 'start' }}>
+              <div style={{ minWidth: 0 }}>
+                {renderStepPanels()}
+              </div>
+              <DraftSectionAnchorRail step={step} edificacaoMode={formData.edificacao_mode} />
+            </div>
             <footer className="draft-editor-footer draft-page-footer">
               {footerItems}
             </footer>
@@ -4433,7 +4714,12 @@ export function ProjectDraftModal({
               {stepperItems}
             </nav>
             <div className="editor-body-scroll">
-              {renderStepPanels()}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', columnGap: '16px', alignItems: 'start' }}>
+              <div style={{ minWidth: 0 }}>
+                {renderStepPanels()}
+              </div>
+              <DraftSectionAnchorRail step={step} edificacaoMode={formData.edificacao_mode} />
+            </div>
             </div>
             <footer className="draft-editor-footer">
               {footerItems}

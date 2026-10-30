@@ -7,10 +7,10 @@ import {
   Gauge, HelpCircle, Home, Info, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
   Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen,
   PanelRightClose, PanelRightOpen, Zap,
-  Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight, Square
+  Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight, Square, XCircle
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey } from './types';
+import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey, type FenixProcessAction } from './types';
 import {
   type DraftAiAssistantResponse,
   generateLocalAiAssistantFallback,
@@ -1067,6 +1067,448 @@ function DashboardPage() {
   </Shell>;
 }
 
+function WalkTransferIcon({ size = 15, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M16.49 15.5v-1.8H9v-1.4h7.49v-1.8L19.5 13.25 16.49 15.5zM7.51 8.5v1.8H15v1.4H7.51v1.8L4.5 10.75 7.51 8.5zM12 2c1.1 0 2 .9 2 2s-.9 2-2 2-2-.9-2-2 .9-2 2-2zm-2.5 14.5l-1.9-5.9c-.3-.9-.9-1.6-1.8-2l-1.3-.6c-.5-.2-.9.2-.9.7v5.3h2v-3.7l1.3.6 1.4 4.4c.3.9 1.1 1.5 2.1 1.5H15v-2h-3.8c-.8 0-1.4-.4-1.7-1.1z" />
+    </svg>
+  );
+}
+
+function CloudDownloadFilledIcon({ size = 15, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z" />
+    </svg>
+  );
+}
+
+function FenixActionIcon({ icon, size = 15 }: { icon: FenixProcessAction['icon']; size?: number }) {
+  switch (icon) {
+    case 'walk_transfer':
+      return <WalkTransferIcon size={size} />;
+    case 'autorenew':
+      return <RefreshCw size={size} />;
+    case 'edit':
+      return <Pencil size={size} />;
+    case 'cloud_wine':
+    case 'cloud_green':
+      return <CloudDownloadFilledIcon size={size} />;
+    case 'cancel':
+      return <XCircle size={size} />;
+    default:
+      return <RefreshCw size={size} />;
+  }
+}
+
+function deriveFallbackFenixActions(buildingId: string, process?: ProcessDetail): FenixProcessAction[] {
+  if (process?.fenixActions && process.fenixActions.length > 0) {
+    return process.fenixActions;
+  }
+  if (!process || !process.id) return [];
+
+  const status = (process.status || '').toLowerCase();
+  const stage = (process.stage || '').toLowerCase();
+  const type = (process.type || '').toLowerCase();
+  const combined = `${status} ${stage} ${type}`;
+
+  const actions: FenixProcessAction[] = [];
+
+  // 1. Vistoria / Revistoria
+  if (/vistoria/i.test(combined) && /notific|pend|indefer|exig|reprov/i.test(combined)) {
+    actions.push({
+      key: 'solicitar_revistoria',
+      label: 'Solicitar Revistoria',
+      shortLabel: 'Revistoria',
+      icon: 'walk_transfer',
+      tone: 'wine',
+      kind: 'mutation',
+      confirmTitle: 'Solicitar Revistoria no Fênix',
+      confirmMessage: `Deseja solicitar revistoria para o processo ${process.protocol || ''}? O CBMBA agendará uma nova vistoria da edificação.`
+    });
+  } else if (/vistoria/i.test(combined) || /pronto para vistoria|aguardando vistoria/i.test(combined)) {
+    actions.push({
+      key: 'solicitar_vistoria',
+      label: 'Solicitar Vistoria',
+      shortLabel: 'Solicitar Vistoria',
+      icon: 'walk_transfer',
+      tone: 'wine',
+      kind: 'mutation',
+      confirmTitle: 'Solicitar Vistoria no Fênix',
+      confirmMessage: `Deseja solicitar a vistoria do processo ${process.protocol || ''} no CBMBA?`
+    });
+  }
+
+  // 2. Reanálise Técnica
+  if (/an[aá]lise/i.test(combined) && /notific|pend|exig|retific|corre/i.test(combined)) {
+    actions.push({
+      key: 'solicitar_reanalise',
+      label: 'Solicitar Reanálise',
+      shortLabel: 'Reanálise',
+      icon: 'autorenew',
+      tone: 'wine',
+      kind: 'mutation',
+      confirmTitle: 'Solicitar Reanálise Técnica no Fênix',
+      confirmMessage: `Deseja solicitar reanálise técnica para o processo ${process.protocol || ''}? Certifique-se de que os documentos e correções solicitados foram devidamente anexados.`
+    });
+  }
+
+  // 3. Renovação / Reavaliação de Renovação
+  if (/renova[cç]/i.test(type) || (/vencid|renova/i.test(combined) && /avcb|clcb/i.test(combined))) {
+    if (/notific|pend|exig/i.test(combined)) {
+      actions.push({
+        key: 'reavaliacao_renovacao',
+        label: 'Reavaliação de Renovação',
+        shortLabel: 'Reavaliação',
+        icon: 'autorenew',
+        tone: 'wine',
+        kind: 'mutation',
+        confirmTitle: 'Solicitar Reavaliação de Renovação',
+        confirmMessage: `Deseja submeter a reavaliação da renovação para o processo ${process.protocol || ''}?`
+      });
+    } else {
+      actions.push({
+        key: 'solicitar_renovacao',
+        label: 'Solicitar Renovação',
+        shortLabel: 'Renovação',
+        icon: 'autorenew',
+        tone: 'wine',
+        kind: 'mutation',
+        confirmTitle: 'Solicitar Renovação no Fênix',
+        confirmMessage: `Deseja solicitar a renovação anual do certificado para o processo ${process.protocol || ''}?`
+      });
+    }
+  }
+
+  // 4. Editar Projeto / Rascunho
+  if (/projeto t[eé]cnico|\bpts?\b/i.test(type) && !/homolog|aprov|cancel|conclu/i.test(combined)) {
+    actions.push({
+      key: 'editar_projeto',
+      label: 'Editar Projeto / Rascunho',
+      shortLabel: 'Editar',
+      icon: 'edit',
+      tone: 'wine',
+      kind: 'edit_draft'
+    });
+  }
+
+  // 5. Download Notificação
+  if (/notific|pend|exig|retific|corre/i.test(combined)) {
+    actions.push({
+      key: 'baixar_notificacao',
+      label: 'Baixar Notificação Oficial',
+      shortLabel: 'Notificação',
+      icon: 'cloud_wine',
+      tone: 'wine',
+      kind: 'download',
+      downloadUrl: `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/notification`
+    });
+  }
+
+  // 6. Download Certificado
+  if (/homolog|aprov|certific|conclu/i.test(combined)) {
+    actions.push({
+      key: 'baixar_certificado',
+      label: 'Baixar Certificado Oficial',
+      shortLabel: 'Certificado',
+      icon: 'cloud_wine',
+      tone: 'wine',
+      kind: 'download',
+      downloadUrl: `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/certificate`
+    });
+  }
+
+  // 7. Download Protocolo
+  if (process.protocol && !/sem protocolo/i.test(process.protocol)) {
+    actions.push({
+      key: 'baixar_protocolo',
+      label: 'Baixar Comprovante de Protocolo',
+      shortLabel: 'Protocolo',
+      icon: 'cloud_green',
+      tone: 'green',
+      kind: 'download',
+      downloadUrl: `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/protocol`
+    });
+  }
+
+  // 8. Cancelar solicitação
+  if (/solicita[cç]/i.test(type) && !/homolog|aprov|cancel|conclu/i.test(combined)) {
+    actions.push({
+      key: 'cancelar_solicitacao',
+      label: 'Cancelar Solicitação',
+      shortLabel: 'Cancelar',
+      icon: 'cancel',
+      tone: 'danger',
+      kind: 'mutation',
+      confirmTitle: 'Cancelar Solicitação no Fênix',
+      confirmMessage: `Atenção: deseja realmente cancelar a solicitação ${process.protocol || ''}? Esta ação cancelará o pedido no Fênix CBMBA.`
+    });
+  }
+
+  return actions;
+}
+
+function FenixProcessActionsBar({
+  buildingId,
+  process,
+  compact = false,
+  onEditDraft,
+  onActionSuccess,
+  onReconnectFenix
+}: {
+  buildingId: string;
+  process?: ProcessDetail;
+  compact?: boolean;
+  onEditDraft: (draftId: string) => void;
+  onActionSuccess: (message: string) => void;
+  onReconnectFenix: () => void;
+}) {
+  const [loadingActionKey, setLoadingActionKey] = useState<string | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState<FenixProcessAction | null>(null);
+  const [submittingMutation, setSubmittingMutation] = useState(false);
+  const [actionError, setActionError] = useState<{ message: string; is401?: boolean } | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ tone: 'success' | 'error'; message: string; is401?: boolean } | null>(null);
+
+  if (!process) return null;
+
+  const actions = deriveFallbackFenixActions(buildingId, process);
+  if (!actions.length) return null;
+
+  const handleDownload = async (action: FenixProcessAction) => {
+    const url = action.downloadUrl || `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/${action.key === 'baixar_notificacao' ? 'notification' : action.key === 'baixar_certificado' ? 'certificate' : 'protocol'}`;
+    setLoadingActionKey(action.key);
+    setActionFeedback(null);
+    try {
+      const response = await fetch(url, { credentials: 'same-origin' });
+      if (response.status === 401) {
+        setActionFeedback({
+          tone: 'error',
+          message: 'Sessão do Fênix expirada. Reconecte sua conta para baixar o documento oficial.',
+          is401: true
+        });
+        return;
+      }
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Erro ao baixar documento do Fênix (${response.status})`);
+      }
+      const file = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const plainFilename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+      const fallbackName = `${action.shortLabel.toLowerCase().replace(/\s+/g, '_')}_${process.protocol || 'oficial'}.pdf`;
+      const filename = encodedFilename ? decodeURIComponent(encodedFilename) : plainFilename || fallbackName;
+
+      const blobUrl = URL.createObjectURL(file);
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.download = filename;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+
+      setActionFeedback({
+        tone: 'success',
+        message: `${action.label} baixado com sucesso.`
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao baixar o arquivo oficial.';
+      const is401 = message.toLowerCase().includes('sessão do fênix expirada') || message.toLowerCase().includes('sessao do fenix expirada') || message.toLowerCase().includes('401');
+      setActionFeedback({ tone: 'error', message, is401 });
+    } finally {
+      setLoadingActionKey(null);
+    }
+  };
+
+  const handleEditDraft = async (action: FenixProcessAction) => {
+    setLoadingActionKey(action.key);
+    setActionFeedback(null);
+    try {
+      const result = await api<{ ok?: boolean; draftId?: string }>(
+        `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/create-edit-draft`,
+        { method: 'POST' }
+      );
+      if (!result.draftId) {
+        throw new Error('Identificador de rascunho de edição não retornado pelo servidor.');
+      }
+      onEditDraft(result.draftId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível preparar a edição do projeto.';
+      const is401 = message.toLowerCase().includes('sessão do fênix expirada') || message.toLowerCase().includes('sessao do fenix expirada') || message.toLowerCase().includes('401');
+      setActionFeedback({ tone: 'error', message, is401 });
+    } finally {
+      setLoadingActionKey(null);
+    }
+  };
+
+  const handleConfirmMutation = async () => {
+    if (!confirmingAction) return;
+    setSubmittingMutation(true);
+    setActionError(null);
+    try {
+      const result = await api<{ ok?: boolean; message?: string }>(
+        `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/fenix-action`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ action: confirmingAction.key, confirmed: true })
+        }
+      );
+      const successMessage = result.message || `${confirmingAction.label} executado com sucesso no Fênix.`;
+      setConfirmingAction(null);
+      onActionSuccess(successMessage);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao executar ação no Fênix.';
+      const is401 = message.toLowerCase().includes('sessão do fênix expirada') || message.toLowerCase().includes('sessao do fenix expirada') || message.toLowerCase().includes('401');
+      setActionError({ message, is401 });
+    } finally {
+      setSubmittingMutation(false);
+    }
+  };
+
+  return (
+    <div className={`fenix-process-actions-container ${compact ? 'compact' : ''}`}>
+      <div className="fenix-actions-buttons-row">
+        {actions.map((act) => {
+          const isLoading = loadingActionKey === act.key;
+          return (
+            <button
+              key={act.key}
+              type="button"
+              className={`fenix-action-btn tone-${act.tone} ${compact ? 'compact' : ''} ${isLoading ? 'is-loading' : ''}`}
+              title={act.label}
+              aria-label={act.label}
+              disabled={loadingActionKey !== null || submittingMutation}
+              onClick={() => {
+                if (act.kind === 'download') {
+                  void handleDownload(act);
+                } else if (act.kind === 'edit_draft') {
+                  void handleEditDraft(act);
+                } else if (act.kind === 'mutation') {
+                  setActionError(null);
+                  setConfirmingAction(act);
+                }
+              }}
+            >
+              {isLoading ? (
+                <LoaderCircle size={compact ? 13 : 14} className="spin" />
+              ) : (
+                <FenixActionIcon icon={act.icon} size={compact ? 13 : 15} />
+              )}
+              {!compact && (
+                <span>{isLoading ? (act.kind === 'edit_draft' ? 'Preparando...' : 'Baixando...') : act.shortLabel}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {actionFeedback && (
+        <div className={`fenix-action-feedback-inline ${actionFeedback.tone}`} role="status">
+          <div className="fenix-action-feedback-content">
+            {actionFeedback.tone === 'success' ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}
+            <span>{actionFeedback.message}</span>
+          </div>
+          {actionFeedback.is401 && (
+            <button
+              type="button"
+              className="button button-xs button-danger fenix-reconnect-btn"
+              onClick={onReconnectFenix}
+            >
+              <RefreshCw size={11} /> Reconectar
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-button fenix-feedback-close"
+            onClick={() => setActionFeedback(null)}
+            aria-label="Fechar aviso"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {confirmingAction && (
+        <div className="fenix-action-confirm-overlay" role="dialog" aria-modal="true">
+          <div className="fenix-action-confirm-box">
+            <div className="fenix-action-confirm-header">
+              <div className={`fenix-action-confirm-icon-badge tone-${confirmingAction.tone}`}>
+                <FenixActionIcon icon={confirmingAction.icon} size={20} />
+              </div>
+              <div>
+                <h4>{confirmingAction.confirmTitle || confirmingAction.label}</h4>
+                <span className="fenix-confirm-protocol">
+                  Protocolo: <strong>{process.protocol || 'Não informado'}</strong>
+                </span>
+              </div>
+            </div>
+
+            <div className="fenix-action-confirm-body">
+              <p>{confirmingAction.confirmMessage || `Deseja submeter a solicitação no Fênix CBMBA?`}</p>
+              <div className="fenix-confirm-warning-note">
+                <ShieldCheck size={14} />
+                <span>Esta solicitação altera diretamente o processo no Fênix CBMBA e pode gerar novas exigências ou taxas.</span>
+              </div>
+              {actionError && (
+                <div className="fenix-action-error-box">
+                  <CircleAlert size={15} />
+                  <div>
+                    <span>{actionError.message}</span>
+                    {actionError.is401 && (
+                      <button
+                        type="button"
+                        className="button button-xs button-danger mt-1"
+                        onClick={onReconnectFenix}
+                      >
+                        <RefreshCw size={12} /> Reconectar conta Fênix
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="fenix-action-confirm-footer">
+              <button
+                type="button"
+                className="button button-outline"
+                onClick={() => {
+                  if (!submittingMutation) {
+                    setConfirmingAction(null);
+                    setActionError(null);
+                  }
+                }}
+                disabled={submittingMutation}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className={`button ${confirmingAction.tone === 'danger' ? 'button-danger' : confirmingAction.tone === 'wine' ? 'button-fenix-wine' : 'button-teal'}`}
+                onClick={() => void handleConfirmMutation()}
+                disabled={submittingMutation}
+              >
+                {submittingMutation ? (
+                  <>
+                    <LoaderCircle size={15} className="spin" />
+                    <span>Enviando ao Fênix...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={15} />
+                    <span>Confirmar no Fênix</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessId, onClose, onAsk, onDetailLoaded, demo }: { building: Building; initialTab?: string; initialProcessId?: string; onClose: () => void; onAsk: (prompt?: string) => void; onDetailLoaded?: (detail: BuildingDetail | null) => void; demo: boolean }) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<BuildingDetail | null>(null);
@@ -1084,6 +1526,17 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   const [aiInsightUnavailable, setAiInsightUnavailable] = useState(false);
   const [aiSourcesOpen, setAiSourcesOpen] = useState(false);
   const [aiInsightSources, setAiInsightSources] = useState<Array<{ protocol: string; type: string; status: string; updatedAt: string; movements: number; documents: string[] }>>([]);
+
+  const reloadDetail = useCallback(async () => {
+    try {
+      const result = await api<BuildingDetail>(`/api/buildings/${encodeURIComponent(building.id)}`);
+      setDetail(result);
+      onDetailLoaded?.(result);
+      return result;
+    } catch {
+      // fallback silencioso se a consulta falhar momentaneamente
+    }
+  }, [building.id, onDetailLoaded]);
   useEffect(() => {
     let active = true;
     setDetail(null); setError(''); setAiInsight(''); setAiInsightSources([]); setAiInsightUnavailable(false);
@@ -1236,7 +1689,45 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
   })}</div> : <div className="documents-empty"><FileText size={17} /> O Fênix não retornou documentos ou certificados disponíveis para esta edificação.</div>}{notice && <div className="document-notice" role="status"><CircleAlert size={13} /> {notice}</div>}{!demo && documents.some((doc) => doc.source === 'fenix') && <small className="source-limit">Documentos de retificação podem não ser autorizados pela sessão Fênix. O DAE pode exigir emissão manual na SEFAZ-BA.</small>}</div>;
   const updatableHistoryCount = allProcesses.filter((item) => item.id.startsWith('technicalproject:')).length;
   const historyPanel = <div className="history-list"><div className="timeline-title"><div><h4>Movimentações do processo</h4><small>Histórico oficial de status retornado pelo Fênix.</small></div><div className="history-actions"><button className="button button-outline history-refresh-button" onClick={() => void refreshBuildingHistory()} disabled={demo || historyRefreshing || updatableHistoryCount === 0} title={demo ? 'Disponível em contas conectadas ao Fênix.' : updatableHistoryCount === 0 ? 'Esta edificação não tem processos técnicos com histórico atualizável.' : 'Atualiza somente os processos técnicos desta edificação.'}><RefreshCw className={historyRefreshing ? 'spin' : ''} size={14} /> {historyRefreshing ? 'Atualizando…' : 'Atualizar histórico'}</button><button className="button button-ai-min" onClick={() => onAsk(`Resuma em ordem cronológica o histórico dos processos da edificação ${building.reference}. Explique as mudanças relevantes, a situação atual e o próximo passo que os dados permitem inferir.`)}><Sparkles size={13} /> Resumir histórico</button></div></div>{historyRefreshFeedback && <div className={`history-refresh-feedback ${historyRefreshFeedback.tone}`} role="status">{historyRefreshFeedback.message}</div>}{allProcesses.length ? allProcesses.map((item) => <section className="history-process" key={item.id}><div className="history-process-title"><span className="history-entry-icon"><ClipboardList size={15} /></span><div><b>{item.type} · {item.protocol || 'Protocolo não informado'}</b><small>{item.timeline.length ? `${item.timeline.length} movimentações` : item.stage || item.status}</small></div><StatusPill status={item.status} /></div>{item.timeline.length ? <div className="history-event-list">{item.timeline.map((event, index) => <div className="history-event" key={`${event.label}-${event.date}-${index}`}><span className={`history-event-dot ${event.current ? 'current' : event.done ? 'done' : ''}`} /><span><b>{event.label}</b><small>{event.date ? formatDate(event.date) : 'Data não informada'}</small></span></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas para este processo.</div>}</section>) : <div className="timeline-empty">Não há processos vinculados para compor o histórico.</div>}</div>;
-  const relatedProcesses = (items: ProcessDetail[]) => items.length > 1 && <div className="related-process-list"><div className="timeline-title"><h4>Processos nesta edificação <span className="doc-count">{items.length}</span></h4></div>{items.map((item) => <button className={`related-process ${process?.id === item.id ? 'selected' : ''}`} key={item.id} onClick={() => setSelectedProcessId(item.id)}><span><b>{item.protocol || 'Protocolo não informado'}</b><small>{item.type} · {formatDate(item.updatedAt)}</small></span><StatusPill status={item.status} /></button>)}</div>;
+  const relatedProcesses = (items: ProcessDetail[]) => items.length > 1 && (
+    <div className="related-process-list">
+      <div className="timeline-title">
+        <h4>Processos nesta edificação <span className="doc-count">{items.length}</span></h4>
+      </div>
+      <div className="related-process-grid">
+        {items.map((item) => (
+          <div className={`related-process-card ${process?.id === item.id ? 'selected' : ''}`} key={item.id}>
+            <div className="related-process-card-header" onClick={() => setSelectedProcessId(item.id)} role="button" tabIndex={0}>
+              <div>
+                <b>{item.protocol || 'Protocolo não informado'}</b>
+                <small>{item.type} · {formatDate(item.updatedAt)}</small>
+              </div>
+              <StatusPill status={item.status} />
+            </div>
+            <div className="related-process-actions-row">
+              <FenixProcessActionsBar
+                compact
+                buildingId={building.id}
+                process={item}
+                onEditDraft={(draftId) => {
+                  onClose();
+                  navigate(`/painel?view=register&draftId=${encodeURIComponent(draftId)}`);
+                }}
+                onActionSuccess={(msg) => {
+                  setNotice(msg);
+                  void reloadDetail();
+                }}
+                onReconnectFenix={() => {
+                  onClose();
+                  navigate('/painel?view=settings&section=contas-fenix#settings-fenix-primary');
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
   return <div className="drawer-backdrop"><section className="building-drawer" aria-label={`Detalhes de ${building.reference}`}>
     <header className="drawer-header"><div><span className="section-kicker">FICHA DA EDIFICAÇÃO</span><h2>Detalhes da edificação</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={19} /></button></header>
     <div className="drawer-scroll"><div className="building-profile"><span className="profile-building"><Building2 size={27} /></span><div className="profile-main"><div><h3>{building.reference}</h3><span className="reference-code">REF-{building.id.slice(-5).toUpperCase()} · {contextProcess?.protocol || (detail ? 'Processo não vinculado' : 'Carregando processo...')}</span><AccountSourceBadge name={building.sourceAccountName} paused={building.sourceAccountPaused} /></div><StatusPill status={building.status} />{validityHighlights.length > 0 && <div className="profile-validity">{validityHighlights.map((item) => <div key={item.key}><b>{item.label}</b><strong>{item.value}</strong><small>{item.detail}</small></div>)}</div>}</div><div className="profile-meta"><span><MapPin size={14} /> {detail?.building.address || building.address || building.municipality}</span><span><Building2 size={14} /> {detail?.building.municipality || building.municipality}</span></div>{detail && <div className="building-facts" aria-label="Características da edificação">{[
@@ -1257,7 +1748,48 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
            ) : tab === 'Documentos' ? documentsPanel : tab === 'Histórico' ? historyPanel : <>
              <div className="detail-section-heading"><div><span className="section-kicker">SITUAÇÃO DO PROCESSO</span><h3>{tab === 'Edificação' ? 'Andamento atual' : tab}</h3></div>{process && <StatusPill status={process.status} />}</div>
              {process ? <>
-               <div className="current-status-card"><div className="status-card-main"><span className={`status-dot-large ${statusTone(process.status)}`}>{statusTone(process.status) === 'green' ? <CheckCircle2 size={17} /> : statusTone(process.status) === 'amber' || statusTone(process.status) === 'red' ? <CircleAlert size={17} /> : <Clock3 size={17} />}</span><div><small>ETAPA ATUAL</small><b>{process.stage || process.status}</b><span>Protocolo {process.protocol || 'não informado'} · {process.type}</span>{process.notifiedBy && <span className="detail-notified-by"><b>Servidor Responsável:</b> {process.notifiedBy}</span>}</div></div><button className="button button-ai-soft" onClick={() => onAsk(`Explique em linguagem simples a situação atual do protocolo ${process.protocol || 'desta edificação'}, que está na etapa “${process.stage || process.status}”. Informe o que os dados confirmam, as pendências e o próximo passo a verificar no Fênix.`)}><Sparkles size={15} /> Explicar situação</button></div>
+               <div className="current-status-card fenix-status-card">
+                 <div className="status-card-header-row">
+                   <div className="status-card-main">
+                     <span className={`status-dot-large ${statusTone(process.status)}`}>
+                       {statusTone(process.status) === 'green' ? <CheckCircle2 size={17} /> : statusTone(process.status) === 'amber' || statusTone(process.status) === 'red' ? <CircleAlert size={17} /> : <Clock3 size={17} />}
+                     </span>
+                     <div>
+                       <small>ETAPA ATUAL</small>
+                       <b>{process.stage || process.status}</b>
+                       <span>Protocolo {process.protocol || 'não informado'} · {process.type}</span>
+                       {process.notifiedBy && <span className="detail-notified-by"><b>Servidor Responsável:</b> {process.notifiedBy}</span>}
+                     </div>
+                   </div>
+                   <button className="button button-ai-soft" onClick={() => onAsk(`Explique em linguagem simples a situação atual do protocolo ${process.protocol || 'desta edificação'}, que está na etapa “${process.stage || process.status}”. Informe o que os dados confirmam, as pendências e o próximo passo a verificar no Fênix.`)}>
+                     <Sparkles size={15} /> Explicar situação
+                   </button>
+                 </div>
+
+                 <div className="fenix-quick-actions-strip">
+                   <div className="fenix-actions-header">
+                     <span className="fenix-actions-title">
+                       <Flame size={13} className="text-flame-icon" /> Ações rápidas no Fênix
+                     </span>
+                   </div>
+                   <FenixProcessActionsBar
+                     buildingId={building.id}
+                     process={process}
+                     onEditDraft={(draftId) => {
+                       onClose();
+                       navigate(`/painel?view=register&draftId=${encodeURIComponent(draftId)}`);
+                     }}
+                     onActionSuccess={(msg) => {
+                       setNotice(msg);
+                       void reloadDetail();
+                     }}
+                     onReconnectFenix={() => {
+                       onClose();
+                       navigate('/painel?view=settings&section=contas-fenix#settings-fenix-primary');
+                     }}
+                   />
+                 </div>
+               </div>
                <div className="timeline-block"><div className="timeline-title"><div><h4>Linha do tempo</h4>{displayedTimeline.length > 6 && <small>{displayedTimeline.length} movimentações · marcos principais{timelineProcess?.id !== process.id ? ` · projeto vinculado ${timelineProcess?.protocol || ''}` : ''}</small>}</div><button className="button button-ai-min" onClick={() => onAsk(`Resuma o histórico do protocolo ${process.protocol || 'selecionado'} em ordem cronológica, explicando o que aconteceu em cada etapa e como chegou à situação atual.`)}><Sparkles size={13} /> Resumir histórico</button></div>{displayedTimeline.length ? <div className="timeline">{timelineMilestones(displayedTimeline).map((item, index) => <div className={`timeline-step ${item.done ? 'done' : ''} ${item.current ? 'current' : ''}`} key={`${item.label}-${item.date}-${index}`}><span className="timeline-node">{item.done ? <Check size={11} /> : index + 1}</span><span className="timeline-label"><b>{item.label}</b><small>{item.date ? formatDate(item.date) : item.pending ? 'Aguardando etapa anterior' : 'Data não informada'}</small></span></div>)}</div> : <div className="timeline-empty">O Fênix não retornou movimentações detalhadas nesta consulta.</div>}</div>
                {tab !== 'Edificação' && relatedProcesses(tabProcesses)}
              </> : <div className="no-process-card"><FileCheck2 size={20} /><b>{tab === 'Projetos' ? 'Nenhum projeto, solicitação ou vistoria vinculado' : 'Nenhum processo vinculado'}</b><span>Não encontramos registros desta categoria para a edificação na sincronização atual.</span></div>}

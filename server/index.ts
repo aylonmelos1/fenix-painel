@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSetting, getSetting, getUserFenixSession, markUserFenixSessionExpired, resolveSession, seal, setSetting, unseal } from './store.js';
-import { addProcessDocumentsToWebhook, FenixError, getFenixRequestNotification, getFenixEdificationProfile, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption } from './fenix.js';
+import { addProcessDocumentsToWebhook, computeFenixProcessActions, downloadFenixProtocolReport, FenixError, fenixClientForUser, getFenixEdificationProfile, getFenixRequestCertificate, getFenixRequestNotification, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption, type FenixProcessAction, type FenixProcessMeta } from './fenix.js';
 import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, streamDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type DraftAiAssistantRequest } from './project-drafts.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
@@ -1071,6 +1071,19 @@ app.get('/api/drafts', requireSession, (_req, res) => {
   }
 });
 
+app.get('/api/drafts/:id', requireSession, (req, res) => {
+  try {
+    const draft = getProjectDraft(res.locals.user.id, String(req.params.id || ''));
+    if (!draft) {
+      return res.status(404).json({ error: 'Rascunho não encontrado.' });
+    }
+    return res.json({ ok: true, draft });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao consultar rascunho.';
+    return res.status(500).json({ error: message });
+  }
+});
+
 app.post('/api/drafts', requireSession, (req, res) => {
   try {
     const input = (req.body?.data || req.body) as ProjectDraftInput;
@@ -1798,8 +1811,17 @@ app.get('/api/buildings/:id', requireSession, async (req, res) => {
   const withCertificates = enriched.map((item) => {
     const certificate = certificateByProcess.get(item.id);
     const issue = certificateIssues.get(item.id);
-    return certificate ? { ...item, documents: [...item.documents, { id: `${item.id}-certificate`, name: certificate.filename, type: 'Certificado de aprovação · Fênix', available: true, source: 'fenix' as const, processId: item.id, kind: 'certificate' as const }] }
+    const enrichedItem = certificate ? { ...item, documents: [...item.documents, { id: `${item.id}-certificate`, name: certificate.filename, type: 'Certificado de aprovação · Fênix', available: true, source: 'fenix' as const, processId: item.id, kind: 'certificate' as const }] }
       : issue ? { ...item, documents: [...item.documents, issue] } : item;
+    const fenixActions = computeFenixProcessActions({
+      process: {
+        ...enrichedItem,
+        payload: enrichedItem.raw,
+        validUntil: projectProfile?.validUntil
+      },
+      buildingId: building.id
+    });
+    return { ...enrichedItem, fenixActions };
   });
   return res.json({ building: {
     id: building.id, reference: building.reference, municipality: building.municipality, address: officialProfile?.address || projectProfile?.address || building.address,
@@ -1989,14 +2011,18 @@ app.get('/api/buildings/:buildingId/processes/:processId/certificate', requireSe
   if (user.demo) return res.status(404).json({ error: 'Certificados oficiais não estão disponíveis no ambiente demonstrativo.' });
   const processId = req.params.processId;
   const process = ownedProcess(user.id, String(processId || ''), String(req.params.buildingId || ''));
-  if (!process || !process.id.startsWith('technicalproject:')) return res.status(404).json({ error: 'Processo não encontrado.' });
+  if (!process || (!process.id.startsWith('technicalproject:') && !process.id.startsWith('request:'))) {
+    return res.status(404).json({ error: 'Processo não encontrado.' });
+  }
   const requestApproved = Boolean(db.prepare(`SELECT 1 FROM processes WHERE building_id = ? AND user_id = ? AND id LIKE 'request:%' AND protocol = ? AND (lower(status) LIKE '%homolog%' OR lower(status) LIKE '%aprov%' OR lower(status) LIKE '%conclu%') LIMIT 1`)
     .get(process.building_id, process.data_user_id, process.protocol));
-  if (!isApprovedProcess(process) && !requestApproved) {
+  if (!isApprovedProcess(process) && !requestApproved && !/homolog/i.test(process.status)) {
     return res.status(404).json({ error: 'O Fênix não indica um certificado de aprovação disponível para este processo.' });
   }
   try {
-    const certificate = await getTechnicalProjectCertificate(process.data_user_id, process.remote_id || process.id.slice('technicalproject:'.length));
+    const certificate = process.id.startsWith('technicalproject:')
+      ? await getTechnicalProjectCertificate(process.data_user_id, process.remote_id || process.id.slice('technicalproject:'.length))
+      : await getFenixRequestCertificate(process.data_user_id, process.remote_id || process.id.slice('request:'.length));
     const asciiName = certificate.filename.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/"/g, '_');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Length', String(certificate.size));
@@ -2013,19 +2039,54 @@ app.get('/api/buildings/:buildingId/processes/:processId/protocol', requireSessi
   const user = res.locals.user;
   if (user.demo) return res.status(404).json({ error: 'Comprovantes oficiais não estão disponíveis no ambiente demonstrativo.' });
   const process = ownedProcess(user.id, String(req.params.processId || ''), String(req.params.buildingId || ''));
-  if (!process || !process.id.startsWith('technicalproject:')) return res.status(404).json({ error: 'Processo não encontrado.' });
-  try {
-    const receipt = await getTechnicalProjectProtocolReceipt(process.data_user_id, process.remote_id || process.id.slice('technicalproject:'.length));
-    const asciiName = receipt.filename.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/"/g, '_');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Length', String(receipt.size));
-    res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(receipt.filename)}`);
-    return res.status(200).send(receipt.content);
-  } catch (error) {
-    const upstreamStatus = error instanceof FenixError ? error.status : undefined;
-    logger.info('Download de comprovante de protocolo indisponível', { status: upstreamStatus });
-    return res.status(upstreamStatus === 404 ? 404 : 502).json({ error: upstreamStatus === 404 ? 'O Fênix não disponibilizou o comprovante de protocolo.' : 'Não foi possível obter o comprovante oficial do Fênix.' });
+  if (!process || (!process.id.startsWith('technicalproject:') && !process.id.startsWith('request:'))) {
+    return res.status(404).json({ error: 'Processo não encontrado.' });
   }
+
+  let requestId: string | number | null = null;
+  if (process.id.startsWith('request:')) {
+    requestId = process.remote_id || process.id.slice('request:'.length);
+  } else {
+    let parsedPayload: any = {};
+    try { parsedPayload = JSON.parse(process.payload || '{}'); } catch {}
+    if (parsedPayload.fenixMeta?.solicitacaoId) {
+      requestId = parsedPayload.fenixMeta.solicitacaoId;
+    } else {
+      const matchingReq = db.prepare(`SELECT remote_id, id FROM processes WHERE building_id = ? AND user_id = ? AND id LIKE 'request:%' AND protocol = ? LIMIT 1`)
+        .get(process.building_id, process.data_user_id, process.protocol) as any;
+      if (matchingReq) requestId = matchingReq.remote_id || matchingReq.id.slice('request:'.length);
+    }
+  }
+
+  if (requestId) {
+    try {
+      const report = await downloadFenixProtocolReport(process.data_user_id, requestId);
+      const asciiName = report.filename.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/"/g, '_');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Length', String(report.size));
+      res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(report.filename)}`);
+      return res.status(200).send(report.content);
+    } catch (reportErr) {
+      logger.info('Relatório de protocolo de solicitação indisponível via gerarRelatorioProtocoloSolicitacao, tentando fallback...', { error: reportErr instanceof Error ? reportErr.message : String(reportErr) });
+    }
+  }
+
+  if (process.id.startsWith('technicalproject:')) {
+    try {
+      const receipt = await getTechnicalProjectProtocolReceipt(process.data_user_id, process.remote_id || process.id.slice('technicalproject:'.length));
+      const asciiName = receipt.filename.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/"/g, '_');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Length', String(receipt.size));
+      res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(receipt.filename)}`);
+      return res.status(200).send(receipt.content);
+    } catch (error) {
+      const upstreamStatus = error instanceof FenixError ? error.status : undefined;
+      logger.info('Download de comprovante de protocolo indisponível', { status: upstreamStatus });
+      return res.status(upstreamStatus === 404 ? 404 : 502).json({ error: upstreamStatus === 404 ? 'O Fênix não disponibilizou o comprovante de protocolo.' : 'Não foi possível obter o comprovante oficial do Fênix.' });
+    }
+  }
+
+  return res.status(404).json({ error: 'O Fênix não disponibilizou o comprovante de protocolo.' });
 });
 
 app.get('/api/buildings/:buildingId/processes/:processId/notification', requireSession, async (req, res) => {
@@ -2054,6 +2115,325 @@ app.get('/api/buildings/:buildingId/processes/:processId/notification', requireS
     logger.info('Download de notificação oficial indisponível', { status: upstreamStatus });
     return res.status(upstreamStatus === 404 ? 404 : 502).json({ error: upstreamStatus === 404 ? 'O Fênix não disponibilizou uma notificação para este processo.' : 'Não foi possível obter a notificação oficial do Fênix.' });
   }
+});
+
+app.post('/api/buildings/:buildingId/processes/:processId/fenix-action', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  if (user.demo) {
+    return res.status(400).json({ error: 'Ações oficiais do Fênix não estão disponíveis no ambiente demonstrativo.' });
+  }
+
+  if (req.body?.confirmed !== true) {
+    return res.status(400).json({ error: 'A confirmação explícita da ação é obrigatória (confirmed: true).' });
+  }
+
+  const buildingId = String(req.params.buildingId || '');
+  const processId = String(req.params.processId || '');
+  const building = ownedBuilding(user.id, buildingId);
+  if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
+
+  const process = ownedProcess(user.id, processId, buildingId);
+  if (!process) return res.status(404).json({ error: 'Processo não encontrado.' });
+
+  if (building.source_connection_id) {
+    const connection = db.prepare('SELECT status,paused FROM fenix_connections WHERE id=? AND owner_user_id=?')
+      .get(building.source_connection_id, user.id) as { status: string; paused: number } | undefined;
+    if (!connection) return res.status(404).json({ error: 'Conexão Fênix não encontrada.' });
+    if (connection.paused || connection.status !== 'active') {
+      return res.status(409).json({ error: 'Reative ou reconecte a conta Fênix desta edificação antes de executar ações.' });
+    }
+  }
+
+  const action = String(req.body?.action || '').trim();
+  const validActions = [
+    'solicitar_vistoria',
+    'solicitar_revistoria',
+    'solicitar_reanalise',
+    'reavaliacao_renovacao',
+    'solicitar_renovacao',
+    'cancelar_solicitacao',
+    'cancelar_processo'
+  ] as const;
+
+  if (!validActions.includes(action as any)) {
+    return res.status(400).json({ error: `Ação do Fênix inválida: ${action}` });
+  }
+
+  let client: any;
+  try {
+    client = await fenixClientForUser(building.data_user_id);
+  } catch (error) {
+    const status = error instanceof FenixError ? error.status : 401;
+    if (status === 401) {
+      if (building.source_connection_id) {
+        db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
+          .run(new Date().toISOString(), building.source_connection_id);
+      } else {
+        markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+      }
+      return res.status(401).json({ error: 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.' });
+    }
+    const message = error instanceof Error ? error.message : 'Falha ao autenticar sessão no Fênix.';
+    return res.status(error instanceof FenixError && error.status ? error.status : 502).json({ error: message });
+  }
+
+  let parsedPayload: any = {};
+  try { parsedPayload = JSON.parse(process.payload || '{}'); } catch {}
+  let meta: FenixProcessMeta = parsedPayload.fenixMeta || {};
+
+  let solicitacaoId = meta.solicitacaoId ?? (process.id.startsWith('request:') ? Number(process.remote_id || process.id.slice('request:'.length)) : null);
+  let projetoTecnicoId = meta.projetoTecnicoId ?? (process.id.startsWith('technicalproject:') ? Number(process.remote_id || process.id.slice('technicalproject:'.length)) : null);
+  let sptId = meta.sptId ?? null;
+  let statusSlugOld = meta.statusSlug ?? null;
+  let responsavelId = meta.responsavelId ?? null;
+  let tipoSolicitacaoId = meta.tipoSolicitacaoId ?? null;
+  let numProjeto = meta.numProjeto ?? null;
+
+  let remoteItem: any = null;
+
+  const needsRemoteResolution =
+    !solicitacaoId ||
+    !sptId ||
+    !responsavelId ||
+    !statusSlugOld ||
+    (!projetoTecnicoId && ['solicitar_vistoria', 'solicitar_revistoria', 'solicitar_reanalise', 'cancelar_processo'].includes(action));
+
+  if (needsRemoteResolution) {
+    try {
+      const resp = await client.get('/api/v1/request', { tipo_lista: 'minhas_solicitacoes' }) as any;
+      const root = resp?.data ?? resp;
+      const rows: any[] = Array.isArray(root) ? root : Array.isArray(root?.data) ? root.data : Array.isArray(root?.rows) ? root.rows : [];
+      const remoteId = process.remote_id || process.id.slice(process.id.indexOf(':') + 1);
+      const matched = rows.find((row) =>
+        String(row.id) === String(remoteId) ||
+        String(row.solicitacao_id) === String(remoteId) ||
+        (process.protocol && (String(row.n_solicitacao_format || '').trim() === process.protocol.trim() || String(row.protocolo || '').trim() === process.protocol.trim()))
+      );
+      if (matched) {
+        remoteItem = matched;
+        solicitacaoId = solicitacaoId || Number(matched.solicitacao_id || matched.id) || null;
+        sptId = sptId || Number(matched.spt_id || matched.spt?.id) || null;
+        projetoTecnicoId = projetoTecnicoId || Number(matched.projeto_tecnico_id || matched.projeto_tecnico?.id) || null;
+        statusSlugOld = statusSlugOld || String(matched.status_slug || matched.status?.slug || '');
+        responsavelId = responsavelId || Number(matched.responsavel_id || matched.responsavel?.id || matched.user_id) || null;
+        tipoSolicitacaoId = tipoSolicitacaoId || Number(matched.tipo_solicitacao_id || matched.tipo_solicitacao?.id) || null;
+        numProjeto = numProjeto || String(matched.num_projeto || matched.n_projeto || matched.num_processo || matched.projeto_tecnico?.num_projeto || '');
+      }
+    } catch (reqErr) {
+      logger.info('Falha ao consultar minhas_solicitacoes para enriquecer ação', { error: reqErr instanceof Error ? reqErr.message : String(reqErr) });
+    }
+  }
+
+  if (!projetoTecnicoId && process.id.startsWith('technicalproject:')) {
+    projetoTecnicoId = Number(process.remote_id || process.id.slice('technicalproject:'.length)) || null;
+  }
+
+  try {
+    let upstream: unknown = null;
+    let message = 'Ação executada com sucesso no Fênix CBMBA.';
+
+    if (action === 'solicitar_vistoria' || action === 'solicitar_revistoria' || action === 'solicitar_reanalise') {
+      const targetTipoId = action === 'solicitar_vistoria' ? 3 : action === 'solicitar_revistoria' ? 4 : 2;
+      upstream = await client.postFormData('/api/v1/gerarNumeroSolicitacao', {
+        projeto_tecnico_id: projetoTecnicoId,
+        status_slug: 'pendente-de-documentacao',
+        status_slug_old: statusSlugOld || 'notificado',
+        responsavel_id: responsavelId,
+        tipo_solicitacao_id: targetTipoId,
+        solicitacao_id: solicitacaoId
+      });
+      message = action === 'solicitar_vistoria'
+        ? 'Solicitação de vistoria gerada com sucesso no Fênix CBMBA.'
+        : action === 'solicitar_revistoria'
+          ? 'Solicitação de revistoria gerada com sucesso no Fênix CBMBA.'
+          : 'Solicitação de reanálise gerada com sucesso no Fênix CBMBA.';
+    } else if (action === 'reavaliacao_renovacao') {
+      upstream = await client.post('/api/v1/request/definirStatusV2', {
+        solicitacao_id: solicitacaoId,
+        spt_id: sptId,
+        action: 'edit-reavaliacao-renovacao',
+        justificativa: null,
+        dados: remoteItem || {}
+      });
+      message = 'Reavaliação da renovação solicitada com sucesso no Fênix CBMBA.';
+    } else if (action === 'solicitar_renovacao') {
+      upstream = await client.post('/api/v1/request/definirStatusV2', {
+        solicitacao_id: solicitacaoId,
+        spt_id: sptId,
+        action: 'edit-renovacao',
+        justificativa: null,
+        dados: remoteItem || {}
+      });
+      message = 'Renovação iniciada com sucesso no Fênix CBMBA.';
+    } else if (action === 'cancelar_solicitacao') {
+      upstream = await client.post('/api/v1/request/definirStatusV2', {
+        solicitacao_id: solicitacaoId,
+        spt_id: sptId,
+        action: 'cancelar-solicitacao',
+        justificativa: null,
+        dados: remoteItem || {}
+      });
+      message = 'Solicitação cancelada com sucesso no Fênix CBMBA.';
+    } else if (action === 'cancelar_processo') {
+      upstream = await client.post('/api/v1/setProjectStatus', {
+        projeto_tecnico_id: projetoTecnicoId,
+        solicitacao_id: solicitacaoId,
+        spt_id: sptId,
+        status_slug: 'cancelado',
+        responsavel_id: 0,
+        tipo_requisicao: 'cancelar-processo',
+        num_projeto: numProjeto
+      });
+      message = 'Processo cancelado com sucesso no Fênix CBMBA.';
+    }
+
+    void executeSync(building.data_user_id, 'manual').catch(() => {});
+    return res.json({ ok: true, action, message, upstream });
+  } catch (error) {
+    if (error instanceof FenixError && error.status === 401) {
+      if (building.source_connection_id) {
+        db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
+          .run(new Date().toISOString(), building.source_connection_id);
+      } else {
+        markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+      }
+      return res.status(401).json({ error: 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.' });
+    }
+    const message = error instanceof Error ? error.message : 'Falha ao executar ação no Fênix.';
+    return res.status(error instanceof FenixError && error.status ? error.status : 502).json({ error: message });
+  }
+});
+
+app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', requireSession, async (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  const processId = String(req.params.processId || '');
+  const building = ownedBuilding(user.id, buildingId);
+  if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  const process = ownedProcess(user.id, processId, buildingId);
+  if (!process) return res.status(404).json({ error: 'Processo não encontrado.' });
+
+  const warnings: string[] = [];
+  let upstreamEdification: any = null;
+  let upstreamProject: any = null;
+
+  if (!user.demo && building.data_user_id) {
+    try {
+      const client = await fenixClientForUser(building.data_user_id);
+      if (building.remote_id) {
+        try {
+          const resp = await client.get(`/api/v1/edifications/${encodeURIComponent(building.remote_id)}`) as any;
+          upstreamEdification = resp?.data ?? resp;
+        } catch (edErr) {
+          logger.info('Falha ao buscar edificação upstream no Fênix', { error: edErr instanceof Error ? edErr.message : String(edErr) });
+          warnings.push('Não foi possível carregar os dados atualizados da edificação diretamente do Fênix; os dados locais foram utilizados.');
+        }
+      }
+      const remoteProjId = process.remote_id || (process.id.startsWith('technicalproject:') ? process.id.slice('technicalproject:'.length) : null);
+      if (remoteProjId) {
+        try {
+          const resp = await client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(remoteProjId)}`) as any;
+          upstreamProject = resp?.data ?? resp;
+        } catch (projErr) {
+          logger.info('Falha ao buscar projeto técnico upstream no Fênix', { error: projErr instanceof Error ? projErr.message : String(projErr) });
+        }
+      }
+    } catch {
+      warnings.push('Sessão Fênix indisponível; rascunho preenchido a partir do cache local da edificação.');
+    }
+  }
+
+  let localBuildingPayload: any = {};
+  try { localBuildingPayload = JSON.parse(building.payload || '{}'); } catch {}
+
+  let processPayload: any = {};
+  try { processPayload = JSON.parse(process.payload || '{}'); } catch {}
+  const fenixMeta: FenixProcessMeta = processPayload.fenixMeta || {};
+
+  const ed = upstreamEdification || localBuildingPayload;
+  const proj = upstreamProject || {};
+
+  const name = `Edição · ${building.reference || 'Edificação'} (${process.protocol || 'S/N'})`;
+  const edificacao_mode = 'existing' as const;
+  const edificacao_id = Number(building.remote_id) || null;
+
+  // Endereço
+  const cep = String(ed?.address?.zip_code || ed?.address?.cep || ed?.cep || localBuildingPayload?.cep || '').replace(/\D/g, '');
+  const logradouro = String(ed?.address?.public_place || ed?.address?.logradouro || ed?.logradouro || building.address || '');
+  const numero = String(ed?.address?.number || ed?.address?.numero || ed?.numero || localBuildingPayload?.numero || '');
+  const complemento = String(ed?.address?.complement || ed?.address?.complemento || ed?.complemento || localBuildingPayload?.complemento || '');
+  const bairro = String(ed?.address?.neighborhood || ed?.address?.bairro || ed?.bairro || localBuildingPayload?.bairro || '');
+  const cidade = String(ed?.address?.county || ed?.address?.municipio || ed?.municipio?.nome || ed?.cidade || building.municipality || '');
+  const uf = String(ed?.address?.state || ed?.address?.uf || ed?.uf || 'BA');
+  const referencia = String(building.reference || ed?.reference_name || ed?.nome || '');
+
+  // Dimensões
+  const area_total = Number(proj?.total_area || ed?.total_area || ed?.area || building.area || 0);
+  const area_construida = Number(proj?.building_area || ed?.building_area || 0);
+  const pavimentos = Number(proj?.number_floors || ed?.number_floors || building.floors || 0);
+  const altura = String(proj?.height || ed?.height || building.height || '');
+
+  // Tipo do projeto
+  const tipo_projeto_id = Number(proj?.tipo_projeto_id || fenixMeta?.tipoProjetoId || 1);
+
+  // Instituição / CNAE
+  const cnae_id = ed?.cnae_id || localBuildingPayload?.cnae_id || null;
+
+  // Ocupação
+  const divisao_id = ed?.divisao_id || ed?.occupation?.divisao_id || null;
+  const ocupacao_id = ed?.ocupacao_id || ed?.occupation?.id || null;
+  const descricao_ocupacao = ed?.descricao_ocupacao || ed?.occupation?.descricao || '';
+
+  // Medidas de segurança
+  const rawMeasures = proj?.medidas_seguranca || proj?.medida_seguranca || [];
+  let medidas: Record<string, boolean> = {};
+  if (Array.isArray(rawMeasures)) {
+    for (const m of rawMeasures) {
+      const codeOrSlug = typeof m === 'string' ? m : (m?.slug || m?.codigo || m?.nome || m?.name || '');
+      if (codeOrSlug) medidas[codeOrSlug] = true;
+    }
+  }
+
+  // Proprietário / Responsável / RTs
+  const proprietario = ed?.proprietario || localBuildingPayload?.proprietario || null;
+  const responsavel = ed?.responsavel || localBuildingPayload?.responsavel || null;
+  const rts = proj?.rts || proj?.responsaveis_tecnicos || [];
+
+  const draftInput: ProjectDraftInput = {
+    name,
+    edificacao_mode,
+    edificacao_id,
+    reference_name: referencia,
+    cep,
+    logradouro,
+    numero,
+    complemento,
+    bairro,
+    cidade,
+    uf,
+    area_total: area_total || undefined,
+    area_construida: area_construida || undefined,
+    pavimentos: pavimentos || undefined,
+    altura: altura || undefined,
+    tipo_projeto_id,
+    cnae_id,
+    divisao_id,
+    ocupacao_id,
+    descricao_ocupacao,
+    medidas_seguranca: Object.keys(medidas).length ? medidas : undefined,
+    proprietario: proprietario || undefined,
+    responsavel: responsavel || undefined,
+    rts: Array.isArray(rts) && rts.length ? rts : undefined
+  };
+
+  const draft = upsertProjectDraft(user.id, draftInput);
+
+  return res.json({
+    ok: true,
+    draftId: draft.id,
+    message: 'Rascunho de edição carregado com os dados da edificação.',
+    ...(warnings.length ? { warnings } : {})
+  });
 });
 
 app.post('/api/sync/now', requireSession, async (_req, res) => {

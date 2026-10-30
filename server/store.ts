@@ -377,8 +377,13 @@ export function resolveSession(sessionId: string | undefined) {
 }
 
 export function markUserFenixSessionExpired(userId: string, errorMessage?: string) {
+  const msg = errorMessage || 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.';
   db.prepare("UPDATE users SET fenix_session_expired = 1, last_fenix_auth_error = ? WHERE id = ?")
-    .run(errorMessage || 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.', userId);
+    .run(msg, userId);
+  try {
+    db.prepare("UPDATE fenix_connections SET status='reauth_required', updated_at=? WHERE data_user_id=?")
+      .run(new Date().toISOString(), userId);
+  } catch {}
 }
 
 export function clearUserFenixSessionExpired(userId: string) {

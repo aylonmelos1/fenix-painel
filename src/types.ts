@@ -36,10 +36,35 @@ export type Dashboard = {
 
 export type DocumentItem = { id: string; name: string; type: string; date?: string; available: boolean; source?: 'fenix'; processId?: string; kind?: 'certificate' | 'protocol' | 'dae' | 'notification'; daeId?: string; status?: string; availabilityMessage?: string };
 export type TimelineItem = { label: string; date?: string; done?: boolean; current?: boolean; pending?: boolean };
+
+export interface FenixProcessAction {
+  key:
+    | 'solicitar_vistoria'
+    | 'solicitar_revistoria'
+    | 'solicitar_reanalise'
+    | 'reavaliacao_renovacao'
+    | 'solicitar_renovacao'
+    | 'editar_projeto'
+    | 'cancelar_solicitacao'
+    | 'cancelar_processo'
+    | 'baixar_notificacao'
+    | 'baixar_certificado'
+    | 'baixar_protocolo';
+  label: string;
+  shortLabel: string;
+  icon: 'walk_transfer' | 'autorenew' | 'edit' | 'cloud_wine' | 'cloud_green' | 'cancel';
+  tone: 'wine' | 'green' | 'danger';
+  kind: 'download' | 'mutation' | 'edit_draft';
+  downloadUrl?: string;
+  confirmTitle?: string;
+  confirmMessage?: string;
+}
+
 export type ProcessDetail = {
   id: string; remoteId?: string; protocol: string; type: string; status: string; stage: string; updatedAt: string;
   notifiedBy?: string | null;
   documents: DocumentItem[]; timeline: TimelineItem[]; raw: unknown;
+  fenixActions?: FenixProcessAction[];
 };
 export type BuildingDetail = { building: Building & { use?: string; totalArea?: number | null; buildingArea?: number | null; areaToBeBuilt?: number | null; validUntil?: string; technicalFacts?: Array<{ label: string; value: string }> }; processes: ProcessDetail[] };
 

@@ -148,7 +148,29 @@ export class FenixClient {
     };
     const token = xsrf(this.jar, url.toString());
     if (token) headers['X-XSRF-TOKEN'] = token;
-    const result = await fetchBounded(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const result = await fetchBounded(url, { method: 'POST', headers, body: JSON.stringify(body) }, 5_000_000);
+    await storeCookies(result.response, url.toString(), this.jar);
+    if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
+    return result.body;
+  }
+
+  async postFormData(path: string, fields: Record<string, string | number | boolean | null | undefined>) {
+    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
+    const url = new URL(path, FENIX_ORIGIN);
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== null && v !== undefined) form.append(k, String(v));
+    }
+    const headers: Record<string, string> = {
+      Accept: 'application/json, text/plain, */*',
+      Origin: FENIX_ORIGIN,
+      Referer: `${FENIX_ORIGIN}/`,
+      Cookie: this.jar.getCookieStringSync(url.toString()),
+      'X-Requested-With': 'XMLHttpRequest'
+    };
+    const token = xsrf(this.jar, url.toString());
+    if (token) headers['X-XSRF-TOKEN'] = token;
+    const result = await fetchBounded(url, { method: 'POST', headers, body: form }, 5_000_000);
     await storeCookies(result.response, url.toString(), this.jar);
     if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
     return result.body;
@@ -161,7 +183,7 @@ const projectDetailsCache = new Map<string, { expiresAt: number; requestId: stri
 type TechnicalCertificateInfo = { filename: string; size: number };
 const certificateInfoCache = new Map<string, { expiresAt: number; info: TechnicalCertificateInfo | null }>();
 
-async function fenixClientForUser(userId: string) {
+export async function fenixClientForUser(userId: string) {
   const user = db.prepare('SELECT session_ciphertext FROM users WHERE id = ? AND demo = 0').get(userId) as { session_ciphertext: string | null } | undefined;
   if (!user?.session_ciphertext) throw new FenixError('Sessão Fênix não encontrada.');
   return new FenixClient(CookieJar.deserializeSync(JSON.parse(unseal(user.session_ciphertext))));
@@ -274,21 +296,82 @@ export async function getFenixEdificationProfile(userId: string, buildingId: str
   };
 }
 
+export async function getFenixRequestCertificate(userId: string, requestId: string | number, projectIdForCache?: string) {
+  const idNum = Number(requestId);
+  if (!Number.isFinite(idNum) || idNum <= 0) throw new FenixError('Identificador de solicitação inválido.', 404);
+  const client = await fenixClientForUser(userId);
+  let payload: any = null;
+  let encoded = '';
+  let providedName = '';
+
+  // 1. Tenta endpoint padrão de certificado de aprovação
+  try {
+    const response = await client.get(`/api/v1/solicitacoes/${encodeURIComponent(String(requestId))}/certificados/aprovacao`) as any;
+    payload = response?.data ?? response;
+    encoded = String(payload?.arquivo ?? '');
+    providedName = String(payload?.nome || payload?.nome_arquivo || 'certificado-de-aprovacao.pdf');
+  } catch {
+    // Falha no endpoint padrão de certificado; tenta fallback via /api/v1/request/download (Nuvem Vinho oficial)
+  }
+
+  // 2. Se não obteve arquivo válido, tenta fallback oficial via POST /api/v1/request/download
+  if (!encoded || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    try {
+      const fallbackResp = await client.post('/api/v1/request/download', {
+        solicitacao_id: idNum,
+        tipo_documento: null
+      }) as any;
+      payload = fallbackResp?.data ?? fallbackResp;
+      encoded = String(payload?.arquivo ?? '');
+      providedName = String(payload?.nome_arquivo || payload?.nome || 'certificado-de-aprovacao.pdf');
+    } catch {
+      // Rejeição nos dois
+    }
+  }
+
+  if (!encoded || encoded.length > 5_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    throw new FenixError('O Fênix não retornou um arquivo de certificado válido.', 404);
+  }
+  const content = Buffer.from(encoded, 'base64');
+  if (!content.length || content.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new FenixError('O arquivo retornado pelo Fênix não é um certificado PDF válido.', 502);
+  }
+  const cleanName = providedName.split(/[\\/]/).pop() || 'certificado-de-aprovacao.pdf';
+  const filename = cleanName.replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 120).replace(/\.+$/, '') || 'certificado-de-aprovacao.pdf';
+  const safeFilename = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
+  const info = { filename: safeFilename, size: content.length };
+  if (projectIdForCache) {
+    certificateInfoCache.set(`${userId}:${projectIdForCache}`, { expiresAt: Date.now() + 10 * 60_000, info });
+  }
+  return { ...info, content };
+}
+
 export async function getTechnicalProjectCertificate(userId: string, projectId: string) {
   const detail = await technicalProjectDetails(userId, projectId);
   if (!detail.requestId) throw new FenixError('O projeto não possui uma solicitação atual para consultar o certificado.', 404);
-  const response = await (await fenixClientForUser(userId)).get(`/api/v1/solicitacoes/${encodeURIComponent(detail.requestId)}/certificados/aprovacao`) as any;
+  return getFenixRequestCertificate(userId, detail.requestId, projectId);
+}
+
+export async function downloadFenixProtocolReport(userId: string, requestId: string | number) {
+  const idNum = Number(requestId);
+  if (!Number.isFinite(idNum) || idNum <= 0) throw new FenixError('Identificador de solicitação inválido.', 404);
+  const client = await fenixClientForUser(userId);
+  const response = await client.postFormData('/api/v1/gerarRelatorioProtocoloSolicitacao', {
+    solicitacao_id: idNum
+  }) as any;
   const payload = response?.data ?? response;
   const encoded = String(payload?.arquivo ?? '');
-  if (!encoded || encoded.length > 950_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new FenixError('O Fênix não retornou um arquivo de certificado válido.', 404);
+  if (!encoded || encoded.length > 5_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    throw new FenixError('O Fênix não retornou um relatório de protocolo disponível para esta solicitação.', 404);
+  }
   const content = Buffer.from(encoded, 'base64');
-  if (!content.length || content.subarray(0, 5).toString('ascii') !== '%PDF-') throw new FenixError('O arquivo retornado pelo Fênix não é um certificado PDF válido.', 502);
-  const providedName = String(payload?.nome || 'certificado-de-aprovacao.pdf').split(/[\\/]/).pop() || 'certificado-de-aprovacao.pdf';
-  const filename = providedName.replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 120).replace(/\.+$/, '') || 'certificado-de-aprovacao.pdf';
+  if (!content.length || content.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new FenixError('O arquivo de protocolo retornado pelo Fênix não é um PDF válido.', 502);
+  }
+  const providedName = String(payload?.nome_arquivo || `protocolo-${requestId}.pdf`).split(/[\\/]/).pop() || `protocolo-${requestId}.pdf`;
+  const filename = providedName.replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 120).replace(/\.+$/, '') || `protocolo-${requestId}.pdf`;
   const safeFilename = filename.toLowerCase().endsWith('.pdf') ? filename : `${filename}.pdf`;
-  const info = { filename: safeFilename, size: content.length };
-  certificateInfoCache.set(`${userId}:${projectId}`, { expiresAt: Date.now() + 10 * 60_000, info });
-  return { ...info, content };
+  return { filename: safeFilename, size: content.length, content };
 }
 
 export async function getTechnicalProjectCertificateInfo(userId: string, projectId: string): Promise<TechnicalCertificateInfo | null> {
@@ -640,7 +723,106 @@ function cleanLabel(value: unknown) {
     .replace(/\b\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g, '[telefone removido]');
 }
 
-function safeProcessPayload(process: any) {
+export interface FenixProcessMeta {
+  solicitacaoId?: number | null;
+  projetoTecnicoId?: number | null;
+  sptId?: number | null;
+  edificacaoId?: number | null;
+  statusSlug?: string | null;
+  tipoSolicitacaoId?: number | null;
+  tipoSolicitacaoSlug?: string | null;
+  tipoProjetoId?: number | null;
+  renovacao?: boolean;
+  responsavelId?: number | null;
+  numProjeto?: string | null;
+  ativo?: string | null;
+  evento?: string | null;
+  sptDataFinal?: string | null;
+  dataValidade?: string | null;
+  hasCertificadoExterno?: boolean;
+}
+
+export interface FenixProcessAction {
+  key:
+    | 'solicitar_vistoria'
+    | 'solicitar_revistoria'
+    | 'solicitar_reanalise'
+    | 'reavaliacao_renovacao'
+    | 'solicitar_renovacao'
+    | 'editar_projeto'
+    | 'cancelar_solicitacao'
+    | 'cancelar_processo'
+    | 'baixar_notificacao'
+    | 'baixar_certificado'
+    | 'baixar_protocolo';
+  label: string;
+  shortLabel: string;
+  icon: 'walk_transfer' | 'autorenew' | 'edit' | 'cloud_wine' | 'cloud_green' | 'cancel';
+  tone: 'wine' | 'green' | 'danger';
+  kind: 'download' | 'mutation' | 'edit_draft';
+  downloadUrl?: string;
+  confirmTitle?: string;
+  confirmMessage?: string;
+}
+
+export function extractFenixMeta(process: any): FenixProcessMeta {
+  if (!process || typeof process !== 'object') return {};
+  const numOrNull = (v: unknown): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const strOrNull = (v: unknown): string | null => {
+    if (v === null || v === undefined) return null;
+    const s = String(v).trim();
+    return s.length > 0 ? s : null;
+  };
+  const boolOrFalse = (v: unknown): boolean => {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v === 1;
+    if (typeof v === 'string') return v === 'true' || v === '1' || v === 'S' || v.toLowerCase() === 'sim';
+    return false;
+  };
+
+  const rawMeta = process.fenixMeta && typeof process.fenixMeta === 'object' ? process.fenixMeta : {};
+
+  const solicitacaoId = rawMeta.solicitacaoId !== undefined ? rawMeta.solicitacaoId : numOrNull(first(process, ['solicitacao_id', 'solicitacao.id', 'id_solicitacao', process.__source === 'request' ? 'id' : 'solicitacao_id'], null));
+  const projetoTecnicoId = rawMeta.projetoTecnicoId !== undefined ? rawMeta.projetoTecnicoId : numOrNull(first(process, ['projeto_tecnico_id', 'projeto_tecnico.id', 'id_projeto_tecnico', process.__source === 'technicalproject' ? 'id' : 'projeto_tecnico_id'], null));
+  const sptId = rawMeta.sptId !== undefined ? rawMeta.sptId : numOrNull(first(process, ['spt_id', 'spt.id', 'solicitacao_projeto_tecnico_id', 'spt.spt_id'], null));
+  const edificacaoId = rawMeta.edificacaoId !== undefined ? rawMeta.edificacaoId : numOrNull(first(process, ['edificacao_id', 'edificacao.id', 'edification_id', 'edification.id', 'imovel.id'], null));
+  const statusSlug = rawMeta.statusSlug !== undefined ? rawMeta.statusSlug : strOrNull(first(process, ['status_slug', 'status.slug', 'status.status_slug', 'slug_status'], null));
+  const tipoSolicitacaoId = rawMeta.tipoSolicitacaoId !== undefined ? rawMeta.tipoSolicitacaoId : numOrNull(first(process, ['tipo_solicitacao_id', 'tipo_solicitacao.id'], null));
+  const tipoSolicitacaoSlug = rawMeta.tipoSolicitacaoSlug !== undefined ? rawMeta.tipoSolicitacaoSlug : strOrNull(first(process, ['tipo_solicitacao_slug', 'tipo_solicitacao.slug', 'sigla'], null));
+  const tipoProjetoId = rawMeta.tipoProjetoId !== undefined ? rawMeta.tipoProjetoId : numOrNull(first(process, ['tipo_projeto_id', 'tipo_projeto.id', 'tipo_id', 'projeto_tecnico.tipo_projeto_id'], null));
+  const renovacao = rawMeta.renovacao !== undefined ? rawMeta.renovacao : boolOrFalse(first(process, ['renovacao', 'is_renovacao', 'fl_renovacao'], false));
+  const responsavelId = rawMeta.responsavelId !== undefined ? rawMeta.responsavelId : numOrNull(first(process, ['responsavel_id', 'responsavel.id', 'user_id', 'usuario_id'], null));
+  const numProjeto = rawMeta.numProjeto !== undefined ? rawMeta.numProjeto : strOrNull(first(process, ['num_projeto', 'n_projeto', 'numero_projeto', 'num_processo', 'projeto_tecnico.num_projeto'], null));
+  const ativo = rawMeta.ativo !== undefined ? rawMeta.ativo : strOrNull(first(process, ['ativo', 'fl_ativo'], null));
+  const evento = rawMeta.evento !== undefined ? rawMeta.evento : strOrNull(first(process, ['evento', 'fl_evento'], null));
+  const sptDataFinal = rawMeta.sptDataFinal !== undefined ? rawMeta.sptDataFinal : strOrNull(first(process, ['spt_data_final', 'spt.data_final', 'data_final'], null));
+  const dataValidade = rawMeta.dataValidade !== undefined ? rawMeta.dataValidade : strOrNull(first(process, ['data_validade', 'dt_validade', 'validade', 'validUntil'], null));
+  const hasCertificadoExterno = rawMeta.hasCertificadoExterno !== undefined ? rawMeta.hasCertificadoExterno : boolOrFalse(first(process, ['has_certificado_externo', 'tem_certificado_externo', 'certificado_externo'], false));
+
+  return {
+    solicitacaoId,
+    projetoTecnicoId,
+    sptId,
+    edificacaoId,
+    statusSlug,
+    tipoSolicitacaoId,
+    tipoSolicitacaoSlug,
+    tipoProjetoId,
+    renovacao,
+    responsavelId,
+    numProjeto,
+    ativo,
+    evento,
+    sptDataFinal,
+    dataValidade,
+    hasCertificadoExterno
+  };
+}
+
+export function safeProcessPayload(process: any) {
   const rawDocuments = first(process, ['documents', 'documentos', 'files', 'anexos'], []);
   const documents = (Array.isArray(rawDocuments) ? rawDocuments : []).map((doc: any) => typeof doc === 'string'
     ? cleanLabel(doc)
@@ -657,7 +839,234 @@ function safeProcessPayload(process: any) {
     done: Boolean(first(step, ['done', 'concluido'], false)),
     current: Boolean(first(step, ['current', 'atual'], false))
   }));
-  return { documents, timeline };
+  const fenixMeta = extractFenixMeta(process);
+  return { documents, timeline, fenixMeta };
+}
+
+export function computeFenixProcessActions(
+  paramsOrProcess: any,
+  maybeBuildingId?: string
+): FenixProcessAction[] {
+  const process = paramsOrProcess && paramsOrProcess.process ? paramsOrProcess.process : paramsOrProcess;
+  const buildingId = String(
+    (paramsOrProcess && paramsOrProcess.buildingId) || maybeBuildingId || process?.buildingId || process?.building_id || ''
+  );
+  if (!process || typeof process !== 'object') return [];
+
+  let payloadObj: any = {};
+  if (typeof process.payload === 'string') {
+    try { payloadObj = JSON.parse(process.payload); } catch {}
+  } else if (process.payload && typeof process.payload === 'object') {
+    payloadObj = process.payload;
+  } else if (process.raw && typeof process.raw === 'object') {
+    payloadObj = process.raw;
+  }
+
+  const fenixMeta: FenixProcessMeta = {
+    ...extractFenixMeta(process),
+    ...(payloadObj.fenixMeta || {}),
+    ...(process.fenixMeta || {})
+  };
+
+  const slugify = (text: string): string =>
+    String(text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+  const rawStatus = String(process.status || '');
+  const rawStage = String(process.stage || '');
+  let statusSlug = fenixMeta.statusSlug ? slugify(fenixMeta.statusSlug) : slugify(rawStatus);
+
+  if (!statusSlug || statusSlug === 'em-acompanhamento') {
+    if (/notificad.*vistoria/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'notificado-vistoria';
+    else if (/notificad/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'notificado';
+    else if (/homologad/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'homologado';
+    else if (/pendente.*doc/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'pendente-de-documentacao';
+    else if (/pendente.*pag/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'pendente-de-pagamento';
+    else if (/cadastrad/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'cadastrado';
+    else if (/cancelad/i.test(`${rawStatus} ${rawStage}`)) statusSlug = 'cancelado';
+  }
+
+  const tipoSolicitacaoId = fenixMeta.tipoSolicitacaoId ?? null;
+  const tipoSolicitacaoSlug = (fenixMeta.tipoSolicitacaoSlug || '').toLowerCase();
+  const processType = String(process.type || '');
+  const typeAndStage = `${processType} ${rawStage}`.toLowerCase();
+
+  const isVistoria =
+    (tipoSolicitacaoId !== null && [3, 4].includes(tipoSolicitacaoId)) ||
+    ['vistoria', 'revistoria'].includes(tipoSolicitacaoSlug) ||
+    (/\b(re)?vistoria\b/i.test(processType) && !/pts/i.test(processType));
+
+  const isPtsAvcb =
+    (tipoSolicitacaoId !== null && [6, 8].includes(tipoSolicitacaoId)) ||
+    /ptsavcb/i.test(processType) ||
+    (/pts/i.test(processType) && /avcb/i.test(processType));
+
+  const isAnalisePt =
+    (tipoSolicitacaoId !== null && [1, 2].includes(tipoSolicitacaoId)) ||
+    (/\ban[aá]lise\b/i.test(processType) && !/pts/i.test(processType)) ||
+    (!isVistoria && !isPtsAvcb && !/pts/i.test(processType) && (/^pt\b/i.test(processType) || /projeto t[eé]cnico/i.test(processType)));
+
+  const renovacao =
+    Boolean(fenixMeta.renovacao) ||
+    /renova[cç][aã]o/i.test(typeAndStage);
+
+  const protocol = String(process.protocol || '').trim();
+  const processId = String(process.id || '');
+
+  const actions: FenixProcessAction[] = [];
+
+  // 3. Ação Dinâmica Principal (1º botão à esquerda)
+  if (['notificado', 'notificado-vistoria', 'edit-reavaliacao-renovacao'].includes(statusSlug) && renovacao) {
+    actions.push({
+      key: 'reavaliacao_renovacao',
+      label: isVistoria ? 'Solicitar Revistoria da Renovação' : 'Solicitar Reanálise da Renovação',
+      shortLabel: isVistoria ? 'Revistoria Renov.' : 'Reanálise Renov.',
+      icon: 'autorenew',
+      tone: 'wine',
+      kind: 'mutation',
+      confirmTitle: 'Confirmar Reavaliação da Renovação',
+      confirmMessage: `Deseja ${isVistoria ? 'solicitar a revistoria da renovação' : 'solicitar a reanálise da renovação'} da solicitação ${protocol || 'deste processo'} diretamente no Fênix CBMBA?`
+    });
+  } else if (['notificado', 'notificado-vistoria'].includes(statusSlug) && !renovacao) {
+    if (isVistoria) {
+      actions.push({
+        key: 'solicitar_revistoria',
+        label: 'Solicitar Revistoria',
+        shortLabel: 'Solicitar Revistoria',
+        icon: 'walk_transfer',
+        tone: 'wine',
+        kind: 'mutation',
+        confirmTitle: 'Solicitar Revistoria no Fênix',
+        confirmMessage: 'Deseja gerar uma nova solicitação de Revistoria para este processo no Fênix CBMBA?'
+      });
+    } else if (statusSlug === 'notificado-vistoria' && isPtsAvcb) {
+      actions.push({
+        key: 'solicitar_reanalise',
+        label: 'Solicitar Reanálise',
+        shortLabel: 'Solicitar Reanálise',
+        icon: 'walk_transfer',
+        tone: 'wine',
+        kind: 'mutation',
+        confirmTitle: 'Solicitar Reanálise no Fênix',
+        confirmMessage: 'Deseja gerar uma nova solicitação de Reanálise para este processo no Fênix CBMBA?'
+      });
+    } else {
+      actions.push({
+        key: 'editar_projeto',
+        label: 'Editar Projeto Técnico',
+        shortLabel: 'Editar Projeto',
+        icon: 'edit',
+        tone: 'wine',
+        kind: 'edit_draft'
+      });
+    }
+  } else if (['cadastrado', 'comunicacao-analista-solicitante', 'em-correcao-protocolo', 'em-retificacao'].includes(statusSlug) && !isVistoria) {
+    actions.push({
+      key: 'editar_projeto',
+      label: 'Editar Projeto Técnico',
+      shortLabel: 'Editar Projeto',
+      icon: 'edit',
+      tone: 'wine',
+      kind: 'edit_draft'
+    });
+  } else if (['homologado', 'homologado-sap'].includes(statusSlug) && !renovacao && isAnalisePt && !fenixMeta.sptDataFinal) {
+    actions.push({
+      key: 'solicitar_vistoria',
+      label: 'Solicitar Vistoria',
+      shortLabel: 'Solicitar Vistoria',
+      icon: 'walk_transfer',
+      tone: 'wine',
+      kind: 'mutation',
+      confirmTitle: 'Solicitar Vistoria no Fênix',
+      confirmMessage: 'O projeto técnico está homologado na análise. Deseja gerar a solicitação de Vistoria no Fênix CBMBA?'
+    });
+  } else if (['homologado', 'edit-renovacao'].includes(statusSlug) && !isAnalisePt && fenixMeta.evento !== 'S') {
+    const validStr = fenixMeta.dataValidade || process.validUntil || '';
+    let shouldShowRenewal = false;
+    if (validStr) {
+      const validTime = Date.parse(validStr);
+      if (Number.isFinite(validTime)) {
+        const diffDays = (validTime - Date.now()) / 86_400_000;
+        if (diffDays <= 90) shouldShowRenewal = true;
+      }
+    }
+    if (shouldShowRenewal) {
+      actions.push({
+        key: 'solicitar_renovacao',
+        label: 'Solicitar Renovação',
+        shortLabel: 'Solicitar Renovação',
+        icon: 'autorenew',
+        tone: 'wine',
+        kind: 'mutation',
+        confirmTitle: 'Solicitar Renovação no Fênix',
+        confirmMessage: 'Deseja iniciar a solicitação de renovação desta licença no Fênix CBMBA?'
+      });
+    }
+  } else if (['pendente-de-documentacao', 'pendente-de-pagamento'].includes(statusSlug)) {
+    const isCancelReq = isVistoria || (renovacao && /pts/i.test(processType));
+    actions.push({
+      key: isCancelReq ? 'cancelar_solicitacao' : 'cancelar_processo',
+      label: isCancelReq ? 'Cancelar Solicitação' : 'Cancelar Processo',
+      shortLabel: 'Cancelar',
+      icon: 'cancel',
+      tone: 'danger',
+      kind: 'mutation',
+      confirmTitle: 'Atenção — Cancelamento no Fênix',
+      confirmMessage: 'O cancelamento com boleto(s) DAE pago(s) inviabilizará sua utilização em outros processos (exigindo pedido de estorno junto à SEFAZ-BA). Deseja realmente cancelar?'
+    });
+  }
+
+  // 4. Nuvem Vinho (cloud_wine — #71292a)
+  if (['notificado', 'notificado-vistoria'].includes(statusSlug)) {
+    actions.push({
+      key: 'baixar_notificacao',
+      label: 'Baixar Notificação',
+      shortLabel: 'Notificação',
+      icon: 'cloud_wine',
+      tone: 'wine',
+      kind: 'download',
+      downloadUrl: `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(processId)}/notification`
+    });
+  } else if (statusSlug === 'homologado') {
+    actions.push({
+      key: 'baixar_certificado',
+      label: 'Baixar Certificado',
+      shortLabel: 'Certificado',
+      icon: 'cloud_wine',
+      tone: 'wine',
+      kind: 'download',
+      downloadUrl: `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(processId)}/certificate`
+    });
+  }
+
+  // 5. Nuvem Verde (cloud_green — #4CAF50)
+  const excludedProtocolSlugs = [
+    'cadastrado',
+    'pendente-de-documentacao',
+    'pendente-de-pagamento',
+    'pagamento-confirmado',
+    'homologado-sap',
+    'cancelado',
+    'pendente-de-documentacao-sap'
+  ];
+  if (statusSlug && !excludedProtocolSlugs.includes(statusSlug)) {
+    actions.push({
+      key: 'baixar_protocolo',
+      label: 'Baixar Protocolo',
+      shortLabel: 'Protocolo',
+      icon: 'cloud_green',
+      tone: 'green',
+      kind: 'download',
+      downloadUrl: `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(processId)}/protocol`
+    });
+  }
+
+  return actions;
 }
 
 function safeBuildingPayload(building: any): Record<string, unknown> {
