@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   CircleAlert,
   ClipboardList,
-  Copy,
   ExternalLink,
   FileText,
   Flame,
@@ -20,7 +19,6 @@ import {
   LoaderCircle,
   Lock,
   MapPin,
-  Play,
   Plus,
   RefreshCw,
   Save,
@@ -627,15 +625,8 @@ export function ProjectDraftModal({
   const [cnaeLoading, setCnaeLoading] = useState(false);
   const [cnaeNotice, setCnaeNotice] = useState<{ message: string; type: 'success' | 'warning' | 'error' } | null>(null);
 
-  // Estados de simulação e envio
+  // Estados de salvamento e envio
   const [saving, setSaving] = useState(false);
-  const [simulating, setSimulating] = useState(false);
-  const [simulationResult, setSimulationResult] = useState<{
-    ok: boolean;
-    fenixPayload?: Record<string, unknown>;
-    validation?: ValidationResult;
-  } | null>(null);
-  const [copiedPayload, setCopiedPayload] = useState(false);
   const [confirmKey, setConfirmKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submissionResult, setSubmissionResult] = useState<{
@@ -1083,7 +1074,6 @@ export function ProjectDraftModal({
       id: crypto.randomUUID(),
       name: `Rascunho ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
     });
-    setSimulationResult(null);
     setSubmissionResult(null);
     setConfirmKey('');
     setStep(1);
@@ -1098,7 +1088,6 @@ export function ProjectDraftModal({
     };
     setCurrentDraft(null);
     setFormData(valSatData);
-    setSimulationResult(null);
     setSubmissionResult(null);
     setConfirmKey('');
     setStep(1);
@@ -1135,15 +1124,6 @@ export function ProjectDraftModal({
       loadedData.form_mode = [1, 2, 3].includes(loadedData.tipo_projeto_id) ? 'pt' : 'pts';
     }
     setFormData(loadedData);
-    if (draft.lastSimulation) {
-      setSimulationResult({
-        ok: draft.lastSimulation.ok,
-        fenixPayload: draft.lastSimulation.fenixPayload,
-        validation: draft.lastSimulation.validation
-      });
-    } else {
-      setSimulationResult(null);
-    }
     setSubmissionResult(draft.lastSubmission ? { ok: draft.lastSubmission.ok, data: draft.lastSubmission.result, error: draft.lastSubmission.error } : null);
     setConfirmKey('');
     setStep(1);
@@ -1649,53 +1629,6 @@ export function ProjectDraftModal({
     showToast('Medidas oficiais CBMBA marcadas para a edificação.', 'success');
   };
 
-  // Simular Dry-Run
-  const handleSimulate = async () => {
-    // Primeiro salva o rascunho
-    const saved = await handleSaveDraft(true);
-    const draftId = saved?.id || currentDraft?.id || formData.id;
-    if (!draftId) {
-      showToast('Salve o rascunho antes de simular.', 'error');
-      return;
-    }
-
-    setSimulating(true);
-    setSimulationResult(null);
-    try {
-      const res = await api<{
-        ok: boolean;
-        draft: DraftRecord;
-        validation: ValidationResult;
-        fenixPayload: Record<string, unknown>;
-      }>(`/api/drafts/${encodeURIComponent(draftId)}/simulate`, {
-        method: 'POST'
-      });
-
-      setSimulationResult({
-        ok: res.ok,
-        validation: res.validation,
-        fenixPayload: res.fenixPayload
-      });
-      setCurrentDraft(res.draft);
-      showToast(res.ok ? 'Simulação Dry-Run concluída com sucesso!' : 'Simulação concluída com pendências.', res.ok ? 'success' : 'info');
-      void fetchDrafts();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Falha ao executar simulação.', 'error');
-    } finally {
-      setSimulating(false);
-    }
-  };
-
-  // Copiar Payload JSON
-  const handleCopyPayload = () => {
-    if (!simulationResult?.fenixPayload) return;
-    const jsonStr = JSON.stringify(simulationResult.fenixPayload, null, 2);
-    void navigator.clipboard.writeText(jsonStr);
-    setCopiedPayload(true);
-    window.setTimeout(() => setCopiedPayload(false), 3000);
-    showToast('JSON do Payload copiado para a área de transferência!', 'success');
-  };
-
   // Envio Seguro para o Fênix Real
   const handleSubmitFenix = async () => {
     const draftId = currentDraft?.id || formData.id;
@@ -1972,7 +1905,7 @@ export function ProjectDraftModal({
                 <span className="draft-date">Atualizado em {new Date(draft.updatedAt).toLocaleString('pt-BR')}</span>
               </div>
               <span className={`status-badge status-${isSub ? 'submitted' : isSim ? 'simulated' : 'draft'}`}>
-                {isSub ? 'Enviado ao Fênix' : isSim ? 'Simulado (Dry-Run)' : 'Rascunho'}
+                {isSub ? 'Enviado ao Fênix' : isSim ? 'Validado' : 'Rascunho'}
               </span>
             </div>
 
@@ -2057,7 +1990,7 @@ export function ProjectDraftModal({
         <span className="step-circle">3</span>
         <span className="step-label">
           <strong>Validação & Envio</strong>
-          <small>Dry-Run e Transmissão</small>
+          <small>Revisão e Transmissão</small>
         </span>
       </button>
     </>
@@ -3996,7 +3929,7 @@ export function ProjectDraftModal({
                 </div>
               )}
 
-              {/* ETAPA 3: VALIDAÇÃO, SIMULAÇÃO DRY-RUN & ENVIO */}
+              {/* ETAPA 3: VALIDAÇÃO, REVISÃO & ENVIO */}
               {step === 3 && (
                 <div className="step-panel animate-fade-in">
                   {/* Card Informativo de Documentos Exigidos pelo Fênix pós-protocolo */}
@@ -4137,66 +4070,6 @@ export function ProjectDraftModal({
                       </div>
                     )}
                   </div>
-
-                  {/* Ação de Simulação Dry-Run */}
-                  <div className="simulation-hero-card">
-                    <div className="simulation-intro">
-                      <div className="shield-icon-circle">
-                        <ShieldCheck size={28} />
-                      </div>
-                      <div>
-                        <h3>Simulação Dry-Run (100% Segura e Local)</h3>
-                        <p>
-                          Gera o payload exato no formato esperado pelo serviço do Fênix sem enviar dados à API pública do CBMBA.
-                          Permite auditar a estrutura completa antes de qualquer ação.
-                        </p>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="button button-teal button-lg simulate-button"
-                      onClick={() => void handleSimulate()}
-                      disabled={simulating || saving}
-                    >
-                      {simulating ? (
-                        <>
-                          <LoaderCircle size={18} className="spin" /> Executando Dry-Run...
-                        </>
-                      ) : (
-                        <>
-                          <Play size={18} /> Simular Envio (Dry-Run — 100% Seguro)
-                        </>
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Painel do Payload Gerado */}
-                  {simulationResult && (
-                    <div className="editor-card animate-fade-in">
-                      <div className="card-heading flex-between">
-                        <div className="flex-row items-center gap-2">
-                          <CheckCircle2 size={18} className="text-green" />
-                          <h4>Payload Fênix CBMBA Gerado</h4>
-                          <span className="badge-tag">POST /api/v1/technicalproject</span>
-                        </div>
-                        <button
-                          type="button"
-                          className="button button-outline button-sm"
-                          onClick={handleCopyPayload}
-                        >
-                          {copiedPayload ? <Check size={14} className="text-green" /> : <Copy size={14} />}
-                          {copiedPayload ? 'Copiado!' : 'Copiar JSON'}
-                        </button>
-                      </div>
-
-                      <div className="json-viewer-wrap">
-                        <pre className="json-code">
-                          {JSON.stringify(simulationResult.fenixPayload, null, 2)}
-                        </pre>
-                      </div>
-                    </div>
-                  )}
 
                   {/* Trava de Segurança e Transmissão para o Fênix Real */}
                   <div className="secure-submission-card">
@@ -4343,7 +4216,7 @@ export function ProjectDraftModal({
             <p>
               {view === 'list'
                 ? 'Prepare rascunhos locais, consulte o enquadramento IT-14 por CNPJ e valide tudo antes de enviar ao Corpo de Bombeiros.'
-                : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação e Endereço' : step === 2 ? 'Projeto Técnico, Ocupação e Medidas' : 'Simulação Dry-Run e Envio Protegido'}`}
+                : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação e Endereço' : step === 2 ? 'Projeto Técnico, Ocupação e Medidas' : 'Revisão Final e Envio ao Fênix'}`}
             </p>
           </div>
           <div className="page-heading-actions">
@@ -4448,7 +4321,7 @@ export function ProjectDraftModal({
               <p>
                 {view === 'list'
                   ? 'Gerencie rascunhos locais com validação prévia e transmissão segura para o Corpo de Bombeiros.'
-                  : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação & Endereço' : step === 2 ? 'Projeto Técnico & Enquadramento' : 'Validação, Simulação Dry-Run & Envio'}`}
+                  : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação & Endereço' : step === 2 ? 'Projeto Técnico & Enquadramento' : 'Validação, Revisão & Envio'}`}
               </p>
             </div>
           </div>
@@ -4467,7 +4340,7 @@ export function ProjectDraftModal({
                   type="button"
                   className="button button-outline button-sm"
                   onClick={() => setView('list')}
-                  disabled={saving || simulating || submitting}
+                  disabled={saving || submitting}
                   title="Voltar para a lista de rascunhos"
                 >
                   <ArrowLeft size={14} /> Lista de Rascunhos
@@ -4476,7 +4349,7 @@ export function ProjectDraftModal({
                   type="button"
                   className="button button-teal button-sm"
                   onClick={() => void handleSaveDraft()}
-                  disabled={saving || simulating || submitting}
+                  disabled={saving || submitting}
                 >
                   {saving ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} Salvar Rascunho
                 </button>
@@ -4487,7 +4360,7 @@ export function ProjectDraftModal({
               className="icon-button"
               aria-label="Fechar"
               onClick={onClose}
-              disabled={saving || simulating || submitting}
+              disabled={saving || submitting}
               title="Fechar"
             >
               <X size={20} />
