@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFenixTechnicalProjectUpdatePayload } from './fenix-project-edit.js';
+import {
+  buildFenixTechnicalProjectUpdatePayload,
+  resolveFenixBuildingRemoteId,
+  resolveFenixTechnicalProjectRemoteId
+} from './fenix-project-edit.js';
 
 const input = {
   form_mode: 'pts' as const,
@@ -86,4 +90,33 @@ test('edit payload refuses invalid or missing official target ids', () => {
   assert.equal(missingBuilding.valid, false);
   assert.equal(missingBuilding.payload, null);
   assert.match(missingBuilding.errors[0] ?? '', /ID da edificação/);
+});
+
+test('resolves official ids embedded in the primary-account local keys', () => {
+  assert.equal(resolveFenixTechnicalProjectRemoteId({ id: 'technicalproject:12345', remote_id: null }), '12345');
+  assert.equal(resolveFenixBuildingRemoteId({ id: '90210', remote_id: null }), '90210');
+});
+
+test('resolves linked-account ids only when the namespace and stored remote id agree', () => {
+  assert.equal(resolveFenixTechnicalProjectRemoteId({
+    id: 'technicalproject:connection-a:12345', remote_id: '12345', source_connection_id: 'connection-a'
+  }), '12345');
+  assert.equal(resolveFenixBuildingRemoteId({
+    id: 'linked:connection-a:building:90210', remote_id: '90210', source_connection_id: 'connection-a'
+  }), '90210');
+  assert.equal(resolveFenixTechnicalProjectRemoteId({
+    id: 'technicalproject:connection-a:12345', remote_id: '54321', source_connection_id: 'connection-a'
+  }), null);
+  assert.equal(resolveFenixBuildingRemoteId({
+    id: 'linked:connection-a:building:90210', remote_id: '54321', source_connection_id: 'connection-a'
+  }), null);
+});
+
+test('rejects unresolved, malformed, and mismatched primary-account identities', () => {
+  assert.equal(resolveFenixTechnicalProjectRemoteId({ id: 'technicalproject:not-numeric', remote_id: null }), null);
+  assert.equal(resolveFenixTechnicalProjectRemoteId({ id: 'technicalproject:12345', remote_id: '54321' }), null);
+  assert.equal(resolveFenixBuildingRemoteId({ id: 'local-building-id', remote_id: null }), null);
+  assert.equal(resolveFenixTechnicalProjectRemoteId({
+    id: 'technicalproject:connection-a:12345', remote_id: null, source_connection_id: 'connection-a'
+  }), null);
 });

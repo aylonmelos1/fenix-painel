@@ -4,6 +4,57 @@ import { buildAndValidateFenixProjectPayload, type ProjectDraftInput } from './p
 type FenixProjectUpdatePayload = Record<string, unknown> & { id: number; edificacao_id: number };
 type FenixProjectUpdateResult = { id: number; num_projeto: string; edificacao_id: number; solicitacao_id?: number };
 
+type SyncedFenixIdentity = {
+  id: unknown;
+  remote_id?: unknown;
+  source_connection_id?: unknown;
+};
+
+function validRemoteId(value: string) {
+  const parsed = Number(value);
+  return /^\d+$/.test(value) && Number.isSafeInteger(parsed) && parsed > 0;
+}
+
+export function resolveFenixTechnicalProjectRemoteId(process: SyncedFenixIdentity): string | null {
+  const id = String(process.id || '');
+  const connectionId = String(process.source_connection_id || '');
+  const storedRemoteId = String(process.remote_id || '').trim();
+  let embeddedRemoteId = '';
+
+  if (!connectionId) {
+    if (!id.startsWith('technicalproject:')) return null;
+    embeddedRemoteId = id.slice('technicalproject:'.length);
+    if (embeddedRemoteId.includes(':')) return null;
+    if (storedRemoteId && storedRemoteId !== embeddedRemoteId) return null;
+  } else {
+    const prefix = `technicalproject:${connectionId}:`;
+    if (!id.startsWith(prefix) || !storedRemoteId) return null;
+    embeddedRemoteId = id.slice(prefix.length);
+    if (embeddedRemoteId !== storedRemoteId) return null;
+  }
+
+  return validRemoteId(embeddedRemoteId) ? embeddedRemoteId : null;
+}
+
+export function resolveFenixBuildingRemoteId(building: SyncedFenixIdentity): string | null {
+  const id = String(building.id || '');
+  const connectionId = String(building.source_connection_id || '');
+  const storedRemoteId = String(building.remote_id || '').trim();
+  let embeddedRemoteId = '';
+
+  if (!connectionId) {
+    embeddedRemoteId = id;
+    if (storedRemoteId && storedRemoteId !== embeddedRemoteId) return null;
+  } else {
+    const prefix = `linked:${connectionId}:building:`;
+    if (!id.startsWith(prefix) || !storedRemoteId) return null;
+    embeddedRemoteId = id.slice(prefix.length);
+    if (embeddedRemoteId !== storedRemoteId) return null;
+  }
+
+  return validRemoteId(embeddedRemoteId) ? embeddedRemoteId : null;
+}
+
 function record(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }

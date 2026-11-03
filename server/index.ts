@@ -11,6 +11,7 @@ import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSett
 import { addProcessDocumentsToWebhook, computeFenixProcessActions, downloadFenixProtocolReport, FenixError, fenixClientForUser, getFenixEdificationProfile, getFenixRequestCertificate, getFenixRequestNotification, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, findFenixTechnicalProjectIdByNumber, verifyFenixTechnicalProjectSubmission, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption, type FenixProcessAction, type FenixProcessMeta } from './fenix.js';
 import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, isProjectEditDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, streamDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type ProjectDraftMetadata, type DraftAiAssistantRequest } from './project-drafts.js';
 import { buildFenixTechnicalProjectUpdatePayload, submitFenixTechnicalProjectUpdate, verifyFenixTechnicalProjectUpdate } from './fenix-project-edit.js';
+import { resolveFenixBuildingRemoteId, resolveFenixTechnicalProjectRemoteId } from './fenix-project-edit.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
@@ -1164,9 +1165,10 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
       }
       const building = ownedBuilding(res.locals.user.id, metadata.sourceBuildingId);
       const process = ownedProcess(res.locals.user.id, metadata.sourceProcessId, metadata.sourceBuildingId);
-      const linkedProjectId = String(process?.id || '').startsWith('technicalproject:') ? String(process.id).slice('technicalproject:'.length) : '';
-      if (!building || !process || linkedProjectId !== metadata.targetProjectId || String(process.remote_id || '') !== metadata.targetProjectId
-        || String(building.remote_id || '') !== metadata.targetBuildingId
+      const linkedProjectId = process ? resolveFenixTechnicalProjectRemoteId(process) : null;
+      const linkedBuildingId = building ? resolveFenixBuildingRemoteId(building) : null;
+      if (!building || !process || linkedProjectId !== metadata.targetProjectId
+        || linkedBuildingId !== metadata.targetBuildingId
         || (building.source_connection_id || null) !== (metadata.sourceConnectionId || null)
         || (process.source_connection_id || null) !== (metadata.sourceConnectionId || null)) {
         return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_MISMATCH', error: 'A edificação e o Projeto Técnico selecionados não correspondem mais às relações sincronizadas. Recarregue a edição antes de salvar.' });
@@ -1361,9 +1363,10 @@ app.post('/api/drafts/:id/verify-submission', requireSession, async (req, res) =
     }
     const building = ownedBuilding(userId, metadata.sourceBuildingId);
     const process = ownedProcess(userId, metadata.sourceProcessId, metadata.sourceBuildingId);
-    const linkedProjectId = String(process?.id || '').startsWith('technicalproject:') ? String(process.id).slice('technicalproject:'.length) : '';
-    if (!building || !process || linkedProjectId !== metadata.targetProjectId || String(process.remote_id || '') !== metadata.targetProjectId
-      || String(building.remote_id || '') !== metadata.targetBuildingId
+    const linkedProjectId = process ? resolveFenixTechnicalProjectRemoteId(process) : null;
+    const linkedBuildingId = building ? resolveFenixBuildingRemoteId(building) : null;
+    if (!building || !process || linkedProjectId !== metadata.targetProjectId
+      || linkedBuildingId !== metadata.targetBuildingId
       || (building.source_connection_id || null) !== (metadata.sourceConnectionId || null)
       || (process.source_connection_id || null) !== (metadata.sourceConnectionId || null)) {
       return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_MISMATCH', error: 'As relações locais já não confirmam a edificação e o projeto desta edição.' });
@@ -2583,12 +2586,14 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
   if ((process.source_connection_id || null) !== (building.source_connection_id || null)) {
     return res.status(409).json({ error: 'O processo e a edificação não pertencem à mesma conta Fênix.' });
   }
-  const localProjectId = String(process.id || '').startsWith('technicalproject:')
-    ? String(process.id).slice('technicalproject:'.length)
-    : '';
-  const storedRemoteProjectId = process.remote_id ? String(process.remote_id) : '';
-  if (!localProjectId) return res.status(409).json({ error: 'A edição local só pode ser preparada a partir de um Projeto Técnico identificado.' });
-  if (!user.demo && (!storedRemoteProjectId || storedRemoteProjectId !== localProjectId)) {
+  const isTechnicalProject = String(process.id || '').startsWith('technicalproject:');
+  const storedRemoteProjectId = resolveFenixTechnicalProjectRemoteId(process);
+  const storedRemoteBuildingId = resolveFenixBuildingRemoteId(building);
+  if (!isTechnicalProject) return res.status(409).json({ error: 'A edição local só pode ser preparada a partir de um Projeto Técnico identificado.' });
+  if (!user.demo && !storedRemoteBuildingId) {
+    return res.status(409).json({ error: 'O ID oficial da edificação não pôde ser confirmado com a relação sincronizada.' });
+  }
+  if (!user.demo && !storedRemoteProjectId) {
     return res.status(409).json({ error: 'O ID oficial do Projeto Técnico não pôde ser confirmado com a relação sincronizada.' });
   }
   let upstreamEdificationConfirmed = false;
@@ -2602,12 +2607,12 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
   if (!user.demo && building.data_user_id) {
     try {
       const client = await fenixClientForUser(building.data_user_id);
-      if (building.remote_id) {
+      if (storedRemoteBuildingId) {
         try {
-          const resp = await client.get(`/api/v1/edifications/${encodeURIComponent(building.remote_id)}`) as any;
+          const resp = await client.get(`/api/v1/edifications/${encodeURIComponent(storedRemoteBuildingId)}`) as any;
           upstreamEdification = resp?.data?.edification ?? resp?.data?.edification_data ?? resp?.data ?? resp;
           const returnedBuildingId = String(upstreamEdification?.id ?? upstreamEdification?.edificacao_id ?? '').trim();
-          upstreamEdificationConfirmed = returnedBuildingId === String(building.remote_id);
+          upstreamEdificationConfirmed = returnedBuildingId === storedRemoteBuildingId;
           if (!upstreamEdificationConfirmed) {
             upstreamEdification = null;
             warnings.push('O Fênix não confirmou o ID da edificação consultada; o rascunho permanecerá apenas local.');
@@ -2653,7 +2658,7 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
 
   const name = `Edição · ${building.reference || 'Edificação'} (${process.protocol || 'S/N'})`;
   const edificacao_mode = 'existing' as const;
-  const edificacao_id = Number(building.remote_id) || null;
+  const edificacao_id = Number(storedRemoteBuildingId) || null;
 
   // Endereço
   const cep = String(ed?.address?.zip_code || ed?.address?.cep || ed?.cep || localBuildingPayload?.cep || '').replace(/\D/g, '');
@@ -2873,7 +2878,7 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
     sourceBuildingId: building.id,
     sourceProcessId: process.id,
     sourceConnectionId: building.source_connection_id || null,
-    targetBuildingId: building.remote_id ? String(building.remote_id) : null,
+    targetBuildingId: storedRemoteBuildingId,
     targetProjectId,
     targetProjectNumber: String(process.protocol || '').trim() || null
   };
