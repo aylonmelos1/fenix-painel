@@ -154,6 +154,22 @@ export class FenixClient {
     return result.body;
   }
 
+  async put(path: string, body: Record<string, unknown>) {
+    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
+    const url = new URL(path, FENIX_ORIGIN);
+    const headers: Record<string, string> = {
+      Accept: 'application/json', 'Content-Type': 'application/json', Origin: FENIX_ORIGIN,
+      Referer: `${FENIX_ORIGIN}/`, Cookie: this.jar.getCookieStringSync(url.toString()),
+      'X-Requested-With': 'XMLHttpRequest'
+    };
+    const token = xsrf(this.jar, url.toString());
+    if (token) headers['X-XSRF-TOKEN'] = token;
+    const result = await fetchBounded(url, { method: 'PUT', headers, body: JSON.stringify(body) }, 5_000_000);
+    await storeCookies(result.response, url.toString(), this.jar);
+    if (!result.response.ok) throw new FenixError(`Atualização no Fênix retornou HTTP ${result.response.status}.`, result.response.status, retryAfterMs(result.response));
+    return result.body;
+  }
+
   async postFormData(path: string, fields: Record<string, string | number | boolean | null | undefined>) {
     if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
     const url = new URL(path, FENIX_ORIGIN);
@@ -958,8 +974,8 @@ export function computeFenixProcessActions(
     } else {
       actions.push({
         key: 'editar_projeto',
-        label: 'Editar Projeto Técnico',
-        shortLabel: 'Editar Projeto',
+        label: 'Preparar rascunho local do projeto',
+        shortLabel: 'Rascunho local',
         icon: 'edit',
         tone: 'wine',
         kind: 'edit_draft'
@@ -968,8 +984,8 @@ export function computeFenixProcessActions(
   } else if (['cadastrado', 'comunicacao-analista-solicitante', 'em-correcao-protocolo', 'em-retificacao'].includes(statusSlug) && !isVistoria) {
     actions.push({
       key: 'editar_projeto',
-      label: 'Editar Projeto Técnico',
-      shortLabel: 'Editar Projeto',
+      label: 'Preparar rascunho local do projeto',
+      shortLabel: 'Rascunho local',
       icon: 'edit',
       tone: 'wine',
       kind: 'edit_draft'
@@ -1420,8 +1436,12 @@ export async function lookupFenixCnae(
 
 export async function submitFenixTechnicalProject(
   userId: string,
-  payload: Record<string, unknown>
-): Promise<{ id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number }> {
+  payload: Record<string, unknown>,
+  onProjectId?: (result: { id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number }) => void
+): Promise<
+  | { verification: 'confirmed'; result: { id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number } }
+  | { verification: 'pending'; result?: Partial<{ id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number }>; error: string }
+> {
   const user = db.prepare('SELECT demo, session_ciphertext FROM users WHERE id = ?').get(userId) as
     | { demo: number; session_ciphertext: string | null }
     | undefined;
@@ -1429,26 +1449,121 @@ export async function submitFenixTechnicalProject(
 
   if (user.demo) {
     const fakeId = Math.floor(80000 + Math.random() * 19000);
-    const fakeZip = (payload.address as any)?.zip_code || '45355000';
-    return {
+    const fakeZip = (payload.address as any)?.zip_code || '00000000';
+    return { verification: 'confirmed', result: {
       id: fakeId,
-      num_projeto: `020863/${fakeZip}/2026`,
+      num_projeto: `DEMO-${fakeId}/${fakeZip}/${new Date().getFullYear()}`,
       edificacao_id: Math.floor(90000 + Math.random() * 10000),
       solicitacao_id: Math.floor(190000 + Math.random() * 10000)
-    };
+    } };
   }
 
   const client = await fenixClientForUser(userId);
-  const result = (await client.post('/api/v1/technicalproject', payload)) as any;
-  const data = result?.data ?? result;
-  if (!data || !data.id) {
-    throw new FenixError(result?.message || 'Falha ao cadastrar Projeto Técnico no Fênix.', 502);
+  let response: any;
+  try {
+    response = await client.post('/api/v1/technicalproject', payload) as any;
+  } catch (error) {
+    // A network failure or server error can happen after Fênix accepted the
+    // write. Keep the draft locked for read-after-write verification instead
+    // of allowing a second POST.
+    if (error instanceof FenixError && error.status !== undefined && error.status >= 400 && error.status < 500 && ![408, 409, 425, 429].includes(error.status)) throw error;
+    return {
+      verification: 'pending',
+      error: 'O resultado do envio ao Fênix ficou incerto. Consulte a confirmação antes de tentar novamente.'
+    };
   }
-  return {
-    id: Number(data.id),
-    num_projeto: String(data.num_projeto || ''),
-    edificacao_id: data.edificacao_id ? Number(data.edificacao_id) : undefined,
-    solicitacao_id: data.solicitacao_id ? Number(data.solicitacao_id) : undefined
+
+  const data = response?.data?.technicalproject ?? response?.data?.projeto_tecnico ?? response?.data ?? response;
+  const rawId = first(data, ['id', 'projeto_tecnico_id', 'technical_project_id'], null);
+  const projectId = Number(rawId);
+  const partialResult = {
+    ...(Number.isSafeInteger(projectId) && projectId > 0 ? { id: projectId } : {}),
+    num_projeto: String(first(data, ['num_projeto', 'n_projeto', 'numero_projeto'], '')),
+    ...(Number(first(data, ['edificacao_id', 'edification_id'], 0)) > 0 ? { edificacao_id: Number(first(data, ['edificacao_id', 'edification_id'], 0)) } : {}),
+    ...(Number(first(data, ['solicitacao_id', 'solicitacao.id'], 0)) > 0 ? { solicitacao_id: Number(first(data, ['solicitacao_id', 'solicitacao.id'], 0)) } : {})
   };
+  if (!partialResult.id) {
+    return {
+      verification: 'pending', result: partialResult,
+      error: 'O Fênix respondeu ao envio sem um ID de projeto verificável. Consulte a confirmação antes de tentar novamente.'
+    };
+  }
+
+  const result = partialResult as { id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number };
+  try { onProjectId?.(result); } catch { /* read-after-write must still run after an accepted POST */ }
+
+  try {
+    const expectedBuildingId = Number(payload.edificacao_id);
+    const expected = {
+      ...result,
+      ...(Number.isSafeInteger(expectedBuildingId) && expectedBuildingId > 0 ? { edificacao_id: expectedBuildingId } : {})
+    };
+    const verified = await verifyFenixTechnicalProjectSubmission(userId, result.id, expected);
+    if (String(payload.edificacao_id || '').toLowerCase() === 'new' && !(Number(verified.edificacao_id) > 0)) {
+      throw new FenixError('O Fênix confirmou o Projeto Técnico, mas a leitura não informou o ID da nova edificação vinculada.', 409);
+    }
+    return { verification: 'confirmed', result: { ...result, ...verified } };
+  } catch {
+    return {
+      verification: 'pending', result,
+      error: 'O projeto foi aceito pelo Fênix, mas a leitura de confirmação ainda não comprovou o cadastro. Consulte novamente antes de tentar qualquer novo envio.'
+    };
+  }
+}
+
+function normalizedTechnicalProjectResult(value: any, fallbackId?: number) {
+  let project = value?.data?.technicalproject ?? value?.data?.projeto_tecnico ?? value?.data ?? value;
+  if (project?.technicalproject && typeof project.technicalproject === 'object') project = project.technicalproject;
+  if (project?.projeto_tecnico && typeof project.projeto_tecnico === 'object') project = project.projeto_tecnico;
+  if (!project || typeof project !== 'object' || Array.isArray(project) || Object.keys(project).length === 0) {
+    throw new FenixError('O Fênix ainda não confirmou o Projeto Técnico.', 404);
+  }
+  const rawId = first(project, ['id', 'projeto_tecnico_id', 'technical_project_id'], fallbackId);
+  const id = Number(rawId);
+  if (!Number.isSafeInteger(id) || id <= 0 || (fallbackId && id !== fallbackId)) {
+    throw new FenixError('A leitura do Fênix não corresponde ao ID do Projeto Técnico enviado.', 409);
+  }
+  const rawRequestId = first(project, ['solicitacao_id', 'solicitacao_atual.id', 'request_id'], null);
+  const rawBuildingId = first(project, ['edificacao_id', 'edificacao.id', 'edification_id', 'edification.id'], null);
+  return {
+    id,
+    num_projeto: String(first(project, ['num_projeto', 'n_projeto', 'numero_projeto'], '')),
+    ...(Number(rawBuildingId) > 0 ? { edificacao_id: Number(rawBuildingId) } : {}),
+    ...(Number(rawRequestId) > 0 ? { solicitacao_id: Number(rawRequestId) } : {})
+  };
+}
+
+export async function verifyFenixTechnicalProjectSubmission(
+  userId: string,
+  projectId: number,
+  expected?: Partial<{ id: number; num_projeto: string; edificacao_id: number; solicitacao_id: number }>
+) {
+  if (!Number.isSafeInteger(projectId) || projectId <= 0) throw new FenixError('ID do Projeto Técnico inválido para verificação.', 400);
+  const client = await fenixClientForUser(userId);
+  const response = await client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(String(projectId))}`);
+  const verified = normalizedTechnicalProjectResult(response, projectId);
+  if (expected?.num_projeto && expected.num_projeto !== verified.num_projeto) {
+    throw new FenixError('O número do Projeto Técnico retornado pelo Fênix não corresponde ao envio.', 409);
+  }
+  for (const relation of ['edificacao_id', 'solicitacao_id'] as const) {
+    const expectedId = Number(expected?.[relation]);
+    if (!Number.isSafeInteger(expectedId) || expectedId <= 0) continue;
+    const verifiedId = Number(verified[relation]);
+    if (!Number.isSafeInteger(verifiedId) || verifiedId !== expectedId) {
+      throw new FenixError(`A leitura do Fênix não confirmou o vínculo ${relation} do Projeto Técnico.`, 409);
+    }
+  }
+  return verified;
+}
+
+export async function findFenixTechnicalProjectIdByNumber(userId: string, projectNumber: string): Promise<number | null> {
+  const expected = projectNumber.trim();
+  if (!expected) return null;
+  const client = await fenixClientForUser(userId);
+  const rows = await allRecords(client, '/api/v1/technicalproject', {});
+  const matches = rows.filter((row) => String(first(row, ['num_projeto', 'n_projeto', 'numero_projeto'], '')).trim() === expected);
+  if (matches.length !== 1) return null;
+  const id = Number(first(matches[0], ['id', 'projeto_tecnico_id', 'technical_project_id'], 0));
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 

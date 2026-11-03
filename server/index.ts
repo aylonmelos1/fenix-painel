@@ -8,8 +8,9 @@ import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
 import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSetting, getSetting, getUserFenixSession, markUserFenixSessionExpired, resolveSession, seal, setSetting, unseal } from './store.js';
-import { addProcessDocumentsToWebhook, computeFenixProcessActions, downloadFenixProtocolReport, FenixError, fenixClientForUser, getFenixEdificationProfile, getFenixRequestCertificate, getFenixRequestNotification, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption, type FenixProcessAction, type FenixProcessMeta } from './fenix.js';
-import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, streamDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type DraftAiAssistantRequest } from './project-drafts.js';
+import { addProcessDocumentsToWebhook, computeFenixProcessActions, downloadFenixProtocolReport, FenixError, fenixClientForUser, getFenixEdificationProfile, getFenixRequestCertificate, getFenixRequestNotification, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, findFenixTechnicalProjectIdByNumber, verifyFenixTechnicalProjectSubmission, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption, type FenixProcessAction, type FenixProcessMeta } from './fenix.js';
+import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, isProjectEditDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, streamDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type ProjectDraftMetadata, type DraftAiAssistantRequest } from './project-drafts.js';
+import { buildFenixTechnicalProjectUpdatePayload, submitFenixTechnicalProjectUpdate, verifyFenixTechnicalProjectUpdate } from './fenix-project-edit.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
@@ -1100,7 +1101,14 @@ app.post('/api/drafts', requireSession, (req, res) => {
 
 app.delete('/api/drafts/:id', requireSession, (req, res) => {
   try {
-    const deleted = deleteProjectDraft(res.locals.user.id, String(req.params.id));
+    const id = String(req.params.id);
+    const deleted = deleteProjectDraft(res.locals.user.id, id);
+    if (!deleted) {
+      const draft = getProjectDraft(res.locals.user.id, id);
+      if (draft && ['submitting', 'verification_pending', 'submitted'].includes(draft.status)) {
+        return res.status(409).json({ error: 'Este rascunho não pode ser removido enquanto o envio estiver sendo confirmado ou já tiver sido confirmado.' });
+      }
+    }
     res.json({ ok: deleted });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Falha ao excluir rascunho.';
@@ -1139,14 +1147,48 @@ app.post('/api/drafts/:id/simulate', requireSession, (req, res) => {
 
 app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
   try {
-    if (req.body?.confirmWord !== 'ENVIAR_FENIX') {
-      return res.status(400).json({ error: 'Confirmação inválida. Digite a palavra exata ENVIAR_FENIX para submeter.' });
-    }
     const draft = getProjectDraft(res.locals.user.id, String(req.params.id));
     if (!draft) {
       return res.status(404).json({ error: 'Rascunho não encontrado.' });
     }
-    const fenixUserId = resolveFenixUserId(res.locals.user);
+    const editExistingProject = isProjectEditDraft(draft);
+    const expectedConfirmWord = editExistingProject ? 'SALVAR_ALTERACOES' : 'ENVIAR_FENIX';
+    if (req.body?.confirmWord !== expectedConfirmWord) {
+      return res.status(400).json({ error: `Confirmação inválida. Digite a palavra exata ${expectedConfirmWord} para ${editExistingProject ? 'salvar as alterações' : 'submeter o cadastro'}.` });
+    }
+    let editTarget: { buildingId: number; projectId: number; dataUserId: string; fenixUserId: number | null } | null = null;
+    if (editExistingProject && !res.locals.user.demo) {
+      const metadata = draft.metadata;
+      if (!metadata?.sourceBuildingId || !metadata.sourceProcessId || !metadata.targetBuildingId || !metadata.targetProjectId) {
+        return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_UNAVAILABLE', error: 'Não foi possível confirmar a edificação e o Projeto Técnico originais. A edição continua somente local.' });
+      }
+      const building = ownedBuilding(res.locals.user.id, metadata.sourceBuildingId);
+      const process = ownedProcess(res.locals.user.id, metadata.sourceProcessId, metadata.sourceBuildingId);
+      const linkedProjectId = String(process?.id || '').startsWith('technicalproject:') ? String(process.id).slice('technicalproject:'.length) : '';
+      if (!building || !process || linkedProjectId !== metadata.targetProjectId || String(process.remote_id || '') !== metadata.targetProjectId
+        || String(building.remote_id || '') !== metadata.targetBuildingId
+        || (building.source_connection_id || null) !== (metadata.sourceConnectionId || null)
+        || (process.source_connection_id || null) !== (metadata.sourceConnectionId || null)) {
+        return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_MISMATCH', error: 'A edificação e o Projeto Técnico selecionados não correspondem mais às relações sincronizadas. Recarregue a edição antes de salvar.' });
+      }
+      if (metadata.sourceConnectionId) {
+        const connection = ownedConnection(res.locals.user.id, metadata.sourceConnectionId);
+        if (!connection || connection.paused || connection.status !== 'active' || connection.data_user_id !== building.data_user_id) {
+          return res.status(409).json({ code: 'PROJECT_UPDATE_CONNECTION_UNAVAILABLE', error: 'A conta Fênix vinculada à edificação está pausada ou precisa ser reconectada.' });
+        }
+      }
+      const sourceUser = db.prepare('SELECT fenix_user_id FROM users WHERE id=?').get(building.data_user_id) as { fenix_user_id: string | null } | undefined;
+      editTarget = {
+        buildingId: Number(metadata.targetBuildingId),
+        projectId: Number(metadata.targetProjectId),
+        dataUserId: String(building.data_user_id),
+        fenixUserId: resolveFenixUserId({ id: String(building.data_user_id), fenix_user_id: sourceUser?.fenix_user_id })
+      };
+      if (!Number.isSafeInteger(editTarget.buildingId) || editTarget.buildingId <= 0 || !Number.isSafeInteger(editTarget.projectId) || editTarget.projectId <= 0) {
+        return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_UNAVAILABLE', error: 'Os identificadores oficiais da edificação e do projeto são inválidos.' });
+      }
+    }
+    const fenixUserId = editTarget?.fenixUserId ?? resolveFenixUserId(res.locals.user);
     const validation = simulateProjectDraft(draft.data, fenixUserId);
     if (!validation.valid) {
       return res.status(400).json({
@@ -1155,31 +1197,104 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
       });
     }
 
+    if (draft.status === 'submitted') {
+      const confirmed = draft.lastSubmission?.verification === 'confirmed';
+      return res.status(409).json({
+        ok: false,
+        verification: confirmed ? 'confirmed' : 'pending',
+        error: confirmed ? 'Este rascunho já foi confirmado no Fênix.' : 'Este rascunho foi registrado como enviado antes da verificação. Consulte POST /api/drafts/:id/verify-submission.'
+      });
+    }
+    if (draft.status === 'submitting' || draft.status === 'verification_pending') {
+      return res.status(409).json({ ok: false, verification: 'pending', error: 'O resultado deste envio ainda está sendo confirmado. Consulte POST /api/drafts/:id/verify-submission antes de qualquer nova tentativa.' });
+    }
     const lock = acquireDraftSubmissionLock(res.locals.user.id, draft.id);
     if (!lock.acquired) {
       if (lock.reason === 'not_found') {
         return res.status(404).json({ error: 'Rascunho não encontrado.' });
       }
       if (lock.reason === 'already_submitted') {
-        return res.status(409).json({ error: 'Este rascunho já foi submetido anteriormente ao Fênix.' });
+        const currentDraft = getProjectDraft(res.locals.user.id, draft.id);
+        const confirmed = currentDraft?.lastSubmission?.verification === 'confirmed';
+        return res.status(409).json({ ok: false, verification: confirmed ? 'confirmed' : 'pending', error: confirmed ? 'Este rascunho já foi submetido anteriormente ao Fênix.' : 'Este rascunho foi registrado como enviado antes da verificação. Consulte POST /api/drafts/:id/verify-submission.' });
       }
       if (lock.reason === 'already_submitting') {
-        return res.status(409).json({ error: 'Submissão já está em andamento para este rascunho. Aguarde a conclusão.' });
+        return res.status(409).json({ ok: false, verification: 'pending', error: 'Submissão já está em andamento para este rascunho. Aguarde a conclusão.' });
+      }
+      if (lock.reason === 'verification_pending') {
+        return res.status(409).json({ ok: false, verification: 'pending', error: 'O resultado deste envio ainda não foi confirmado. Consulte POST /api/drafts/:id/verify-submission antes de qualquer nova tentativa.' });
       }
       return res.status(409).json({ error: 'Não foi possível obter o bloqueio de submissão do rascunho.' });
     }
 
     try {
-      const result = await submitFenixTechnicalProject(res.locals.user.id, validation.fenixPayload);
-      const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: true, result });
-      if (!res.locals.user.demo && !syncInProgress.has(res.locals.user.id)) {
-        void executeSync(res.locals.user.id, 'automatic').catch(() => undefined);
+      type SubmitResult = { id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number };
+      type SubmitAttempt = { verification: 'confirmed'; result: SubmitResult } | { verification: 'pending'; result?: Partial<SubmitResult>; error: string };
+      let attempt: SubmitAttempt;
+      if (editExistingProject) {
+        if (res.locals.user.demo) {
+          const id = Number(String(draft.metadata?.targetProjectId || '').replace(/\D/g, '')) || Math.floor(80000 + Math.random() * 19000);
+          const buildingId = Number(String(draft.metadata?.targetBuildingId || '').replace(/\D/g, '')) || Math.floor(90000 + Math.random() * 10000);
+          attempt = { verification: 'confirmed', result: { id, num_projeto: draft.metadata?.targetProjectNumber || `DEMO-${id}`, edificacao_id: buildingId } };
+        } else {
+          const target = editTarget!;
+          const client = await fenixClientForUser(target.dataUserId);
+          const currentResponse = await client.get(`/api/v1/projetos-tecnicos/${target.projectId}`) as any;
+          const currentProject = currentResponse?.data?.technicalproject ?? currentResponse?.data?.projeto_tecnico ?? currentResponse?.data?.project ?? currentResponse?.data ?? currentResponse;
+          const currentProjectId = Number(currentProject?.id ?? currentProject?.projeto_tecnico_id ?? currentProject?.technical_project_id ?? 0);
+          if (currentProjectId !== target.projectId) throw new FenixError('A consulta anterior ao salvamento retornou um Projeto Técnico diferente do selecionado.', 409);
+          const editPayload = buildFenixTechnicalProjectUpdatePayload(draft.data, target.projectId, target.buildingId, target.fenixUserId, currentProject);
+          if (!editPayload.valid || !editPayload.payload) {
+            return res.status(400).json({ error: 'Não foi possível preparar o corpo de atualização do Projeto Técnico.', errors: editPayload.errors });
+          }
+          attempt = await submitFenixTechnicalProjectUpdate(target.dataUserId, target.projectId, target.buildingId, editPayload.payload);
+          if (attempt.verification === 'pending' && attempt.result && !attempt.result.num_projeto && draft.metadata?.targetProjectNumber) {
+            attempt = { ...attempt, result: { ...attempt.result, num_projeto: draft.metadata.targetProjectNumber } };
+          }
+        }
+      } else {
+        attempt = await submitFenixTechnicalProject(res.locals.user.id, validation.fenixPayload, (result) => {
+          updateDraftSubmission(res.locals.user.id, draft.id, {
+            ok: false,
+            verificationPending: true,
+            result,
+            error: 'O Fênix retornou o ID do projeto; aguardando confirmação por leitura.'
+          });
+        });
       }
-      res.json({ ok: true, draft: updated || draft, result });
+      if (editExistingProject && attempt.result?.id && !attempt.result.num_projeto && draft.metadata?.targetProjectNumber) {
+        if (attempt.verification === 'confirmed') {
+          attempt = { verification: 'confirmed', result: { ...attempt.result, num_projeto: draft.metadata.targetProjectNumber } };
+        } else {
+          attempt = { verification: 'pending', result: { ...attempt.result, num_projeto: draft.metadata.targetProjectNumber }, error: attempt.error };
+        }
+      }
+      if (attempt.verification === 'pending') {
+        const updated = updateDraftSubmission(res.locals.user.id, draft.id, {
+          ok: false, verificationPending: true, result: attempt.result, error: attempt.error
+        });
+        if (updated?.status === 'submitted' && updated.lastSubmission?.verification === 'confirmed') {
+          return res.json({ ok: true, verification: 'confirmed', draft: updated, result: updated.lastSubmission?.result });
+        }
+        return res.status(202).json({ ok: false, verification: 'pending', draft: updated || draft, result: attempt.result, error: attempt.error });
+      }
+      const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: true, result: attempt.result });
+      if (!res.locals.user.demo && !syncInProgress.has(res.locals.user.id)) {
+        void executeSync(editTarget?.dataUserId || res.locals.user.id, 'automatic').catch(() => undefined);
+      }
+      res.json({ ok: true, verification: 'confirmed', draft: updated || draft, result: attempt.result, ...(editExistingProject ? { message: 'Alterações confirmadas no Projeto Técnico existente.' } : {}) });
     } catch (submitErr) {
       const message = submitErr instanceof Error ? submitErr.message : 'Erro na requisição ao Fênix.';
       const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: false, error: message });
-      res.status(502).json({ ok: false, draft: updated || draft, error: message });
+      if (submitErr instanceof FenixError && submitErr.status === 401 && editTarget) {
+        if (draft.metadata?.sourceConnectionId) {
+          db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
+            .run(new Date().toISOString(), draft.metadata.sourceConnectionId);
+        } else {
+          markUserFenixSessionExpired(editTarget.dataUserId, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+        }
+      }
+      res.status(submitErr instanceof FenixError && submitErr.status ? submitErr.status : 502).json({ ok: false, verification: 'not_pending', draft: updated || draft, error: message });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Falha ao processar envio do projeto.';
@@ -1227,6 +1342,159 @@ async function resolveAiAssistantRequest(req: Request, res: Response): Promise<D
     const requestedId = String(req.body?.buildingId || systemContext.activeBuilding?.id || '').trim();
     const requestedRef = String(systemContext.activeBuilding?.reference || '').trim().toLowerCase();
     const normalizedMsg = message.toLowerCase();
+
+app.post('/api/drafts/:id/verify-submission', requireSession, async (req, res) => {
+  const userId = res.locals.user.id;
+  const draftId = String(req.params.id || '');
+  let draft = getProjectDraft(userId, draftId);
+  if (!draft) return res.status(404).json({ error: 'Rascunho não encontrado.' });
+  if (isProjectEditDraft(draft)) {
+    if (draft.status === 'submitted' && draft.lastSubmission?.verification === 'confirmed') {
+      return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, draft, result: draft.lastSubmission?.result, message: 'Alterações confirmadas no Projeto Técnico existente.' });
+    }
+    if (draft.status !== 'submitting' && draft.status !== 'verification_pending') {
+      return res.status(409).json({ ok: false, verification: 'not_pending', draft, error: 'Esta edição ainda não foi enviada para o Fênix.' });
+    }
+    const metadata = draft.metadata;
+    if (!metadata?.sourceBuildingId || !metadata.sourceProcessId || !metadata.targetBuildingId || !metadata.targetProjectId) {
+      return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_UNAVAILABLE', error: 'Não foi possível confirmar a edificação e o Projeto Técnico originais.' });
+    }
+    const building = ownedBuilding(userId, metadata.sourceBuildingId);
+    const process = ownedProcess(userId, metadata.sourceProcessId, metadata.sourceBuildingId);
+    const linkedProjectId = String(process?.id || '').startsWith('technicalproject:') ? String(process.id).slice('technicalproject:'.length) : '';
+    if (!building || !process || linkedProjectId !== metadata.targetProjectId || String(process.remote_id || '') !== metadata.targetProjectId
+      || String(building.remote_id || '') !== metadata.targetBuildingId
+      || (building.source_connection_id || null) !== (metadata.sourceConnectionId || null)
+      || (process.source_connection_id || null) !== (metadata.sourceConnectionId || null)) {
+      return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_MISMATCH', error: 'As relações locais já não confirmam a edificação e o projeto desta edição.' });
+    }
+    if (metadata.sourceConnectionId) {
+      const connection = ownedConnection(userId, metadata.sourceConnectionId);
+      if (!connection || connection.paused || connection.status !== 'active' || connection.data_user_id !== building.data_user_id) {
+        return res.status(409).json({ code: 'PROJECT_UPDATE_CONNECTION_UNAVAILABLE', error: 'A conta Fênix vinculada está pausada ou precisa ser reconectada.' });
+      }
+    }
+    const projectId = Number(metadata.targetProjectId);
+    const buildingId = Number(metadata.targetBuildingId);
+    if (!Number.isSafeInteger(projectId) || projectId <= 0 || !Number.isSafeInteger(buildingId) || buildingId <= 0) {
+      return res.status(409).json({ code: 'PROJECT_UPDATE_TARGET_UNAVAILABLE', error: 'Os identificadores oficiais da edificação e do projeto são inválidos.' });
+    }
+    const sourceUserId = String(building.data_user_id);
+    const sourceUser = db.prepare('SELECT fenix_user_id FROM users WHERE id=?').get(sourceUserId) as { fenix_user_id: string | null } | undefined;
+    const fenixUserId = resolveFenixUserId({ id: sourceUserId, fenix_user_id: sourceUser?.fenix_user_id });
+    const validation = simulateProjectDraft(draft.data, fenixUserId);
+    if (!validation.valid) return res.status(400).json({ verification: 'not_pending', draft, error: 'As alterações salvas localmente não passam mais pela validação.', errors: validation.errors });
+    const editPayload = buildFenixTechnicalProjectUpdatePayload(draft.data, projectId, buildingId, fenixUserId);
+    if (!editPayload.valid || !editPayload.payload) return res.status(400).json({ verification: 'not_pending', draft, error: 'Não foi possível preparar a leitura de confirmação.', errors: editPayload.errors });
+    if (draft.status === 'submitting') {
+      draft = updateDraftSubmission(userId, draftId, {
+        ok: false,
+        verificationPending: true,
+        result: { id: projectId, num_projeto: metadata.targetProjectNumber || '', edificacao_id: buildingId },
+        error: 'A tentativa de atualização foi interrompida antes da confirmação. Consulte o Fênix por leitura antes de qualquer novo envio.'
+      }) || draft;
+      if (draft.status === 'submitted' && draft.lastSubmission?.verification === 'confirmed') {
+        return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, draft, result: draft.lastSubmission?.result, message: 'Alterações confirmadas no Projeto Técnico existente.' });
+      }
+    }
+    try {
+      const result = await verifyFenixTechnicalProjectUpdate(sourceUserId, projectId, buildingId, editPayload.payload);
+      const normalizedResult = { ...result, num_projeto: result.num_projeto || metadata.targetProjectNumber || '' };
+      const updated = updateDraftSubmission(userId, draftId, { ok: true, result: normalizedResult }) || draft;
+      if (!res.locals.user.demo && !syncInProgress.has(sourceUserId)) void executeSync(sourceUserId, 'automatic').catch(() => undefined);
+      return res.json({ ok: true, verification: 'confirmed', draft: updated, result: normalizedResult, message: 'Alterações confirmadas no Projeto Técnico existente.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'A leitura de confirmação ainda não comprovou as alterações.';
+      if (error instanceof FenixError && error.status === 401) {
+        if (metadata.sourceConnectionId) {
+          db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
+            .run(new Date().toISOString(), metadata.sourceConnectionId);
+        } else {
+          markUserFenixSessionExpired(sourceUserId, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+        }
+      }
+      const updated = updateDraftSubmission(userId, draftId, {
+        ok: false,
+        verificationPending: true,
+        result: { id: projectId, num_projeto: metadata.targetProjectNumber || '', edificacao_id: buildingId },
+        error: message
+      }) || draft;
+      return res.status(error instanceof FenixError && error.status === 401 ? 401 : 202).json({ ok: false, verification: 'pending', draft: updated, error: message });
+    }
+  }
+  if (draft.status === 'submitted' && draft.lastSubmission?.verification === 'confirmed') {
+    return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, draft, result: draft.lastSubmission?.result });
+  }
+  if (draft.status === 'submitting') {
+    draft = updateDraftSubmission(userId, draftId, {
+      ok: false, verificationPending: true,
+      error: 'A submissão foi interrompida antes da confirmação. Consulte o Fênix por leitura antes de tentar novamente.'
+    }) || draft;
+    if (draft.status === 'submitted' && draft.lastSubmission?.verification === 'confirmed') {
+      return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, draft, result: draft.lastSubmission?.result });
+    }
+  } else if (draft.status !== 'verification_pending' && draft.status !== 'submitted') {
+    return res.status(409).json({ ok: false, verification: 'not_pending', draft, error: 'Este rascunho não possui um envio pendente de confirmação.' });
+  }
+
+  const savedSource = draft.lastSubmission?.result && typeof draft.lastSubmission.result === 'object'
+    ? draft.lastSubmission.result as Record<string, unknown>
+    : {};
+  const savedId = Number(savedSource.id);
+  const savedResult: Partial<{ id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number }> = {
+    ...(Number.isSafeInteger(savedId) && savedId > 0 ? { id: savedId } : {}),
+    ...(typeof savedSource.num_projeto === 'string' ? { num_projeto: savedSource.num_projeto } : {}),
+    ...(Number.isSafeInteger(Number(savedSource.edificacao_id)) && Number(savedSource.edificacao_id) > 0 ? { edificacao_id: Number(savedSource.edificacao_id) } : {}),
+    ...(Number.isSafeInteger(Number(savedSource.solicitacao_id)) && Number(savedSource.solicitacao_id) > 0 ? { solicitacao_id: Number(savedSource.solicitacao_id) } : {})
+  };
+  let projectId = Number(savedResult.id);
+  const projectNumber = typeof savedResult.num_projeto === 'string' ? savedResult.num_projeto.trim() : '';
+  try {
+    if ((!Number.isSafeInteger(projectId) || projectId <= 0) && projectNumber) {
+      projectId = await findFenixTechnicalProjectIdByNumber(userId, projectNumber) || 0;
+    }
+    if (!Number.isSafeInteger(projectId) || projectId <= 0) {
+      const error = projectNumber
+        ? 'A listagem do Fênix ainda não retornou um único projeto com o número informado. O envio continua bloqueado para evitar duplicidade.'
+        : 'Ainda não há um ID ou número de projeto retornado pelo Fênix para consultar. O envio continua bloqueado para evitar duplicidade.';
+      const updated = updateDraftSubmission(userId, draftId, { ok: false, verificationPending: true, result: savedResult, error }) || draft;
+      if (updated.status === 'submitted' && updated.lastSubmission?.verification === 'confirmed') {
+        return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, draft: updated, result: updated.lastSubmission?.result });
+      }
+      return res.status(202).json({ ok: false, verification: 'pending', draft: updated, result: savedResult, error });
+    }
+
+    const expectedBuildingId = draft.data.edificacao_mode === 'existing' ? Number(draft.data.edificacao_id) : 0;
+    const verified = await verifyFenixTechnicalProjectSubmission(userId, projectId, {
+      id: projectId,
+      ...(projectNumber ? { num_projeto: projectNumber } : {}),
+      ...(Number.isSafeInteger(expectedBuildingId) && expectedBuildingId > 0 ? { edificacao_id: expectedBuildingId } : {}),
+      ...(savedResult.solicitacao_id ? { solicitacao_id: savedResult.solicitacao_id } : {})
+    });
+    if (draft.data.edificacao_mode === 'new' && !(Number(verified.edificacao_id) > 0)) {
+      throw new FenixError('O projeto ainda não pode ser marcado como confirmado: o Fênix não retornou o ID da nova edificação vinculada.', 409);
+    }
+    const result = {
+      ...savedResult,
+      ...verified,
+      id: projectId,
+      num_projeto: verified.num_projeto || projectNumber
+    } as { id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number };
+    const updated = updateDraftSubmission(userId, draftId, { ok: true, result }) || draft;
+    return res.json({ ok: true, verification: 'confirmed', draft: updated, result });
+  } catch (verificationError) {
+    const error = verificationError instanceof Error
+      ? verificationError.message
+      : 'O Fênix ainda não confirmou o cadastro por leitura.';
+    const updated = draft.status === 'submitted'
+      ? draft
+      : updateDraftSubmission(userId, draftId, { ok: false, verificationPending: true, result: savedResult, error }) || draft;
+    if (updated.status === 'submitted' && updated.lastSubmission?.verification === 'confirmed') {
+      return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, draft: updated, result: updated.lastSubmission?.result });
+    }
+    return res.status(202).json({ ok: false, verification: 'pending', draft: updated, result: savedResult, error });
+  }
+});
 
     let found = null;
     if (requestedId) {
@@ -2312,6 +2580,20 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
   if (!building) return res.status(404).json({ error: 'Edificação não encontrada.' });
   const process = ownedProcess(user.id, processId, buildingId);
   if (!process) return res.status(404).json({ error: 'Processo não encontrado.' });
+  if ((process.source_connection_id || null) !== (building.source_connection_id || null)) {
+    return res.status(409).json({ error: 'O processo e a edificação não pertencem à mesma conta Fênix.' });
+  }
+  const localProjectId = String(process.id || '').startsWith('technicalproject:')
+    ? String(process.id).slice('technicalproject:'.length)
+    : '';
+  const storedRemoteProjectId = process.remote_id ? String(process.remote_id) : '';
+  if (!localProjectId) return res.status(409).json({ error: 'A edição local só pode ser preparada a partir de um Projeto Técnico identificado.' });
+  if (!user.demo && (!storedRemoteProjectId || storedRemoteProjectId !== localProjectId)) {
+    return res.status(409).json({ error: 'O ID oficial do Projeto Técnico não pôde ser confirmado com a relação sincronizada.' });
+  }
+  let upstreamEdificationConfirmed = false;
+  let upstreamProjectConfirmed = false;
+  const requestedProjectId = user.demo ? null : storedRemoteProjectId;
 
   const warnings: string[] = [];
   let upstreamEdification: any = null;
@@ -2323,19 +2605,34 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
       if (building.remote_id) {
         try {
           const resp = await client.get(`/api/v1/edifications/${encodeURIComponent(building.remote_id)}`) as any;
-          upstreamEdification = resp?.data ?? resp;
+          upstreamEdification = resp?.data?.edification ?? resp?.data?.edification_data ?? resp?.data ?? resp;
+          const returnedBuildingId = String(upstreamEdification?.id ?? upstreamEdification?.edificacao_id ?? '').trim();
+          upstreamEdificationConfirmed = returnedBuildingId === String(building.remote_id);
+          if (!upstreamEdificationConfirmed) {
+            upstreamEdification = null;
+            warnings.push('O Fênix não confirmou o ID da edificação consultada; o rascunho permanecerá apenas local.');
+          }
         } catch (edErr) {
           logger.info('Falha ao buscar edificação upstream no Fênix', { error: edErr instanceof Error ? edErr.message : String(edErr) });
           warnings.push('Não foi possível carregar os dados atualizados da edificação diretamente do Fênix; os dados locais foram utilizados.');
         }
       }
-      const remoteProjId = process.remote_id || (process.id.startsWith('technicalproject:') ? process.id.slice('technicalproject:'.length) : null);
-      if (remoteProjId) {
+      if (requestedProjectId) {
         try {
-          const resp = await client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(remoteProjId)}`) as any;
-          upstreamProject = resp?.data ?? resp;
+          const resp = await client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(requestedProjectId)}`) as any;
+          upstreamProject = resp?.data?.technicalproject ?? resp?.data?.projeto_tecnico ?? resp?.data?.project ?? resp?.data ?? resp;
+          const returnedProjectId = String(upstreamProject?.id ?? upstreamProject?.projeto_tecnico_id ?? '').trim();
+          if (returnedProjectId && returnedProjectId !== requestedProjectId) {
+            return res.status(409).json({ error: 'A consulta oficial retornou um ID de Projeto Técnico diferente do processo selecionado.' });
+          }
+          if (returnedProjectId) upstreamProjectConfirmed = true;
+          else {
+            upstreamProject = null;
+            warnings.push('O Fênix não retornou o ID do projeto na consulta; o rascunho permanecerá apenas local.');
+          }
         } catch (projErr) {
           logger.info('Falha ao buscar projeto técnico upstream no Fênix', { error: projErr instanceof Error ? projErr.message : String(projErr) });
+          warnings.push('Não foi possível confirmar os dados atualizados do projeto diretamente no Fênix; o rascunho ficará disponível somente para edição local.');
         }
       }
     } catch {
@@ -2352,6 +2649,7 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
 
   const ed = upstreamEdification || localBuildingPayload;
   const proj = upstreamProject || {};
+  const targetProjectId = user.demo || !upstreamProjectConfirmed || !upstreamEdificationConfirmed ? null : storedRemoteProjectId;
 
   const name = `Edição · ${building.reference || 'Edificação'} (${process.protocol || 'S/N'})`;
   const edificacao_mode = 'existing' as const;
@@ -2359,6 +2657,8 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
 
   // Endereço
   const cep = String(ed?.address?.zip_code || ed?.address?.cep || ed?.cep || localBuildingPayload?.cep || '').replace(/\D/g, '');
+  const registrationZipValue = String(ed?.registration_zip_code || ed?.registration_zip || '');
+  const registrationFromZip = registrationZipValue.includes('-') ? registrationZipValue.slice(0, registrationZipValue.lastIndexOf('-')) : '';
   const logradouro = String(ed?.address?.public_place || ed?.address?.logradouro || ed?.logradouro || building.address || '');
   const numero = String(ed?.address?.number || ed?.address?.numero || ed?.numero || localBuildingPayload?.numero || '');
   const complemento = String(ed?.address?.complement || ed?.address?.complemento || ed?.complemento || localBuildingPayload?.complemento || '');
@@ -2377,7 +2677,11 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
   const tipo_projeto_id = Number(proj?.tipo_projeto_id || fenixMeta?.tipoProjetoId || 1);
 
   // Instituição / CNAE
-  const cnae_id = ed?.cnae_id || localBuildingPayload?.cnae_id || null;
+  const institutionSource = proj?.institution || proj?.instituicao || ed?.institution || ed?.instituicao || {};
+  const institutionPerson = institutionSource?.pessoa || {};
+  const institutionPf = institutionPerson?.pessoa_fisica || {};
+  const institutionPj = institutionPerson?.pessoa_juridica || {};
+  const cnae_id = institutionSource?.cnae_id || ed?.cnae_id || localBuildingPayload?.cnae_id || null;
 
   // Ocupação
   const divisao_id = ed?.divisao_id || ed?.occupation?.divisao_id || null;
@@ -2385,19 +2689,45 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
   const descricao_ocupacao = ed?.descricao_ocupacao || ed?.occupation?.descricao || '';
 
   // Medidas de segurança
-  const rawMeasures = proj?.medidas_seguranca || proj?.medida_seguranca || [];
+  const rawMeasures = proj?.securityMeasures || proj?.medidas_seguranca || proj?.medida_seguranca || [];
   let medidas: Record<string, boolean> = {};
   if (Array.isArray(rawMeasures)) {
     for (const m of rawMeasures) {
       const codeOrSlug = typeof m === 'string' ? m : (m?.slug || m?.codigo || m?.nome || m?.name || '');
-      if (codeOrSlug) medidas[codeOrSlug] = true;
+      if (codeOrSlug) {
+        const active = typeof m === 'string' ? true : Boolean(m?.value ?? m?.valor ?? m?.ativo ?? m?.active ?? true);
+        medidas[codeOrSlug] = active;
+      }
+    }
+  } else if (rawMeasures && typeof rawMeasures === 'object') {
+    for (const [key, value] of Object.entries(rawMeasures)) {
+      const active = value && typeof value === 'object'
+        ? Boolean((value as any).value ?? (value as any).valor ?? (value as any).ativo ?? (value as any).active)
+        : Boolean(value);
+      medidas[key] = active;
     }
   }
 
   // Proprietário / Responsável / RTs
-  const proprietario = ed?.proprietario || localBuildingPayload?.proprietario || null;
-  const responsavel = ed?.responsavel || localBuildingPayload?.responsavel || null;
-  const rts = proj?.rts || proj?.responsaveis_tecnicos || [];
+  const proprietario = proj?.proprietario || proj?.prop_projeto || ed?.proprietario || localBuildingPayload?.proprietario || null;
+  const responsavel = proj?.responsavel || proj?.resp_projeto || ed?.responsavel || localBuildingPayload?.responsavel || null;
+  const rts = proj?.rts || proj?.responsaveis_tecnicos || proj?.projeto_responsavel_tecnico || [];
+  const rawOccupationRows = proj?.occupationsDivisions || proj?.occupations_divisions || proj?.ocupacoes_divisoes || proj?.occupations || [];
+  const occupationsDivisions = Array.isArray(rawOccupationRows) ? rawOccupationRows.map((row: any) => ({
+    occupation_group_id: Number(row?.occupation_group_id ?? row?.occupation?.id ?? row?.occupation_group?.id) || 1,
+    division_group_id: Number(row?.division_group_id ?? row?.division?.id ?? row?.division_group?.id) || 1,
+    occupation_group: String(row?.occupation_group?.value ?? row?.occupation_group ?? row?.occupation?.value ?? row?.occupation?.nome ?? ''),
+    division_group: String(row?.division_group?.value ?? row?.division_group ?? row?.division?.value ?? row?.division?.nome ?? ''),
+    principal: Boolean(row?.principal),
+    area_comum: Boolean(row?.area_comum),
+    underground: Boolean(row?.underground ?? row?.subsolo ?? row?.sobre_solo === false),
+    sobre_solo: row?.sobre_solo !== undefined ? Boolean(row.sobre_solo) : !Boolean(row?.underground ?? row?.subsolo)
+  })) : [];
+  const rawQuestionnaire = proj?.questionario || proj?.questionnaire || {};
+  const rawSpecialRisks = proj?.specialRisks || proj?.special_risks || {};
+  const previousProject = proj?.projetoAnterior ?? proj?.projeto_anterior ?? (proj?.n_projeto_anterior ? 'S' : 'N');
+  const tipoPessoa = String(institutionPerson?.tipo || institutionSource?.tipo_pessoa || ed?.tipo_pessoa || 'PJ').toUpperCase() === 'PF' ? 'PF' : 'PJ';
+  const institutionDocument = String(institutionPj?.cnpj || institutionPf?.cpf || institutionSource?.cnpj_cpf || institutionSource?.cnpj || institutionSource?.cpf || ed?.cnpj_cpf || ed?.cnpj || ed?.cpf || '');
 
   const form_mode: 'pt' | 'pts' = [1, 2, 3].includes(tipo_projeto_id) ? 'pt' : 'pts';
   const process_category = form_mode;
@@ -2416,16 +2746,16 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
     {
       tipo_numero: 'CREA',
       conselho: 'CREA',
-      crea_cau: String(proj?.crea_cau || 'BA20261628773'),
-      n_registro_conselho: String(proj?.crea_cau || 'BA20261628773'),
-      name: 'ABA Incêndio - Engenharia e Projetos',
-      nome_tecnico: 'ABA Incêndio - Engenharia e Projetos',
-      cpf_cnpj: '00000000000',
-      cpf_cnpj_tecnico: '00000000000',
-      phone: '(71) 4000-2895',
-      telefone_tecnico: '(71) 4000-2895',
-      email: 'engenharia@abaincendio.com.br',
-      email_tecnico: 'engenharia@abaincendio.com.br',
+      crea_cau: String(proj?.crea_cau || ''),
+      n_registro_conselho: String(proj?.crea_cau || ''),
+      name: '',
+      nome_tecnico: '',
+      cpf_cnpj: '',
+      cpf_cnpj_tecnico: '',
+      phone: '',
+      telefone_tecnico: '',
+      email: '',
+      email_tecnico: '',
       n_art_rrt: String(proj?.n_art_rrt || '')
     }
   ];
@@ -2440,7 +2770,7 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
     n_art_rrt: String(proj?.n_art_rrt || ''),
     edification: {
       reference_name: referencia,
-      registration: String(ed?.registration || ed?.matricula || ''),
+      registration: String(ed?.registration || ed?.matricula || registrationFromZip || ''),
       height: altura || 'Térrea = Um pavimento',
       number_floors: pavimentos || 1,
       building_area: area_construida || area_total || 0,
@@ -2454,20 +2784,25 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
       number: numero || 'S/N',
       complement: complemento || '***',
       district: bairro,
-      county: cidade || 'SALVADOR',
+      county: cidade || '',
       municipio_id: ed?.address?.municipio_id || ed?.municipio_id || null,
       state: uf || 'BA',
       geographic_coordinates: String(ed?.address?.geographic_coordinates || ed?.coordenadas || '')
     },
     institution: {
-      tipo_pessoa: (ed?.institution?.tipo_pessoa || ed?.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
-      cnpj_cpf: String(ed?.institution?.cnpj_cpf || ed?.cnpj_cpf || ed?.cnpj || ed?.cpf || ''),
-      razao_social: String(ed?.institution?.razao_social || ed?.razao_social || referencia || ''),
-      nome_fantasia: String(ed?.institution?.nome_fantasia || ed?.nome_fantasia || referencia || ''),
-      natureza_juridica: String(ed?.institution?.natureza_juridica || ed?.natureza_juridica || 'ME'),
-      cnae: String(ed?.institution?.cnae || cnae_id || ''),
-      atividade_economica: String(ed?.institution?.atividade_economica || descricao_ocupacao || ''),
-      risk: Number(ed?.institution?.risk || 300)
+      id: institutionSource?.id ?? null,
+      tipo_pessoa: tipoPessoa,
+      cnpj_cpf: institutionDocument,
+      razao_social: String(institutionPj?.razao_social || institutionPf?.nome || institutionSource?.razao_social || ed?.razao_social || referencia || ''),
+      nome_fantasia: String(institutionPj?.nome_fantasia || institutionSource?.nome_fantasia || ed?.nome_fantasia || referencia || ''),
+      natureza_juridica: String(institutionPj?.natureza_juridica || institutionSource?.natureza_juridica || ed?.natureza_juridica || 'ME'),
+      porte_outros: institutionPj?.porte_outros || institutionSource?.porte_outros || null,
+      cnae: String(institutionSource?.cnae || ed?.cnae || cnae_id || ''),
+      cnae_id: cnae_id ? Number(cnae_id) : null,
+      cnae_selecao_automatica: Boolean(institutionSource?.cnae_selecao_automatica ?? true),
+      cnae_not_in_it14: Boolean(institutionSource?.cnae_not_in_it14 ?? false),
+      atividade_economica: String(institutionSource?.atividade_economica || ed?.atividade_economica || descricao_ocupacao || ''),
+      risk: Number(institutionSource?.risco ?? institutionSource?.risk ?? 300)
     },
     occupation: {
       occupation_group_id: ocupacao_id ? Number(ocupacao_id) : 3,
@@ -2476,23 +2811,43 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
       underground_occupation_group_id: 13,
       underground_division_group_id: 58
     },
+    occupationsDivisions,
+    evento: String(proj?.evento || 'N').toUpperCase() === 'S' ? 'S' : 'N',
+    data_inicio: String(proj?.data_inicio || proj?.questionario?.data_inicio_evento || ''),
+    data_fim: String(proj?.data_fim || proj?.questionario?.data_termino_evento || ''),
+    isencao_id: Number(proj?.isencao_id || proj?.tipo_isencao_id || 1),
+    projeto_anterior: String(previousProject).toUpperCase() === 'S',
+    n_projeto_anterior: String(proj?.n_projeto_anterior || ''),
+    decreto_estadual_adotado_id: Number(proj?.decreto_estadual_adotado_id || 2),
+    specialRisks: {
+      liquidos_inflamaveis: Boolean(rawSpecialRisks?.liquidos_inflamaveis ?? proj?.liquidos_inflamaveis),
+      gas_liquefeito_petroleo: Boolean(rawSpecialRisks?.gas_liquefeito_petroleo ?? proj?.gas_liquefeito_petroleo),
+      produtos_perigosos: Boolean(rawSpecialRisks?.produtos_perigosos ?? proj?.produtos_perigosos),
+      fogos_artificio: Boolean(rawSpecialRisks?.fogos_artificio ?? proj?.fogos_artificio),
+      vaso_pressao: Boolean(rawSpecialRisks?.vaso_pressao ?? proj?.vaso_pressao),
+      outros: rawSpecialRisks?.outros ?? proj?.outros ?? null,
+      total_kg_glp: rawSpecialRisks?.total_kg_glp ?? proj?.total_kg_glp ?? null,
+      classes_glp: rawSpecialRisks?.classes_glp ?? proj?.classesGlp ?? proj?.classes_glp ?? []
+    },
+    classes_glp: proj?.classesGlp || proj?.classes_glp || [],
+    questionario: rawQuestionnaire,
     proprietario: {
       tipo_pessoa_prop: (proprietario?.tipo_pessoa_prop || proprietario?.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
       cpf_cnpj_prop: String(proprietario?.cpf_cnpj_prop || proprietario?.cpf_cnpj || proprietario?.cnpj || proprietario?.cpf || ''),
       nome_proprietario: String(proprietario?.nome_proprietario || proprietario?.nome || referencia || ''),
-      email_proprietario: String(proprietario?.email_proprietario || proprietario?.email || 'engenharia@abaincendio.com.br'),
-      tel_proprietario: String(proprietario?.tel_proprietario || proprietario?.telefone || proprietario?.tel || '(71) 4000-2895')
+      email_proprietario: String(proprietario?.email_proprietario || proprietario?.email || ''),
+      tel_proprietario: String(proprietario?.tel_proprietario || proprietario?.telefone || proprietario?.tel || '')
     },
     responsavel: {
       responsavel_uso_igual_prop: proprietario ? (responsavel ? Boolean(responsavel?.responsavel_uso_igual_prop) : true) : true,
       tipo_pessoa_resp: (responsavel?.tipo_pessoa_resp || responsavel?.tipo_pessoa || 'PJ') as 'PJ' | 'PF',
       cpf_cnpj_resp: String(responsavel?.cpf_cnpj_resp || responsavel?.cpf_cnpj || proprietario?.cpf_cnpj_prop || proprietario?.cpf_cnpj || ''),
       nome_responsavel: String(responsavel?.nome_responsavel || responsavel?.nome || proprietario?.nome_proprietario || proprietario?.nome || referencia || ''),
-      email_responsavel_uso: String(responsavel?.email_responsavel_uso || responsavel?.email || 'engenharia@abaincendio.com.br'),
-      tel_responsavel_uso: String(responsavel?.tel_responsavel_uso || responsavel?.telefone || '(71) 4000-2895')
+      email_responsavel_uso: String(responsavel?.email_responsavel_uso || responsavel?.email || ''),
+      tel_responsavel_uso: String(responsavel?.tel_responsavel_uso || responsavel?.telefone || '')
     },
     responsaveis_tecnicos: normalizedRts,
-    securityMeasures: activeMeasures,
+    securityMeasures: Object.keys(medidas).length ? medidas : activeMeasures,
     // Campos planos legados para máxima compatibilidade reversa
     reference_name: referencia,
     cep,
@@ -2514,7 +2869,15 @@ app.post('/api/buildings/:buildingId/processes/:processId/create-edit-draft', re
     rts: Array.isArray(rts) && rts.length ? rts : undefined
   };
 
-  const draft = upsertProjectDraft(user.id, draftInput);
+  const metadata: ProjectDraftMetadata = {
+    sourceBuildingId: building.id,
+    sourceProcessId: process.id,
+    sourceConnectionId: building.source_connection_id || null,
+    targetBuildingId: building.remote_id ? String(building.remote_id) : null,
+    targetProjectId,
+    targetProjectNumber: String(process.protocol || '').trim() || null
+  };
+  const draft = upsertProjectDraft(user.id, draftInput, undefined, metadata);
 
   return res.json({
     ok: true,

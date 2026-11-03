@@ -32,7 +32,7 @@ import {
   X,
   Zap
 } from 'lucide-react';
-import { api, type Building } from './types';
+import { api, type Building, type DraftSubmissionVerificationResponse, type ProjectDraftStatus } from './types';
 import {
   type ProjectDraftInput,
   type TechnicalManagerItem,
@@ -382,7 +382,16 @@ export function normalizeProjectDraftInput(
 export interface DraftRecord {
   id: string;
   name: string;
-  status: 'draft' | 'simulated' | 'submitted' | 'error';
+  status: ProjectDraftStatus;
+  operation: 'create_project' | 'edit_existing_project';
+  metadata?: {
+    sourceBuildingId: string;
+    sourceProcessId: string;
+    sourceConnectionId: string | null;
+    targetBuildingId: string | null;
+    targetProjectId: string | null;
+    targetProjectNumber?: string | null;
+  };
   updatedAt: string;
   data: ProjectDraftInput;
   lastSimulation?: {
@@ -398,9 +407,24 @@ export interface DraftRecord {
   };
   lastSubmission?: {
     ok: boolean;
+    verification?: 'pending' | 'confirmed' | 'rejected';
+    verificationPending?: boolean;
     result?: unknown;
     error?: string;
   };
+}
+
+type SubmissionFeedback = {
+  state: 'pending' | 'verified' | 'error';
+  message?: string;
+  data?: unknown;
+};
+
+function draftNeedsSubmissionVerification(draft: DraftRecord | null | undefined) {
+  if (!draft || draft.status === 'submitted' || draft.status === 'error') return false;
+  return draft.status === 'submitting' || draft.status === 'verification_pending'
+    || draft.lastSubmission?.verificationPending === true || draft.lastSubmission?.verification === 'pending'
+    || draft.lastSubmission?.ok === true;
 }
 
 export interface ValidationResult {
@@ -1101,11 +1125,8 @@ function ProjectDraftModalContent({
   const [saving, setSaving] = useState(false);
   const [confirmKey, setConfirmKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [submissionResult, setSubmissionResult] = useState<{
-    ok: boolean;
-    data?: unknown;
-    error?: string;
-  } | null>(null);
+  const [verifyingSubmission, setVerifyingSubmission] = useState(false);
+  const [submissionResult, setSubmissionResult] = useState<SubmissionFeedback | null>(null);
 
   // Toast / feedback
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -1799,7 +1820,15 @@ function ProjectDraftModalContent({
       ];
     }
     setFormData(loadedData);
-    setSubmissionResult(draft.lastSubmission ? { ok: draft.lastSubmission.ok, data: draft.lastSubmission.result, error: draft.lastSubmission.error } : null);
+    if (draft.status === 'submitted') {
+      setSubmissionResult({ state: 'verified', message: draft.operation === 'edit_existing_project' ? 'Alterações confirmadas no Projeto Técnico existente.' : 'O Fênix confirmou o cadastro deste projeto.', data: draft.lastSubmission?.result });
+    } else if (draftNeedsSubmissionVerification(draft)) {
+      setSubmissionResult({ state: 'pending', message: 'O resultado do envio ainda não foi confirmado. Consulte o Fênix antes de tentar novamente.' });
+    } else if (draft.lastSubmission?.error) {
+      setSubmissionResult({ state: 'error', message: draft.lastSubmission.error });
+    } else {
+      setSubmissionResult(null);
+    }
     setConfirmKey('');
     setStep(1);
     setView('editor');
@@ -2342,6 +2371,12 @@ function ProjectDraftModalContent({
   };
 
   // Envio Seguro para o Fênix Real
+  const submissionPending = currentDraft?.status === 'submitting' || currentDraft?.status === 'verification_pending' || submissionResult?.state === 'pending';
+  const submissionVerified = currentDraft?.status === 'submitted' || submissionResult?.state === 'verified';
+  const isEditExistingProject = currentDraft?.operation === 'edit_existing_project';
+  const officialConfirmationWord = isEditExistingProject ? 'SALVAR_ALTERACOES' : 'ENVIAR_FENIX';
+  const editTargetAvailable = !isEditExistingProject || Boolean(currentDraft?.metadata?.targetProjectId && currentDraft.metadata.targetBuildingId);
+
   const handleSubmitFenix = async () => {
     const draftId = currentDraft?.id || formData.id;
     if (!draftId) {
@@ -2349,45 +2384,183 @@ function ProjectDraftModalContent({
       return;
     }
 
-    if (confirmKey !== 'ENVIAR_FENIX') {
-      showToast('Digite a palavra exata ENVIAR_FENIX para destravar o envio.', 'error');
+    if (submissionPending) {
+      showToast('O resultado deste envio ainda está pendente. Consulte o Fênix antes de tentar novamente.', 'info');
+      return;
+    }
+
+    if (submissionVerified) {
+      showToast('Este projeto já foi confirmado no Fênix.', 'info');
+      return;
+    }
+
+    if (confirmKey !== officialConfirmationWord) {
+      showToast(`Digite a palavra exata ${officialConfirmationWord} para destravar a operação.`, 'error');
       return;
     }
 
     if (!localValidation.valid) {
-      showToast('Corrija os erros do rascunho antes de submeter.', 'error');
+      showToast(isEditExistingProject ? 'Corrija os erros antes de salvar as alterações no Fênix.' : 'Corrija os erros do rascunho antes de submeter.', 'error');
+      return;
+    }
+    if (!editTargetAvailable) {
+      showToast('O ID oficial do Projeto Técnico não foi confirmado. Esta edição pode ser salva localmente, mas não enviada ao Fênix.', 'error');
       return;
     }
 
     setSubmitting(true);
     setSubmissionResult(null);
     try {
-      const res = await api<{
-        ok: boolean;
-        draft: DraftRecord;
-        result?: unknown;
-        error?: string;
-      }>(`/api/drafts/${encodeURIComponent(draftId)}/submit`, {
+      const res = await api<DraftSubmissionVerificationResponse<DraftRecord>>(`/api/drafts/${encodeURIComponent(draftId)}/submit`, {
         method: 'POST',
         body: JSON.stringify({ confirmWord: confirmKey })
       });
 
-      if (res.ok) {
-        setSubmissionResult({ ok: true, data: res.result });
-        setCurrentDraft(res.draft);
-        showToast('Projeto Técnico Cadastrado no Fênix com Sucesso!', 'success');
+      const verified = res.verified === true || res.verification === 'confirmed' || res.draft?.status === 'submitted';
+      const pending = res.pendingVerification === true || res.verification === 'pending' || res.draft?.status === 'submitting' || res.draft?.status === 'verification_pending'
+        || (res.ok && res.draft?.status !== 'error' && !verified);
+      if (verified) {
+        const verifiedDraft = res.draft.status === 'submitted' ? res.draft : { ...res.draft, status: 'submitted' as const };
+        const successMessage = res.message || (isEditExistingProject ? 'Alterações confirmadas no Projeto Técnico existente.' : 'O Fênix confirmou o cadastro deste projeto.');
+        setSubmissionResult({ state: 'verified', message: successMessage, data: res.result });
+        setCurrentDraft(verifiedDraft);
+        showToast(successMessage, 'success');
         void fetchDrafts();
         onProjectSubmitted?.();
+      } else if (pending) {
+        const pendingDraft = res.draft.status === 'verification_pending' ? res.draft : { ...res.draft, status: 'verification_pending' as const };
+        const message = res.message || res.error || 'O resultado do envio ainda não foi confirmado. Consulte o Fênix antes de tentar novamente.';
+        setSubmissionResult({ state: 'pending', message });
+        setCurrentDraft(pendingDraft);
+        setConfirmKey('');
+        showToast(message, 'info');
+        void fetchDrafts();
       } else {
-        setSubmissionResult({ ok: false, error: res.error || 'Falha retornada pelo Fênix.' });
-        showToast(res.error || 'Erro na transmissão ao Fênix.', 'error');
+        const message = res.error || res.message || 'O Fênix não confirmou o cadastro do projeto.';
+        setCurrentDraft(res.draft);
+        setSubmissionResult({ state: 'error', message });
+        showToast(message, 'error');
+        void fetchDrafts();
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Erro na requisição ao Fênix.';
-      setSubmissionResult({ ok: false, error: msg });
-      showToast(msg, 'error');
+      let latestDraft: DraftRecord | undefined;
+      try {
+        const latest = await api<{ draft: DraftRecord }>(`/api/drafts/${encodeURIComponent(draftId)}`);
+        latestDraft = latest.draft;
+        if (latestDraft) {
+          setCurrentDraft(latestDraft);
+          if (latestDraft.status === 'submitted') {
+            const successMessage = latestDraft.operation === 'edit_existing_project' ? 'Alterações confirmadas no Projeto Técnico existente.' : 'O Fênix confirmou o cadastro deste projeto.';
+            setSubmissionResult({ state: 'verified', message: successMessage, data: latestDraft.lastSubmission?.result });
+            showToast(successMessage, 'success');
+            void fetchDrafts();
+            onProjectSubmitted?.();
+            return;
+          }
+          if (draftNeedsSubmissionVerification(latestDraft)) {
+            const message = 'A resposta do envio ficou pendente. Consulte o resultado no Fênix antes de tentar novamente.';
+            setSubmissionResult({ state: 'pending', message });
+            setConfirmKey('');
+            showToast(message, 'info');
+            void fetchDrafts();
+            return;
+          }
+          if (latestDraft.status === 'error') {
+            const failure = latestDraft.lastSubmission?.error || msg;
+            setSubmissionResult({ state: 'error', message: failure });
+            showToast(failure, 'error');
+            void fetchDrafts();
+            return;
+          }
+        }
+      } catch {
+        // Mantém a mensagem da falha original se não for possível reler o rascunho.
+      }
+      const rejectedBeforeTransmission = /confirmação inválida|possui inconsistências|não pode ser enviado|não podem ser salvas|não passa|rascunho não encontrado|target_unavailable|target_mismatch|connection_unavailable/i.test(msg);
+      if (rejectedBeforeTransmission) {
+        setSubmissionResult({ state: 'error', message: msg });
+        showToast(msg, 'error');
+      } else {
+        if (latestDraft) setCurrentDraft({ ...latestDraft, status: 'verification_pending' });
+        setSubmissionResult({ state: 'pending', message: 'Não foi possível confirmar a resposta do envio. Consulte o resultado no Fênix antes de tentar novamente.' });
+        setConfirmKey('');
+        showToast('O resultado do envio está pendente de confirmação.', 'info');
+        void fetchDrafts();
+      }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleVerifySubmission = async () => {
+    const draftId = currentDraft?.id || formData.id;
+    if (!draftId || verifyingSubmission) return;
+
+    setVerifyingSubmission(true);
+    try {
+      const res = await api<DraftSubmissionVerificationResponse<DraftRecord>>(`/api/drafts/${encodeURIComponent(draftId)}/verify-submission`, {
+        method: 'POST'
+      });
+      const verified = res.verified === true || res.verification === 'confirmed' || res.draft?.status === 'submitted';
+      const pending = res.pendingVerification === true || res.verification === 'pending' || res.draft?.status === 'submitting' || res.draft?.status === 'verification_pending';
+
+      if (verified) {
+        const verifiedDraft = res.draft.status === 'submitted' ? res.draft : { ...res.draft, status: 'submitted' as const };
+        setCurrentDraft(verifiedDraft);
+        const successMessage = res.message || (isEditExistingProject ? 'Alterações confirmadas no Projeto Técnico existente.' : 'O Fênix confirmou o cadastro deste projeto.');
+        setSubmissionResult({ state: 'verified', message: successMessage, data: res.result });
+        showToast(successMessage, 'success');
+        void fetchDrafts();
+        onProjectSubmitted?.();
+      } else if (pending) {
+        const pendingDraft = res.draft.status === 'verification_pending' ? res.draft : { ...res.draft, status: 'verification_pending' as const };
+        const message = res.message || res.error || 'O resultado ainda não está disponível. Consulte novamente em instantes.';
+        setCurrentDraft(pendingDraft);
+        setSubmissionResult({ state: 'pending', message });
+        showToast(message, 'info');
+        void fetchDrafts();
+      } else {
+        const message = res.error || res.message || 'O Fênix não confirmou o cadastro deste projeto.';
+        setCurrentDraft(res.draft);
+        setSubmissionResult({ state: 'error', message });
+        showToast(message, 'error');
+        void fetchDrafts();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Não foi possível consultar o resultado no Fênix.';
+      try {
+        const latest = await api<{ draft: DraftRecord }>(`/api/drafts/${encodeURIComponent(draftId)}`);
+        const latestDraft = latest.draft;
+        setCurrentDraft(latestDraft);
+        if (latestDraft.status === 'submitted') {
+          const successMessage = latestDraft.operation === 'edit_existing_project' ? 'Alterações confirmadas no Projeto Técnico existente.' : 'O Fênix confirmou o cadastro deste projeto.';
+          setSubmissionResult({ state: 'verified', message: successMessage, data: latestDraft.lastSubmission?.result });
+          showToast(successMessage, 'success');
+          void fetchDrafts();
+          onProjectSubmitted?.();
+          return;
+        }
+        if (draftNeedsSubmissionVerification(latestDraft)) {
+          setSubmissionResult({ state: 'pending', message: `${message} O envio continua bloqueado até que o resultado seja confirmado.` });
+          void fetchDrafts();
+          showToast('Não foi possível confirmar o resultado. Tente consultar novamente.', 'info');
+          return;
+        }
+        if (latestDraft.status === 'error' || /não possui um envio pendente|not_pending/i.test(message)) {
+          setSubmissionResult({ state: 'error', message: latestDraft.lastSubmission?.error || message });
+          void fetchDrafts();
+          showToast(latestDraft.lastSubmission?.error || message, 'error');
+          return;
+        }
+      } catch {
+        // Mantém a pendência se não for possível conferir o estado salvo.
+      }
+      setSubmissionResult({ state: 'pending', message: `${message} O envio continua bloqueado até que o resultado seja confirmado.` });
+      showToast('Não foi possível confirmar o resultado. Tente consultar novamente.', 'info');
+      void fetchDrafts();
+    } finally {
+      setVerifyingSubmission(false);
     }
   };
 
@@ -2599,7 +2772,9 @@ function ProjectDraftModalContent({
     <div className="draft-cards-grid">
       {drafts.map((draft) => {
         const isSim = draft.status === 'simulated' || draft.lastSimulation?.ok;
-        const isSub = draft.status === 'submitted' || draft.lastSubmission?.ok;
+        const isSub = draft.status === 'submitted';
+        const isSubmitting = draft.status === 'submitting';
+        const isPendingVerification = draftNeedsSubmissionVerification(draft);
         return (
           <div
             key={draft.id}
@@ -2621,8 +2796,11 @@ function ProjectDraftModalContent({
                 </h4>
                 <span className="draft-date">Atualizado em {new Date(draft.updatedAt).toLocaleString('pt-BR')}</span>
               </div>
-              <span className={`status-badge status-${isSub ? 'submitted' : isSim ? 'simulated' : 'draft'}`}>
-                {isSub ? 'Enviado ao Fênix' : isSim ? 'Validado' : 'Rascunho'}
+              <span
+                className={`status-badge status-${isSub ? 'submitted' : isPendingVerification ? 'verification-pending' : isSim ? 'simulated' : 'draft'}`}
+                style={isPendingVerification ? { background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' } : undefined}
+              >
+                {isSub ? 'Confirmado no Fênix' : isSubmitting ? 'Envio em andamento' : isPendingVerification ? 'Aguardando confirmação' : isSim ? 'Validado' : 'Rascunho'}
               </span>
             </div>
 
@@ -5247,71 +5425,106 @@ function ProjectDraftModalContent({
                     )}
                   </div>
 
-                  {/* Trava de Segurança e Transmissão para o Fênix Real */}
                   <div className="secure-submission-card" id="draft-s3-transmissao" style={{ scrollMarginTop: '96px' }}>
                     <div className="submission-warning-head">
-                      <AlertTriangle size={24} className="text-amber" />
+                      {isEditExistingProject ? <Save size={24} className="text-amber" /> : <AlertTriangle size={24} className="text-amber" />}
                       <div>
-                        <h4>Ambiente de Transmissão Oficial CBMBA</h4>
-                        <p>
-                          Atenção: Ao submeter, os dados serão enviados para o sistema oficial do Corpo de Bombeiros Militar da Bahia,
-                          criando a Edificação e o Projeto Técnico na base governamental.
-                        </p>
+                        <h4>{isEditExistingProject ? 'Salvar alterações no Projeto Técnico existente' : 'Ambiente de Transmissão Oficial CBMBA'}</h4>
+                        {isEditExistingProject ? (
+                          <p>As alterações serão enviadas para o mesmo Projeto Técnico e a mesma edificação vinculada. O Painel não criará um novo projeto durante esta edição.</p>
+                        ) : (
+                          <p>A submissão criará uma Edificação e um Projeto Técnico na base oficial do Corpo de Bombeiros Militar da Bahia.</p>
+                        )}
+                        {isEditExistingProject && <small>Projeto {currentDraft?.metadata?.targetProjectNumber || '—'} · ID {currentDraft?.metadata?.targetProjectId || 'não confirmado'} · Edificação {currentDraft?.metadata?.targetBuildingId || 'não confirmada'}</small>}
                       </div>
                     </div>
 
                     <div className="submission-lock-body">
                       <p>
-                        Para evitar transmissões acidentais, digite exatamente a palavra de confirmação <code>ENVIAR_FENIX</code> no campo abaixo:
+                        Para evitar alterações acidentais, digite exatamente <code>{officialConfirmationWord}</code> no campo abaixo:
                       </p>
 
                       <div className="submission-form-row">
                         <div className="lock-input-wrap">
-                          {confirmKey === 'ENVIAR_FENIX' ? <Unlock size={18} className="text-green" /> : <Lock size={18} className="text-muted" />}
+                          {confirmKey === officialConfirmationWord ? <Unlock size={18} className="text-green" /> : <Lock size={18} className="text-muted" />}
                           <input
                             type="text"
                             className="input-text lock-input"
-                            placeholder="Digite ENVIAR_FENIX para destravar"
+                            placeholder={`Digite ${officialConfirmationWord} para destravar`}
                             value={confirmKey}
                             onChange={(e) => setConfirmKey(e.target.value)}
+                            disabled={submissionPending || submissionVerified}
                           />
                         </div>
 
                         <button
                           type="button"
                           className="button button-danger button-submit-fenix"
-                          disabled={confirmKey !== 'ENVIAR_FENIX' || submitting || !localValidation.valid}
+                          disabled={confirmKey !== officialConfirmationWord || submitting || submissionPending || submissionVerified || !localValidation.valid || !editTargetAvailable}
                           onClick={() => void handleSubmitFenix()}
                         >
                           {submitting ? (
                             <>
-                              <LoaderCircle size={16} className="spin" /> Transmitindo ao CBMBA...
+                              <LoaderCircle size={16} className="spin" /> {isEditExistingProject ? 'Salvando alterações...' : 'Transmitindo ao CBMBA...'}
+                            </>
+                          ) : submissionPending ? (
+                            <>
+                              <RefreshCw size={16} /> Aguardando confirmação
+                            </>
+                          ) : submissionVerified ? (
+                            <>
+                              <CheckCircle2 size={16} /> {isEditExistingProject ? 'Alterações salvas no Fênix' : 'Confirmado no Fênix'}
                             </>
                           ) : (
                             <>
-                              <Send size={16} /> Enviar para o Fênix Real
+                              {isEditExistingProject ? <Save size={16} /> : <Send size={16} />} {isEditExistingProject ? 'Salvar alterações no Fênix' : 'Enviar para o Fênix Real'}
                             </>
                           )}
                         </button>
                       </div>
 
+                      {isEditExistingProject && !editTargetAvailable && <p className="validation-warning-banner" role="status">O ID oficial do Projeto Técnico não foi confirmado. Salve o rascunho local e recarregue os dados antes de enviar alterações.</p>}
+
                       {submissionResult && (
-                        <div className={`submission-result-box ${submissionResult.ok ? 'success' : 'error'} mt-3`}>
-                          {submissionResult.ok ? (
+                        <div
+                          className={`submission-result-box ${submissionResult.state === 'verified' ? 'success' : submissionResult.state === 'pending' ? 'pending' : 'error'} mt-3`}
+                          role="status"
+                          aria-live="polite"
+                          style={submissionResult.state === 'pending' ? { background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' } : undefined}
+                        >
+                          {submissionResult.state === 'verified' ? (
                             <>
                               <CheckCircle2 size={24} className="text-green" />
                               <div>
-                                <b>🎉 Projeto Técnico Transmitido com Sucesso ao CBMBA!</b>
-                                <p>Registro concluído no banco de dados do Fênix.</p>
-                                <pre className="json-code mt-1">{JSON.stringify(submissionResult.data, null, 2)}</pre>
+                                <b>{isEditExistingProject ? 'Alterações confirmadas no Fênix.' : 'Projeto Técnico confirmado no Fênix.'}</b>
+                                <p>{submissionResult.message || 'O resultado foi verificado no sistema oficial.'}</p>
+                                {submissionResult.data !== undefined && <pre className="json-code mt-1">{JSON.stringify(submissionResult.data, null, 2)}</pre>}
+                              </div>
+                            </>
+                          ) : submissionResult.state === 'pending' ? (
+                            <>
+                              <RefreshCw size={24} className={verifyingSubmission ? 'spin' : ''} />
+                              <div style={{ flex: 1 }}>
+                                <b>Confirmação pendente no Fênix.</b>
+                                <p>{submissionResult.message || 'O resultado do envio ainda não foi confirmado. Consulte o Fênix antes de tentar novamente.'}</p>
+                                <button
+                                  type="button"
+                                  className="button button-outline"
+                                  onClick={() => void handleVerifySubmission()}
+                                  disabled={verifyingSubmission}
+                                  aria-busy={verifyingSubmission}
+                                >
+                                  {verifyingSubmission ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
+                                  {verifyingSubmission ? 'Consultando resultado…' : 'Consultar resultado no Fênix'}
+                                </button>
                               </div>
                             </>
                           ) : (
                             <>
                               <CircleAlert size={24} className="text-red" />
                               <div>
-                                <b>Erro na Transmissão:</b>
-                                <p>{submissionResult.error}</p>
+                                <b>{isEditExistingProject ? 'As alterações não foram confirmadas.' : 'O cadastro não foi confirmado.'}</b>
+                                <p>{submissionResult.message || 'Revise o rascunho e tente novamente.'}</p>
                               </div>
                             </>
                           )}
@@ -5373,7 +5586,7 @@ function ProjectDraftModalContent({
             onClick={() => void handleSaveDraft()}
             disabled={saving}
           >
-            <Save size={15} /> Salvar Rascunho Final
+            <Save size={15} /> {isEditExistingProject ? 'Salvar Rascunho Local' : 'Salvar Rascunho Final'}
           </button>
         )}
       </div>
@@ -5387,12 +5600,12 @@ function ProjectDraftModalContent({
         {/* Cabeçalho nativo da página Fênix Painel */}
         <div className="page-heading">
           <div>
-            <span className="section-kicker">CADASTRO DE EDIFICAÇÃO E PROJETO TÉCNICO</span>
+            <span className="section-kicker">{isEditExistingProject ? 'EDIÇÃO DE PROJETO TÉCNICO EXISTENTE' : 'CADASTRO DE EDIFICAÇÃO E PROJETO TÉCNICO'}</span>
             <h1>{view === 'list' ? 'Cadastrar no Fênix' : (formData.name || 'Novo Cadastro no Fênix')}</h1>
             <p>
               {view === 'list'
                 ? 'Prepare rascunhos locais, consulte o enquadramento IT-14 por CNPJ e valide tudo antes de enviar ao Corpo de Bombeiros.'
-                : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação e Endereço' : step === 2 ? 'Projeto Técnico, Ocupação e Medidas' : 'Revisão Final e Envio ao Fênix'}`}
+                : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação e Endereço' : step === 2 ? 'Projeto Técnico, Ocupação e Medidas' : isEditExistingProject ? 'Revisão e salvamento das alterações' : 'Revisão Final e Envio ao Fênix'}`}
             </p>
           </div>
           <div className="page-heading-actions">
@@ -5422,7 +5635,7 @@ function ProjectDraftModalContent({
                   <Zap size={15} className="text-amber" /> Exemplo (VAL SAT)
                 </button>
                 <button type="button" className="button button-teal" onClick={() => void handleSaveDraft()} disabled={saving}>
-                  {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />} Salvar Rascunho
+                  {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />} {isEditExistingProject ? 'Salvar Rascunho Local' : 'Salvar Rascunho'}
                 </button>
               </>
             )}
@@ -5502,7 +5715,7 @@ function ProjectDraftModalContent({
               <p>
                 {view === 'list'
                   ? 'Gerencie rascunhos locais com validação prévia e transmissão segura para o Corpo de Bombeiros.'
-                  : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação & Endereço' : step === 2 ? 'Projeto Técnico & Enquadramento' : 'Validação, Revisão & Envio'}`}
+                  : `Etapa ${step} de 3 · ${step === 1 ? 'Edificação & Endereço' : step === 2 ? 'Projeto Técnico & Enquadramento' : isEditExistingProject ? 'Revisão e salvamento das alterações' : 'Validação, Revisão & Envio'}`}
               </p>
             </div>
           </div>
@@ -5532,7 +5745,7 @@ function ProjectDraftModalContent({
                   onClick={() => void handleSaveDraft()}
                   disabled={saving || submitting}
                 >
-                  {saving ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} Salvar Rascunho
+                  {saving ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} {isEditExistingProject ? 'Salvar Rascunho Local' : 'Salvar Rascunho'}
                 </button>
               </>
             )}

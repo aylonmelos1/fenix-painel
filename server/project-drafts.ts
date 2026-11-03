@@ -134,6 +134,8 @@ export interface ProjectDraftAddress {
 }
 
 export interface ProjectDraftInstitution {
+  id?: number | null;
+  cnae_id?: number | string | null;
   tipo_pessoa?: 'PJ' | 'PF' | string;
   cnpj?: string;
   cpf?: string;
@@ -275,6 +277,16 @@ export interface ProjectDraftInput {
   [key: string]: unknown;
 }
 
+export type ProjectDraftOperation = 'create_project' | 'edit_existing_project';
+export interface ProjectDraftMetadata {
+  sourceBuildingId: string;
+  sourceProcessId: string;
+  sourceConnectionId: string | null;
+  targetBuildingId: string | null;
+  targetProjectId: string | null;
+  targetProjectNumber?: string | null;
+}
+
 export interface BuildPayloadResult {
   valid: boolean;
   errors: string[];
@@ -289,7 +301,9 @@ export interface BuildPayloadResult {
 export interface DraftRecord {
   id: string;
   name: string;
-  status: 'draft' | 'simulated' | 'submitting' | 'submitted' | 'error';
+  status: 'draft' | 'simulated' | 'submitting' | 'verification_pending' | 'submitted' | 'error';
+  operation: ProjectDraftOperation;
+  metadata?: ProjectDraftMetadata;
   updatedAt: string;
   data: ProjectDraftInput;
   lastSimulation?: {
@@ -309,9 +323,14 @@ export interface DraftRecord {
   };
   lastSubmission?: {
     ok: boolean;
+    verification?: 'pending' | 'confirmed' | 'rejected';
     result?: unknown;
     error?: string;
   };
+}
+
+export function isProjectEditDraft(draft: Pick<DraftRecord, 'operation'>): boolean {
+  return draft.operation === 'edit_existing_project';
 }
 
 export function buildAndValidateFenixProjectPayload(
@@ -951,6 +970,8 @@ function rowToDraftRecord(row: {
     id: row.id,
     name,
     status: row.status as DraftRecord['status'],
+    operation: parsed.operation === 'edit_existing_project' ? 'edit_existing_project' : 'create_project',
+    ...(parsed.operation === 'edit_existing_project' && parsed.metadata ? { metadata: parsed.metadata as ProjectDraftMetadata } : {}),
     updatedAt: row.updated_at,
     data: inputData,
     lastSimulation: parsed.lastSimulation,
@@ -993,7 +1014,8 @@ export function getProjectDraft(userId: string, id: string): DraftRecord | undef
 export function upsertProjectDraft(
   userId: string,
   input: ProjectDraftInput,
-  id?: string
+  id?: string,
+  requestedMetadata?: ProjectDraftMetadata
 ): DraftRecord {
   const draftId = id || input.id || randomUUID();
   const now = new Date().toISOString();
@@ -1001,7 +1023,10 @@ export function upsertProjectDraft(
     .prepare('SELECT * FROM fenix_project_drafts WHERE id = ? AND user_id = ?')
     .get(draftId, userId) as any;
 
-  const status = input.status || (existing ? existing.status : 'draft');
+  const protectedStatus = existing && ['submitting', 'verification_pending', 'submitted'].includes(existing.status)
+    ? existing.status
+    : null;
+  const status = protectedStatus || input.status || (existing ? existing.status : 'draft');
   const edificacaoMode = input.edificacao_mode || (existing ? existing.edificacao_mode : 'new');
   const edificacaoId =
     input.edificacao_id !== undefined
@@ -1015,17 +1040,30 @@ export function upsertProjectDraft(
     } catch {}
   }
 
+  const operation: ProjectDraftOperation = storedPayload.operation === 'edit_existing_project' || (!existing && requestedMetadata)
+    ? 'edit_existing_project'
+    : 'create_project';
+  const metadata = storedPayload.operation === 'edit_existing_project'
+    ? storedPayload.metadata as ProjectDraftMetadata | undefined
+    : requestedMetadata;
+  const normalizedInput = { ...input } as ProjectDraftInput;
+  for (const key of ['operation', 'metadata', 'sourceBuildingId', 'sourceProcessId', 'sourceConnectionId', 'targetBuildingId', 'targetProjectId', 'source_building_id', 'source_process_id', 'source_connection_id', 'target_building_id', 'target_project_id']) {
+    delete normalizedInput[key];
+  }
+
   const name =
-    input.name ||
-    input.reference_name ||
-    input.edification?.reference_name ||
+    normalizedInput.name ||
+    normalizedInput.reference_name ||
+    normalizedInput.edification?.reference_name ||
     storedPayload.name ||
     'Rascunho de Projeto';
 
   const updatedPayload = {
     ...storedPayload,
+    operation,
+    ...(operation === 'edit_existing_project' && metadata ? { metadata } : {}),
     name,
-    data: input
+    data: normalizedInput
   };
 
   const encryptedPayload = seal(JSON.stringify(updatedPayload));
@@ -1055,14 +1093,16 @@ export function updateDraftSimulation(
   if (!draft) return undefined;
 
   const row = db
-    .prepare('SELECT payload_json FROM fenix_project_drafts WHERE id = ? AND user_id = ?')
+    .prepare('SELECT status,payload_json FROM fenix_project_drafts WHERE id = ? AND user_id = ?')
     .get(id, userId) as any;
   let storedPayload: any = {};
   try {
     storedPayload = decodeDraftPayloadJson(row?.payload_json || '{}');
   } catch {}
 
-  const nextStatus = simulationResult.valid ? 'simulated' : 'draft';
+  const nextStatus = row && ['submitting', 'verification_pending', 'submitted'].includes(row.status)
+    ? row.status
+    : simulationResult.valid ? 'simulated' : 'draft';
   const now = new Date().toISOString();
 
   storedPayload.lastSimulation = {
@@ -1095,7 +1135,8 @@ export function updateDraftSubmission(
   id: string,
   submissionResult: {
     ok: boolean;
-    result?: { id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number };
+    verificationPending?: boolean;
+    result?: Partial<{ id: number; num_projeto: string; edificacao_id?: number; solicitacao_id?: number }>;
     error?: string;
   }
 ): DraftRecord | undefined {
@@ -1111,10 +1152,11 @@ export function updateDraftSubmission(
   } catch {}
 
   const now = new Date().toISOString();
-  storedPayload.lastSubmission = submissionResult;
+  const verification = submissionResult.ok ? 'confirmed' : submissionResult.verificationPending ? 'pending' : 'rejected';
+  storedPayload.lastSubmission = { ...submissionResult, verification };
   const encryptedPayload = seal(JSON.stringify(storedPayload));
 
-  if (submissionResult.ok && submissionResult.result) {
+  if (submissionResult.ok && submissionResult.result?.id) {
     db.prepare(`
       UPDATE fenix_project_drafts 
       SET status = 'submitted', fenix_projeto_id = ?, fenix_num_projeto = ?, last_error = NULL, payload_json = ?, updated_at = ?
@@ -1127,11 +1169,29 @@ export function updateDraftSubmission(
       id,
       userId
     );
+  } else if (submissionResult.verificationPending) {
+    const projectId = submissionResult.result?.id && Number.isSafeInteger(submissionResult.result.id) && submissionResult.result.id > 0
+      ? submissionResult.result.id : null;
+    const projectNumber = typeof submissionResult.result?.num_projeto === 'string' ? submissionResult.result.num_projeto : '';
+    db.prepare(`
+      UPDATE fenix_project_drafts
+      SET status = 'verification_pending', fenix_projeto_id = COALESCE(?,fenix_projeto_id),
+          fenix_num_projeto = COALESCE(NULLIF(?,''),fenix_num_projeto), last_error = ?, payload_json = ?, updated_at = ?
+      WHERE id = ? AND user_id = ? AND status <> 'submitted'
+    `).run(
+      projectId,
+      projectNumber,
+      submissionResult.error || 'O resultado do envio precisa ser confirmado por leitura no Fênix.',
+      encryptedPayload,
+      now,
+      id,
+      userId
+    );
   } else {
     db.prepare(`
       UPDATE fenix_project_drafts 
       SET status = 'error', last_error = ?, payload_json = ?, updated_at = ?
-      WHERE id = ? AND user_id = ?
+      WHERE id = ? AND user_id = ? AND status <> 'submitted'
     `).run(
       submissionResult.error || 'Falha desconhecida no envio ao Fênix.',
       encryptedPayload,
@@ -1147,7 +1207,7 @@ export function updateDraftSubmission(
 export function acquireDraftSubmissionLock(
   userId: string,
   draftId: string
-): { acquired: boolean; reason?: 'not_found' | 'already_submitted' | 'already_submitting' } {
+): { acquired: boolean; reason?: 'not_found' | 'already_submitted' | 'already_submitting' | 'verification_pending' } {
   const row = db
     .prepare('SELECT status FROM fenix_project_drafts WHERE id = ? AND user_id = ?')
     .get(draftId, userId) as { status: string } | undefined;
@@ -1161,17 +1221,22 @@ export function acquireDraftSubmissionLock(
   if (row.status === 'submitting') {
     return { acquired: false, reason: 'already_submitting' };
   }
+  if (row.status === 'verification_pending') {
+    return { acquired: false, reason: 'verification_pending' };
+  }
 
   const now = new Date().toISOString();
   const res = db
     .prepare(
       `UPDATE fenix_project_drafts 
        SET status = 'submitting', updated_at = ?
-       WHERE id = ? AND user_id = ? AND status NOT IN ('submitted', 'submitting')`
+       WHERE id = ? AND user_id = ? AND status NOT IN ('submitted', 'submitting', 'verification_pending')`
     )
     .run(now, draftId, userId);
 
   if (res.changes === 0) {
+    const current = db.prepare('SELECT status FROM fenix_project_drafts WHERE id = ? AND user_id = ?').get(draftId, userId) as { status: string } | undefined;
+    if (current?.status === 'verification_pending') return { acquired: false, reason: 'verification_pending' };
     return { acquired: false, reason: 'already_submitting' };
   }
 
@@ -1179,6 +1244,8 @@ export function acquireDraftSubmissionLock(
 }
 
 export function deleteProjectDraft(userId: string, id: string): boolean {
+  const row = db.prepare('SELECT status FROM fenix_project_drafts WHERE user_id = ? AND id = ?').get(userId, id) as { status: string } | undefined;
+  if (row && ['submitting', 'verification_pending', 'submitted'].includes(row.status)) return false;
   const res = db
     .prepare('DELETE FROM fenix_project_drafts WHERE user_id = ? AND id = ?')
     .run(userId, id);

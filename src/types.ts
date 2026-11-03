@@ -19,6 +19,19 @@ export type DashboardProcess = {
   projectKind?: string | null;
 };
 
+export type ProjectDraftStatus = 'draft' | 'simulated' | 'submitting' | 'verification_pending' | 'submitted' | 'error';
+
+export type DraftSubmissionVerificationResponse<TDraft> = {
+  ok: boolean;
+  draft: TDraft;
+  verification?: 'confirmed' | 'pending' | 'not_pending';
+  verified?: boolean;
+  pendingVerification?: boolean;
+  message?: string;
+  result?: unknown;
+  error?: string;
+};
+
 export type ProcessMenuKey = 'analysis' | 'notified' | 'stopped' | 'certificates' | 'projects';
 export type ProcessMenuFilter = { typeTerms: string[]; stageTerms: string[]; join: 'all' | 'any' };
 export type ProcessMenuFilters = Record<ProcessMenuKey, ProcessMenuFilter>;
@@ -75,7 +88,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...(init?.body && !multipart ? { 'Content-Type': 'application/json' } : {}), ...init?.headers }
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Erro HTTP ${response.status}`);
+  if (!response.ok && response.status !== 202) throw new Error(data.error || `Erro HTTP ${response.status}`);
   return data as T;
 }
 

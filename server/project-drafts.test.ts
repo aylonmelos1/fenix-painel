@@ -386,8 +386,12 @@ test('Persistência SQLite: ciclo completo de CRUD para fenix_project_drafts', (
 
     // 6. Remoção
     const deleted = deleteProjectDraft(testUserId, created.id);
-    assert.equal(deleted, true);
-    assert.equal(getProjectDraft(testUserId, created.id), undefined);
+    assert.equal(deleted, false, 'Rascunho submetido precisa ser preservado');
+    assert.ok(getProjectDraft(testUserId, created.id));
+
+    const deletableDraft = upsertProjectDraft(testUserId, { ...draftInput, name: 'Rascunho removível' });
+    assert.equal(deleteProjectDraft(testUserId, deletableDraft.id), true);
+    assert.equal(getProjectDraft(testUserId, deletableDraft.id), undefined);
   } finally {
     // Limpeza
     db.prepare('DELETE FROM users WHERE id = ?').run(testUserId);
