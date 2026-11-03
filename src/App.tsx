@@ -1146,7 +1146,9 @@ function FenixActionIcon({ icon, size = 15 }: { icon: FenixProcessAction['icon']
 }
 
 function deriveFallbackFenixActions(buildingId: string, process?: ProcessDetail): FenixProcessAction[] {
-  if (process?.fenixActions && process.fenixActions.length > 0) {
+  // The server action list reflects Fênix status/type rules. An empty list is
+  // intentional too, so the UI fallback must not reintroduce a blocked action.
+  if (Array.isArray(process?.fenixActions)) {
     return process.fenixActions;
   }
   if (!process || !process.id) return [];
