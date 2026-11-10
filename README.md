@@ -6,7 +6,7 @@ O board de `docs/design/board-padrao.png` é a referência visual oficial.
 
 ## Roadmap
 
-Veja [o roadmap da V1 até a V2](docs/ROADMAP-V1-A-V2.md) e a [proposta de menus personalizados da V1.2](docs/V1.2-MENUS-PERSONALIZAVEIS.md).
+Veja [o roadmap e a auditoria de paridade com o Fênix](docs/ROADMAP-V1-A-V2.md), o [contrato de cadastro e documentos](docs/FENIX-CADASTRO-EDIFICACAO-E-PROJETO.md) e a [proposta de menus personalizados da V1.2](docs/V1.2-MENUS-PERSONALIZAVEIS.md).
 
 ## Requisitos e comandos
 
@@ -36,8 +36,9 @@ O código do Worker está em `/home/aylons1/fenix-mcp/cloudflare/fenix-upstream-
 ## Áreas do painel
 
 - Visão geral e edificações: uma linha por edificação, com o processo mais recente resumido.
-- Projetos técnicos, solicitações/vistorias e indicadores: uma linha por processo Fênix. Os indicadores de processos abrem listas na mesma unidade e aplicam o mesmo critério de status.
-- Documentos: abre a ficha da edificação e consulta os arquivos oficiais sob demanda. Cada item mostra disponibilidade, limitação conhecida ou falha consultável novamente.
+- Projetos técnicos, solicitações/vistorias e indicadores: uma linha por processo Fênix. A ficha de Solicitações também consulta resumo, projeto vinculado, responsáveis técnicos, histórico e DAEs da conta selecionada.
+- Perfil, Vistorias, Migrações SAP e Remanejamentos: consultas do perfil solicitante, limitadas aos registros que podem ser vinculados com segurança à conta conectada.
+- Documentos: abre a ficha da edificação e consulta ou baixa arquivos oficiais sob demanda. O envio de anexos ao Fênix ainda não está disponível; os locais e contratos candidatos estão no roadmap.
 - Consultas: estado da conexão e histórico local das sincronizações. A sincronização roda no servidor a cada 30 minutos para contas com sessão ativa; mudanças em processos geram notificações locais.
 - Assistente Fênix: conversa contextual sob demanda, com perguntas e respostas preservadas enquanto o painel estiver aberto e fontes do processo.
 
@@ -45,7 +46,7 @@ O código do Worker está em `/home/aylons1/fenix-mcp/cloudflare/fenix-upstream-
 
 O SQLite, as sessões do Fênix e as configurações e chaves OpenAI/Odoo ficam em `data/`. As chaves OpenAI e Odoo e a sessão Fênix são criptografadas com AES-256-GCM usando `data/.local-key`; as permissões são restritas ao usuário local. Não copie as chaves para o frontend, logs, capturas de tela ou repositórios.
 
-A sincronização consulta as rotas GET mapeadas no `fenix-mcp`. O painel não envia alterações ao Fênix. Certificados e comprovantes são baixados quando o Fênix oferece o arquivo. A emissão do DAE pode exigir etapa manual na SEFAZ-BA. Alguns anexos de retificação podem não ser autorizados pela sessão atual; a interface identifica essa limitação.
+A sincronização usa consultas GET descobertas pelo reverseapi. O Painel também executa ações explícitas no Fênix, como criar Projeto Técnico e solicitar vistoria. A guia DAE pode ser aberta na SEFAZ-BA a partir da solicitação; o Painel não processa pagamentos. O cadastro iniciado pelo painel ainda não envia anexos, não gera o protocolo inicial nem confirma o fluxo completo. Certificados e comprovantes são baixados quando o Fênix oferece o arquivo.
 
 ### Integração Odoo
 

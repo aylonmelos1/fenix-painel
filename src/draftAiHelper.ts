@@ -276,8 +276,8 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     number: '',
     complement: '***',
     district: '',
-    county: 'SALVADOR',
-    municipio_id: 323,
+    county: '',
+    municipio_id: null,
     state: 'BA',
     geographic_coordinates: ''
   },
@@ -302,32 +302,32 @@ export const INITIAL_EMPTY_DRAFT: ProjectDraftInput = {
     tipo_pessoa_prop: 'PJ',
     cpf_cnpj_prop: '',
     nome_proprietario: '',
-    email_proprietario: 'engenharia@abaincendio.com.br',
-    tel_proprietario: '(71) 4000-2895'
+    email_proprietario: '',
+    tel_proprietario: ''
   },
   responsavel: {
     responsavel_uso_igual_prop: true,
     tipo_pessoa_resp: 'PJ',
     cpf_cnpj_resp: '',
     nome_responsavel: '',
-    email_responsavel_uso: 'engenharia@abaincendio.com.br',
-    tel_responsavel_uso: '(71) 4000-2895'
+    email_responsavel_uso: '',
+    tel_responsavel_uso: ''
   },
   technical: {
     cpf: '',
-    name: 'ABA Incêndio - Engenharia e Projetos',
-    crea_cau: 'BA20261628773',
-    telephone: '(71) 4000-2895',
-    email: 'engenharia@abaincendio.com.br'
+    name: '',
+    crea_cau: '',
+    telephone: '',
+    email: ''
   },
   responsaveis_tecnicos: [
     {
       tipo_numero: 'CREA',
-      crea_cau: 'BA20261628773',
-      name: 'ABA Incêndio - Engenharia e Projetos',
-      cpf_cnpj: '00000000000',
-      phone: '(71) 4000-2895',
-      email: 'engenharia@abaincendio.com.br'
+      crea_cau: '',
+      name: '',
+      cpf_cnpj: '',
+      phone: '',
+      email: ''
     }
   ],
   incluir_rt_opcional: false,
@@ -431,7 +431,7 @@ export function generateLocalAiAssistantFallback(
         thinkingSteps: [
           `Lendo parâmetros da edificação em foco: ${activeBuilding.reference}`,
           `Definindo área construída (${parsedArea} m²) e pavimentos (${parsedFloors})`,
-          `Configurando município: ${activeBuilding.municipality || 'SALVADOR'}`
+          `Configurando município: ${activeBuilding.municipality || 'não informado'}`
         ],
         appliedChangesSummary: [
           `Referência → ${activeBuilding.reference}`,
@@ -449,7 +449,7 @@ export function generateLocalAiAssistantFallback(
             height: parsedFloors > 1 ? `${parsedFloors} pavimentos` : 'Térrea = Um pavimento'
           },
           address: {
-            county: activeBuilding.municipality || 'SALVADOR',
+            county: activeBuilding.municipality || '',
             state: 'BA'
           }
         },
@@ -678,29 +678,22 @@ export function generateLocalAiAssistantFallback(
   }
 
   if (norm.includes('revis') || norm.includes('corrig') || norm.includes('pend')) {
-    const patchObj: any = { step: 1 };
-    const fixes: string[] = [];
+    const pending: string[] = [];
 
-    if (!draft.edification?.reference_name?.trim()) {
-      patchObj.edification = { ...(patchObj.edification || {}), reference_name: 'EDIFICAÇÃO COMERCIAL PRINCIPAL' };
-      fixes.push('Nome de referência atribuído');
-    }
-    if (!draft.address?.zip_code || draft.address.zip_code.length !== 8) {
-      patchObj.address = { ...(patchObj.address || {}), zip_code: '40000000', state: 'BA' };
-      fixes.push('CEP base da Bahia atribuído (40000-000)');
-    }
-    if (!draft.address?.public_place?.trim()) {
-      patchObj.address = { ...(patchObj.address || {}), public_place: 'Avenida Principal', number: '100', district: 'Centro' };
-      fixes.push('Endereço completado');
-    }
+    if (!draft.edification?.reference_name?.trim()) pending.push('nome de referência da edificação');
+    if (!draft.address?.zip_code || draft.address.zip_code.length !== 8) pending.push('CEP real com 8 dígitos');
+    if (!draft.address?.public_place?.trim()) pending.push('logradouro');
+    if (!draft.address?.number?.trim()) pending.push('número do imóvel');
+    if (!draft.address?.district?.trim()) pending.push('bairro');
+    if (!draft.address?.municipio_id) pending.push('município selecionado na lista oficial');
 
     return {
-      reply: fixes.length > 0
-        ? `Revisei o formulário e corrigi ${fixes.length} inconsistência(s) obrigatória(s) do CBMBA.`
-        : 'Parabéns! O rascunho já cumpre todas as regras essenciais de validação para a Etapa 1 e Etapa 2.',
+      reply: pending.length > 0
+        ? 'Há campos que dependem dos dados reais da edificação: ' + pending.join(', ') + '. Não vou preencher esses dados por suposição.'
+        : 'Não encontrei campos obrigatórios ausentes que possam ser resolvidos automaticamente. Confira a validação do formulário.',
       thinkingSteps: ['Varredura das etapas 1, 2 e 3', 'Checagem de campos obrigatórios CBMBA', 'Correção preventiva de bloqueios'],
-      appliedChangesSummary: fixes,
-      formPatch: fixes.length > 0 ? patchObj : undefined,
+      appliedChangesSummary: pending.map((item) => 'Pendente: ' + item),
+      formPatch: pending.length > 0 ? { step: 1 } : undefined,
       suggestions: ['✦ Sugerir medidas IT-14', '✦ Explicar enquadramento']
     };
   }

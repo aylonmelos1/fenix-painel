@@ -20,13 +20,19 @@ if (process.env.FENIX_BASE_URL && FENIX_ORIGIN !== OFFICIAL_FENIX_ORIGIN && !FEN
   throw new Error('FENIX_PROXY_TOKEN é obrigatório quando FENIX_BASE_URL aponta para o proxy Cloudflare.');
 }
 export const HCAPTCHA_SITE_KEY = 'e94868de-18ba-4314-b0ce-c7c84a1440b6';
-const FRONTEND_VERSION = '2.19.1';
+// Versão do frontend Vue do Fênix. O bundle vivo em 10/11/2026 (`js/app.05d2a1c1.js`,
+// `info:{version:"2.19.2"}`) é a fonte primária via detecção anônima do índice público;
+// este valor só é usado quando a detecção falha (fallback).
+export const FENIX_FALLBACK_FRONTEND_VERSION = '2.19.2';
+// Caminho-base canônico da API. O bundle oficial usa baseURL relativa "api/v1"
+// (sem barra inicial); todo relativo resolve sob `api/v1`.
+export const FENIX_API_BASE_PATH = '/api/v1';
 const REQUEST_TIMEOUT_MS = 25_000;
 const FENIX_REQUESTS_PER_MINUTE = 45;
 let fenixRequestQueueDepth = 0;
 
 export class FenixError extends Error {
-  constructor(message: string, public status?: number, public retryAfterMs?: number) { super(message); }
+  constructor(message: string, public status?: number, public retryAfterMs?: number, public data?: unknown) { super(message); }
 }
 
 function retryAfterMs(response: Response) {
@@ -87,7 +93,105 @@ function xsrf(jar: CookieJar, url: string) {
   try { return decodeURIComponent(cookie.value); } catch { return cookie.value; }
 }
 
-export async function loginFenix(email: string, password: string, hcaptchaToken: string, onProgress?: (stage: number) => void) {
+export function parseFenixBundleHash(indexHtml: string): string | null {
+  const match = /\/js\/app\.([0-9a-f]{8,40})\.js/i.exec(String(indexHtml ?? ''));
+  return match?.[1] ?? null;
+}
+
+export function parseFenixFrontendVersion(bundleJs: string): string | null {
+  const src = String(bundleJs ?? '');
+  const info = /info:\s*\{\s*version:\s*"(\d+\.\d+\.\d+)"/.exec(src);
+  if (info?.[1]) return info[1];
+  const generic = /version:\s*"(\d+\.\d+\.\d+)"/.exec(src);
+  return generic?.[1] ?? null;
+}
+
+const FRONTEND_DETECTION_TTL_MS = 6 * 60 * 60_000;
+let frontendDetectionCache: { version: string; bundleHash: string | null; expiresAt: number } | null = null;
+
+export function clearFenixFrontendDetectionCache() {
+  frontendDetectionCache = null;
+}
+
+// Detecta a versão do frontend a partir do índice público do Fênix (GET anônimo,
+// sem sessão nem credenciais): lê o hash de `/js/app.<hash>.js` e extrai
+// `info.version` do bundle. Qualquer falha retorna o fallback, nunca lança.
+export async function detectFenixFrontendVersion(
+  fetchImpl: typeof fetch = fetch
+): Promise<{ version: string; bundleHash: string | null }> {
+  const cached = frontendDetectionCache;
+  if (cached && cached.expiresAt > Date.now()) return { version: cached.version, bundleHash: cached.bundleHash };
+  try {
+    const indexResponse = await fetchImpl(new URL('/', FENIX_ORIGIN), {
+      headers: { Accept: 'text/html' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: 'manual'
+    } as RequestInit);
+    if (!indexResponse.ok) throw new Error(`índice público retornou HTTP ${indexResponse.status}`);
+    const bundleHash = parseFenixBundleHash(await indexResponse.text());
+    if (!bundleHash) throw new Error('hash do bundle ausente no índice público');
+    const bundleResponse = await fetchImpl(new URL(`/js/app.${bundleHash}.js`, FENIX_ORIGIN), {
+      headers: { Accept: 'application/javascript, */*' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: 'manual'
+    } as RequestInit);
+    if (!bundleResponse.ok) throw new Error(`bundle público retornou HTTP ${bundleResponse.status}`);
+    const bundleJs = await bundleResponse.text();
+    if (Buffer.byteLength(bundleJs) > 5_000_000) throw new Error('bundle público excedeu o limite aceito');
+    const version = parseFenixFrontendVersion(bundleJs);
+    if (!version) throw new Error('marcador de versão ausente no bundle público');
+    frontendDetectionCache = { version, bundleHash, expiresAt: Date.now() + FRONTEND_DETECTION_TTL_MS };
+    return { version, bundleHash };
+  } catch {
+    return {
+      version: frontendDetectionCache?.version ?? FENIX_FALLBACK_FRONTEND_VERSION,
+      bundleHash: frontendDetectionCache?.bundleHash ?? null
+    };
+  }
+}
+
+// Normaliza um caminho de API para a forma canônica `/api/v1/...`.
+// Aceita a forma relativa do bundle ("api/v1/..."), a forma absoluta com barra,
+// relativos nus ("solicitacoes/...", resolvidos sob `api/v1` como o bundle faz)
+// e URLs absolutas sob a origem do Fênix. Lança FenixError fora de `api/v1`.
+export function normalizeFenixApiPath(path: string): string {
+  const raw = String(path ?? '').trim();
+  if (!raw) throw new FenixError('Rota fora da API autorizada do Fênix.');
+  let pathname = raw;
+  let search = '';
+  let explicit = raw.startsWith('/');
+  if (/^https?:\/\//i.test(raw)) {
+    const parsed = new URL(raw);
+    if (parsed.origin !== FENIX_ORIGIN) throw new FenixError('Rota fora da API autorizada do Fênix.');
+    pathname = parsed.pathname;
+    search = parsed.search;
+    explicit = true;
+  } else {
+    const queryIndex = raw.indexOf('?');
+    if (queryIndex >= 0) {
+      pathname = raw.slice(0, queryIndex);
+      search = raw.slice(queryIndex);
+    }
+  }
+  pathname = `/${pathname.replace(/^\/+/, '').replace(/\/{2,}/g, '/')}`;
+  if (pathname === '/api/v1' || pathname === '/api/v1/') return `/api/v1/${search ? search : ''}`.replace(/\?$/, '');
+  if (!pathname.startsWith('/api/v1/')) {
+    // Caminho absoluto fora de `api/v1` continua proibido (falha rápida);
+    // relativo sem barra (forma do bundle) resolve sob `api/v1`.
+    if (explicit) throw new FenixError('Rota fora da API autorizada do Fênix.');
+    pathname = `/api/v1/${pathname.replace(/^\/+/, '')}`;
+  }
+  return `${pathname}${search}`;
+}
+
+export async function loginFenix(
+  email: string,
+  password: string,
+  hcaptchaToken: string,
+  onProgress?: (stage: number) => void,
+  onRejected?: (upstreamStatus: number, responseOk: boolean) => void,
+  versionOverride?: string
+) {
   if (!email || !password || !hcaptchaToken) throw new FenixError('Informe usuário, senha e conclua o hCaptcha.');
   onProgress?.(0);
   const jar = new CookieJar();
@@ -108,14 +212,18 @@ export async function loginFenix(email: string, password: string, hcaptchaToken:
   if (csrfToken) headers['X-XSRF-TOKEN'] = csrfToken;
   onProgress?.(2);
   onProgress?.(3);
+  const frontendVersion = versionOverride ?? (await detectFenixFrontendVersion()).version;
   const result = await fetchBounded(loginUrl, {
     method: 'POST', headers,
-    body: JSON.stringify({ email, password, version: FRONTEND_VERSION, hcaptcha_token: hcaptchaToken })
+    body: JSON.stringify({ email, password, version: frontendVersion, hcaptcha_token: hcaptchaToken })
   });
   await storeCookies(result.response, loginUrl.toString(), jar);
   const payload = result.body as any;
   const user = payload?.user ?? payload?.data?.user;
-  if (!result.response.ok || !user?.id) return undefined;
+  if (!result.response.ok || !user?.id) {
+    onRejected?.(result.response.status, result.response.ok);
+    return undefined;
+  }
   onProgress?.(4);
   return { jar, user };
 }
@@ -124,8 +232,7 @@ export class FenixClient {
   constructor(private jar: CookieJar) {}
 
   async get(path: string, query: Record<string, string | number> = {}) {
-    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
-    const url = new URL(path, FENIX_ORIGIN);
+    const url = new URL(normalizeFenixApiPath(path), FENIX_ORIGIN);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
     const result = await fetchBounded(url, {
       method: 'GET', headers: {
@@ -134,13 +241,12 @@ export class FenixClient {
       }
     });
     await storeCookies(result.response, url.toString(), this.jar);
-    if (!result.response.ok) throw new FenixError(`Consulta ao Fênix retornou HTTP ${result.response.status}.`, result.response.status, retryAfterMs(result.response));
+    if (!result.response.ok) throw new FenixError(`Consulta ao Fênix retornou HTTP ${result.response.status}.`, result.response.status, retryAfterMs(result.response), result.body);
     return result.body;
   }
 
   async post(path: string, body: Record<string, unknown>) {
-    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
-    const url = new URL(path, FENIX_ORIGIN);
+    const url = new URL(normalizeFenixApiPath(path), FENIX_ORIGIN);
     const headers: Record<string, string> = {
       Accept: 'application/json', 'Content-Type': 'application/json', Origin: FENIX_ORIGIN,
       Referer: `${FENIX_ORIGIN}/`, Cookie: this.jar.getCookieStringSync(url.toString()),
@@ -150,13 +256,12 @@ export class FenixClient {
     if (token) headers['X-XSRF-TOKEN'] = token;
     const result = await fetchBounded(url, { method: 'POST', headers, body: JSON.stringify(body) }, 5_000_000);
     await storeCookies(result.response, url.toString(), this.jar);
-    if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
+    if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status, undefined, result.body);
     return result.body;
   }
 
   async put(path: string, body: Record<string, unknown>) {
-    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
-    const url = new URL(path, FENIX_ORIGIN);
+    const url = new URL(normalizeFenixApiPath(path), FENIX_ORIGIN);
     const headers: Record<string, string> = {
       Accept: 'application/json', 'Content-Type': 'application/json', Origin: FENIX_ORIGIN,
       Referer: `${FENIX_ORIGIN}/`, Cookie: this.jar.getCookieStringSync(url.toString()),
@@ -166,13 +271,12 @@ export class FenixClient {
     if (token) headers['X-XSRF-TOKEN'] = token;
     const result = await fetchBounded(url, { method: 'PUT', headers, body: JSON.stringify(body) }, 5_000_000);
     await storeCookies(result.response, url.toString(), this.jar);
-    if (!result.response.ok) throw new FenixError(`Atualização no Fênix retornou HTTP ${result.response.status}.`, result.response.status, retryAfterMs(result.response));
+    if (!result.response.ok) throw new FenixError(`Atualização no Fênix retornou HTTP ${result.response.status}.`, result.response.status, retryAfterMs(result.response), result.body);
     return result.body;
   }
 
   async postFormData(path: string, fields: Record<string, string | number | boolean | null | undefined>) {
-    if (!path.startsWith('/api/v1/')) throw new FenixError('Rota fora da API autorizada do Fênix.');
-    const url = new URL(path, FENIX_ORIGIN);
+    const url = new URL(normalizeFenixApiPath(path), FENIX_ORIGIN);
     const form = new FormData();
     for (const [k, v] of Object.entries(fields)) {
       if (v !== null && v !== undefined) form.append(k, String(v));
@@ -188,7 +292,7 @@ export class FenixClient {
     if (token) headers['X-XSRF-TOKEN'] = token;
     const result = await fetchBounded(url, { method: 'POST', headers, body: form }, 5_000_000);
     await storeCookies(result.response, url.toString(), this.jar);
-    if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status);
+    if (!result.response.ok) throw new FenixError(`Solicitação ao Fênix retornou HTTP ${result.response.status}.`, result.response.status, undefined, result.body);
     return result.body;
   }
 }
@@ -505,6 +609,25 @@ export async function getTechnicalProjectDaeUrl(userId: string, projectId: strin
   return url.toString();
 }
 
+/** Resolves a DAE directly from a verified requester solicitation, without requiring a linked local project. */
+export async function getFenixRequestDaeUrl(userId: string, requestId: string, daeId: string) {
+  if (!/^\d+$/.test(requestId) || !/^\d+$/.test(daeId)) throw new FenixError('Identificador de DAE inválido.', 404);
+  const response = await (await fenixClientForUser(userId)).get(`/api/v1/solicitacoes/${encodeURIComponent(requestId)}/daes`) as any;
+  const root = response?.data ?? response;
+  const rows = Array.isArray(root?.daes) ? root.daes : Array.isArray(root) ? root : Array.isArray(root?.data) ? root.data : Array.isArray(root?.rows) ? root.rows : [];
+  const matches = rows.filter((row: any) => String(row?.id ?? '') === daeId
+    && String(row?.solicitacao_id ?? '') === requestId);
+  if (matches.length !== 1 || typeof matches[0]?.url_dae !== 'string' || !matches[0].url_dae.trim()) {
+    throw new FenixError('O Fênix não disponibilizou um DAE único para esta solicitação.', matches.length > 1 ? 409 : 404);
+  }
+  let url: URL;
+  try { url = new URL(matches[0].url_dae); } catch { throw new FenixError('O endereço do DAE retornado pelo Fênix é inválido.', 502); }
+  if (url.protocol !== 'https:' || url.hostname !== 'servicos.sefaz.ba.gov.br' || url.username || url.password) {
+    throw new FenixError('O endereço do DAE não pertence ao portal oficial esperado.', 502);
+  }
+  return url.toString();
+}
+
 export async function getTechnicalProjectDaePdf(userId: string, projectId: string, daeId: string) {
   const detail = await technicalProjectDetails(userId, projectId);
   if (!detail.requestId) throw new FenixError('O projeto não possui solicitação atual.', 404);
@@ -663,10 +786,10 @@ export async function addProcessDocumentsToWebhook(userId: string, event: Proces
 
 function records(value: any): any[] {
   if (Array.isArray(value)) return value;
-  for (const candidate of [value?.data, value?.rows, value?.items, value?.results, value?.edifications, value?.requests, value?.technicalprojects]) {
+  for (const candidate of [value?.data, value?.rows, value?.items, value?.results, value?.edifications, value?.requests, value?.technicalprojects, value?.surveys, value?.survey]) {
     if (Array.isArray(candidate)) return candidate;
     if (candidate && typeof candidate === 'object') {
-      for (const nested of [candidate.data, candidate.rows, candidate.items, candidate.results]) if (Array.isArray(nested)) return nested;
+      for (const nested of [candidate.data, candidate.rows, candidate.items, candidate.results, candidate.surveys, candidate.survey]) if (Array.isArray(nested)) return nested;
     }
   }
   return [];
@@ -677,8 +800,9 @@ async function allRecords(client: FenixClient, path: string, query: Record<strin
   const firstPage = await client.get(path, { ...query, page: 1, perPage: pageSize }) as any;
   const firstRows = records(firstPage);
   const total = Number(firstPage?.total ?? firstPage?.data?.total ?? firstRows.length);
-  if (!Number.isFinite(total) || total <= firstRows.length || firstRows.length < pageSize) return firstRows;
-  const pageCount = Math.min(Math.ceil(total / pageSize), 100);
+  if (!Number.isFinite(total) || total <= firstRows.length) return firstRows;
+  const pageCount = Math.ceil(total / pageSize);
+  if (pageCount > 100) throw new FenixError(`A consulta ${path} excede o limite de páginas; os dados anteriores foram preservados.`);
   const rows = [...firstRows];
   for (let page = 2; page <= pageCount; page++) {
     const result = await client.get(path, { ...query, page, perPage: pageSize });
@@ -686,7 +810,55 @@ async function allRecords(client: FenixClient, path: string, query: Record<strin
     if (!batch.length) break;
     rows.push(...batch);
   }
-  return rows;
+  if (rows.length < total) throw new FenixError(`A consulta ${path} retornou ${rows.length} de ${total} registros; os dados anteriores foram preservados.`);
+  return rows.slice(0, total);
+}
+
+export async function listFenixRequesterRequests(userId: string, clientOverride?: FenixClient): Promise<any[]> {
+  const client = clientOverride || await fenixClientForUser(userId);
+  return allRecords(client, '/api/v1/request', { tipo_lista: 'minhas_solicitacoes' });
+}
+
+export async function listFenixSurveys(userId: string, clientOverride?: FenixClient): Promise<any[]> {
+  const client = clientOverride || await fenixClientForUser(userId);
+  return allRecords(client, '/api/v1/survey', {});
+}
+
+export async function verifyFenixRequesterIdentity(userId: string, clientOverride?: FenixClient): Promise<string> {
+  const user = db.prepare('SELECT fenix_user_id FROM users WHERE id=? AND demo=0').get(userId) as { fenix_user_id: string | null } | undefined;
+  const expectedId = String(user?.fenix_user_id || '').trim();
+  if (!expectedId) throw new FenixError('Identidade Fênix da conta não encontrada.', 401);
+  const client = clientOverride || await fenixClientForUser(userId);
+  const details = await client.get('/api/v1/detailsRequester') as any;
+  const actualId = String(first(details, ['user.id', 'data.user.id', 'id'], '')).trim();
+  if (!actualId || actualId !== expectedId) {
+    throw new FenixError('A sessão Fênix não corresponde à conta vinculada.', 401);
+  }
+  return actualId;
+}
+
+export async function listFenixSapMigrations(userId: string, clientOverride?: FenixClient): Promise<any[]> {
+  const client = clientOverride || await fenixClientForUser(userId);
+  return allRecords(client, '/api/v1/migracoes-sap', {});
+}
+
+export async function getFenixSapMigrationDetail(userId: string, migrationId: string, clientOverride?: FenixClient): Promise<any | null> {
+  const client = clientOverride || await fenixClientForUser(userId);
+  const response = await client.get(`/api/v1/migracoes-sap/${encodeURIComponent(migrationId)}`) as any;
+  const migration = response?.data?.migracao;
+  return migration && typeof migration === 'object' && !Array.isArray(migration) ? migration : null;
+}
+
+export async function listFenixRemanejamentos(userId: string, clientOverride?: FenixClient): Promise<any[]> {
+  const client = clientOverride || await fenixClientForUser(userId);
+  return allRecords(client, '/api/v1/remanejamentos', {});
+}
+
+export async function getFenixRemanejamentoDetail(userId: string, remanejamentoId: string, clientOverride?: FenixClient): Promise<any | null> {
+  const client = clientOverride || await fenixClientForUser(userId);
+  const response = await client.get(`/api/v1/remanejamentos/${encodeURIComponent(remanejamentoId)}`) as any;
+  const remanejamento = response?.data?.remanejamento;
+  return remanejamento && typeof remanejamento === 'object' && !Array.isArray(remanejamento) ? remanejamento : null;
 }
 
 const first = (object: any, keys: string[], fallback: any = ''): any => {
@@ -779,6 +951,7 @@ export interface FenixProcessAction {
   downloadUrl?: string;
   confirmTitle?: string;
   confirmMessage?: string;
+  eligibility?: 'oficial-permitida' | 'oficial-bloqueada' | 'heuristica-nao-confirmada' | 'heuristica-bloqueada';
 }
 
 export function extractFenixMeta(process: any): FenixProcessMeta {
@@ -859,15 +1032,48 @@ export function safeProcessPayload(process: any) {
   return { documents, timeline, fenixMeta };
 }
 
+export type FenixActionEligibilityInput = Record<string, { allowed: boolean | null; source: 'oficial' | 'heuristica' } | null | undefined> | null | undefined;
+
+/**
+ * Regra de negócio devolvida pelo Fênix em falha de escrita (ex.:
+ * `data.regra = "prazoVencido" | "prazoExpirado"` em `gerarNumeroSolicitacao`).
+ * Evidência: bundle ao vivo `app.05d2a1c1.js` (`gerarSolicitacao` trata
+ * `a.data.regra` com diálogo próprio, sem repetir o POST). Regra terminal:
+ * o painel não repete o envio, só relê/consulta.
+ */
+export function fenixWriteRegraOf(error: unknown): string | null {
+  const data = (error as { data?: unknown } | null | undefined)?.data;
+  const nested = data && typeof data === 'object' ? (data as Record<string, unknown>).data : null;
+  const regra = data && typeof data === 'object'
+    ? (data as Record<string, unknown>).regra ?? (nested && typeof nested === 'object' ? (nested as Record<string, unknown>).regra : null)
+    : null;
+  return typeof regra === 'string' && regra.trim() ? regra.trim() : null;
+}
+
+/**
+ * Tipo enviado em `POST gerarNumeroSolicitacao`.
+ * Evidência: todos os call sites ao vivo (`gerarSolicitacao` na lista request,
+ * no detalhe e na survey) reenviam `tipo_solicitacao_id` da linha oficial,
+ * nunca um mapa fixo por botão. O fallback preserva o comportamento anterior
+ * quando a linha oficial não traz tipo.
+ */
+export function resolveGerarSolicitacaoTipoId(rowTipoId: number, action: string): number {
+  if (Number.isSafeInteger(rowTipoId) && rowTipoId > 0) return rowTipoId;
+  return action === 'solicitar_vistoria' ? 3 : action === 'solicitar_revistoria' ? 4 : 2;
+}
+
 export function computeFenixProcessActions(
   paramsOrProcess: any,
-  maybeBuildingId?: string
+  maybeBuildingId?: string,
+  eligibility?: FenixActionEligibilityInput
 ): FenixProcessAction[] {
   const process = paramsOrProcess && paramsOrProcess.process ? paramsOrProcess.process : paramsOrProcess;
   const buildingId = String(
     (paramsOrProcess && paramsOrProcess.buildingId) || maybeBuildingId || process?.buildingId || process?.building_id || ''
   );
   if (!process || typeof process !== 'object') return [];
+  const explicitEligibility: Record<string, { allowed: boolean | null; source: 'oficial' | 'heuristica' }> =
+    (paramsOrProcess && typeof paramsOrProcess.eligibility === 'object' && paramsOrProcess.eligibility) || eligibility || {};
 
   let payloadObj: any = {};
   if (typeof process.payload === 'string') {
@@ -931,13 +1137,24 @@ export function computeFenixProcessActions(
     Boolean(fenixMeta.renovacao) ||
     /renova[cç][aã]o/i.test(typeAndStage);
 
+  // Gates alinhados ao bundle ao vivo app.05d2a1c1.js (lista request + survey).
+  // O papel (solicitante/protocolista) e o dono (protocolista_id/usuario_id)
+  // só existem na sessão oficial: sem o POST de permissão, a oferta segue
+  // marcada como heurística não confirmada (rede de segurança no fim da função).
+  // `ativo` é tolerante: só nega quando o valor oficial conhecido nega
+  // (ao vivo: showSolicitarRenovacao/Reavaliacao exigem ativo S; showSolicitarReanalise nega ativo N).
+  const ativoOk = !fenixMeta.ativo || fenixMeta.ativo === 'S';
+  const isPtsAnaliseSlug = ['ptsclcb-analise', 'ptsavcb-analise'].includes(tipoSolicitacaoSlug);
+
   const protocol = String(process.protocol || '').trim();
   const processId = String(process.id || '');
 
   const actions: FenixProcessAction[] = [];
 
   // 3. Ação Dinâmica Principal (1º botão à esquerda)
-  if (['notificado', 'notificado-vistoria', 'edit-reavaliacao-renovacao'].includes(statusSlug) && renovacao) {
+  // Ao vivo: showSolicitarReavaliacaoRenovacao = status em
+  // [notificado, notificado-vistoria, edit-reavaliacao-renovacao] + renovacao + ativo S.
+  if (['notificado', 'notificado-vistoria', 'edit-reavaliacao-renovacao'].includes(statusSlug) && renovacao && ativoOk) {
     actions.push({
       key: 'reavaliacao_renovacao',
       label: isVistoria ? 'Solicitar Revistoria da Renovação' : 'Solicitar Reanálise da Renovação',
@@ -960,7 +1177,10 @@ export function computeFenixProcessActions(
         confirmTitle: 'Solicitar Revistoria no Fênix',
         confirmMessage: 'Deseja gerar uma nova solicitação de Revistoria para este processo no Fênix CBMBA?'
       });
-    } else if (statusSlug === 'notificado-vistoria' && isPtsAvcb) {
+    // Ao vivo: showSolicitarReanalise(status, tipoId, ativo, renovacao) exige
+    // tipo 6/8 + status notificado-vistoria + ativo !== 'N' + !renovacao
+    // (via gerarSolicitacao, mesmo POST das demais).
+    } else if (statusSlug === 'notificado-vistoria' && isPtsAvcb && fenixMeta.ativo !== 'N') {
       actions.push({
         key: 'solicitar_reanalise',
         label: 'Solicitar Reanálise',
@@ -990,7 +1210,12 @@ export function computeFenixProcessActions(
       tone: 'wine',
       kind: 'edit_draft'
     });
-  } else if (['homologado', 'homologado-sap'].includes(statusSlug) && !renovacao && isAnalisePt && !fenixMeta.sptDataFinal) {
+  // Ao vivo: showSolicitarVistoria = !renovacao e [(homologado|homologado-sap +
+  // tipo 1/2) ou (notificado + tipo 3/4)]. homologado-sap nunca gera POST: o
+  // Fenix abre a solicitação existente (gerarSolicitacao desvia para
+  // abrirSolicitacao). Rótulo ao vivo (setNomeBotaoVistoria): homologado(-sap)
+  // + tipo 1/2 → 'Solicitar Vistoria', senão 'Solicitar Revistoria'.
+  } else if (statusSlug === 'homologado' && !renovacao && isAnalisePt && !fenixMeta.sptDataFinal) {
     actions.push({
       key: 'solicitar_vistoria',
       label: 'Solicitar Vistoria',
@@ -1001,7 +1226,24 @@ export function computeFenixProcessActions(
       confirmTitle: 'Solicitar Vistoria no Fênix',
       confirmMessage: 'O projeto técnico está homologado na análise. Deseja gerar a solicitação de Vistoria no Fênix CBMBA?'
     });
-  } else if (['homologado', 'edit-renovacao'].includes(statusSlug) && !isAnalisePt && fenixMeta.evento !== 'S') {
+  } else if (statusSlug === 'homologado' && !renovacao && isVistoria && !fenixMeta.sptDataFinal) {
+    actions.push({
+      key: 'solicitar_revistoria',
+      label: 'Solicitar Revistoria',
+      shortLabel: 'Solicitar Revistoria',
+      icon: 'walk_transfer',
+      tone: 'wine',
+      kind: 'mutation',
+      confirmTitle: 'Solicitar Revistoria no Fênix',
+      confirmMessage: 'A vistoria está homologada. Deseja gerar uma nova solicitação de Revistoria para este processo no Fênix CBMBA?'
+    });
+  // Ao vivo: showSolicitarRenovacao = certificado + papel + status em
+  // [homologado, edit-renovacao, edit-reavaliacao-renovacao] + slug fora de
+  // [analise, reanalise] + ativo S + evento N + (edit-reavaliacao-renovacao ou
+  // hoje > validade − 3 meses, via certificado_aprovacao_externo.data_validade).
+  // Sem certificado/ativo no snapshot local, a checagem é tolerante (90 dias
+  // como aproximação dos 3 meses, sobre dataValidade/validUntil).
+  } else if (['homologado', 'edit-renovacao', 'edit-reavaliacao-renovacao'].includes(statusSlug) && !isAnalisePt && !['analise', 'reanalise'].includes(tipoSolicitacaoSlug) && fenixMeta.evento !== 'S' && ativoOk) {
     const validStr = fenixMeta.dataValidade || process.validUntil || '';
     let shouldShowRenewal = false;
     if (validStr) {
@@ -1023,18 +1265,37 @@ export function computeFenixProcessActions(
         confirmMessage: 'Deseja iniciar a solicitação de renovação desta licença no Fênix CBMBA?'
       });
     }
+  // Ao vivo: showCancelarSolicitacao(slug, status, renovacao, protocolista_id,
+  // usuario_id, autorizo) = (slug 'vistoria' ou (slug pts*-analise + renovacao))
+  // + status em [pendente-de-documentacao, pendente-de-pagamento] + regra de dono.
+  // showCancelarProcesso(item) = papel solicitante + !renovacao + mesma dupla de
+  // status + tipo fora de [3, 4] (+ mesma regra de dono). showCancelarSolicitacaoProtocolada
+  // exige chefe-da-secao/coordenador-de-vistoria + vistoria + protocolado: fora do
+  // perfil solicitante, não implementada. Sem usuário corrente no painel, a regra
+  // de dono fica para o POST de permissão; com slug oficial vale o gate exato,
+  // sem slug vale a heurística local (marcada como não confirmada abaixo).
   } else if (['pendente-de-documentacao', 'pendente-de-pagamento'].includes(statusSlug)) {
-    const isCancelReq = isVistoria || (renovacao && /pts/i.test(processType));
-    actions.push({
-      key: isCancelReq ? 'cancelar_solicitacao' : 'cancelar_processo',
-      label: isCancelReq ? 'Cancelar Solicitação' : 'Cancelar Processo',
-      shortLabel: 'Cancelar',
-      icon: 'cancel',
-      tone: 'danger',
-      kind: 'mutation',
-      confirmTitle: 'Atenção — Cancelamento no Fênix',
-      confirmMessage: 'O cancelamento com boleto(s) DAE pago(s) inviabilizará sua utilização em outros processos (exigindo pedido de estorno junto à SEFAZ-BA). Deseja realmente cancelar?'
-    });
+    let cancelKey: 'cancelar_solicitacao' | 'cancelar_processo' | null = null;
+    if (tipoSolicitacaoSlug) {
+      if (tipoSolicitacaoSlug === 'vistoria' || (isPtsAnaliseSlug && renovacao)) cancelKey = 'cancelar_solicitacao';
+      else if (!renovacao && tipoSolicitacaoSlug !== 'revistoria' && !(tipoSolicitacaoId !== null && [3, 4].includes(tipoSolicitacaoId))) cancelKey = 'cancelar_processo';
+    } else if (isVistoria || (renovacao && /pts/i.test(processType))) {
+      cancelKey = 'cancelar_solicitacao';
+    } else if (!renovacao) {
+      cancelKey = 'cancelar_processo';
+    }
+    if (cancelKey) {
+      actions.push({
+        key: cancelKey,
+        label: cancelKey === 'cancelar_solicitacao' ? 'Cancelar Solicitação' : 'Cancelar Processo',
+        shortLabel: 'Cancelar',
+        icon: 'cancel',
+        tone: 'danger',
+        kind: 'mutation',
+        confirmTitle: 'Atenção — Cancelamento no Fênix',
+        confirmMessage: 'O cancelamento com boleto(s) DAE pago(s) inviabilizará sua utilização em outros processos (exigindo pedido de estorno junto à SEFAZ-BA). Deseja realmente cancelar?'
+      });
+    }
   }
 
   // 4. Nuvem Vinho (cloud_wine — #71292a)
@@ -1082,7 +1343,18 @@ export function computeFenixProcessActions(
     });
   }
 
-  return actions;
+  // Elegibilidade (escopo 4): a permissão oficial prevalece sobre a heurística.
+  // Sem permissão injetada, mutações seguem marcadas como heurística não
+  // confirmada; o painel nunca consulta os POSTs de permissão com sessão real.
+  return actions.flatMap((action) => {
+    if (action.kind !== 'mutation') return [action];
+    const decision = explicitEligibility[action.key] ?? null;
+    if (decision?.source === 'oficial') {
+      if (!decision.allowed) return [];
+      return [{ ...action, eligibility: 'oficial-permitida' as const }];
+    }
+    return [{ ...action, eligibility: 'heuristica-nao-confirmada' as const }];
+  });
 }
 
 function safeBuildingPayload(building: any): Record<string, unknown> {
@@ -1149,8 +1421,55 @@ export async function syncFenixUser(userId: string) {
   const buildingRows = connection ? allBuildingRows.filter((row) => selectedRemoteIds!.has(String(first(row, ['id', 'edificacao_id'], '')))) : allBuildingRows;
   const requestRows = await allRecords(client, '/api/v1/request', { tipo_lista: 'minhas_solicitacoes' });
   const projectRows = await allRecords(client, '/api/v1/technicalproject', {});
+  const allBuildingOptions = mapFenixBuildingOptions(allBuildingRows);
+  const allBuildingsById = new Map(allBuildingOptions.map((item) => [item.id, item]));
   const buildingIds = new Set(buildingRows.map((item) => String(first(item, ['id', 'edificacao_id'], ''))).filter(Boolean));
   const localBuildingIds = new Map([...buildingIds].map((remoteId) => [remoteId, localBuildingId(remoteId)]));
+  const accountRequestsById = new Map<string, {
+    id: string; processId: string; remoteId: string; remoteBuildingId: string; buildingId: string | null;
+    buildingReference: string; municipality: string; protocol: string; requestNumber: string; protocolNumber: string; serviceType: string;
+    status: string; renewal: string; event: string; protocolDate: string;
+    notificationNumber: string; acpProtocol: string; avcbNumber: string; daeNumber: string; updatedAt: string;
+  }>();
+  const requestLabel = (source: any, keys: string[], fallback = '') => {
+    const value = first(source, keys, fallback);
+    return cleanLabel(value && typeof value === 'object'
+      ? first(value, ['descricao', 'nome', 'name', 'label', 'numero', 'formatado'], fallback)
+      : value);
+  };
+  for (const row of requestRows) {
+    const remoteId = String(first(row, ['solicitacao_id', 'id', 'request_id'], ''));
+    if (!remoteId) continue;
+    const processRemoteId = String(first(row, ['id', 'solicitacao_id', 'request_id'], remoteId));
+    const remoteBuildingId = processBuildingId(row);
+    const building = allBuildingsById.get(remoteBuildingId);
+    const serviceType = requestLabel(row, ['tipo_solicitacao_display', 'tipo_servico.descricao', 'tipo_solicitacao.descricao', 'tipo_solicitacao.nome', 'servico.nome', 'tipo_servico'], 'Solicitação');
+    const rawRenewal = first(row, ['renovacao.descricao', 'renovacao.nome', 'tipo_renovacao.descricao', 'renovacao', 'is_renewal'], '');
+    const renewalLabel = typeof rawRenewal === 'boolean' ? (rawRenewal ? 'Sim' : 'Não') : requestLabel(row, ['renovacao.descricao', 'renovacao.nome', 'tipo_renovacao.descricao', 'renovacao', 'is_renewal'], '');
+    const renewalKey = renewalLabel.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+    const renewal = /^(s|sim|true|1|yes)$/.test(renewalKey) ? 'Sim' : /^(n|nao|false|0|sem)$/.test(renewalKey) ? 'Não' : renewalLabel;
+    const accountRequestId = `account-request:${userId}:${remoteId}`;
+    const snapshot = {
+      id: accountRequestId, processId: localProcessId('request', processRemoteId), remoteId, remoteBuildingId,
+      buildingId: localBuildingIds.get(remoteBuildingId) || null,
+      buildingReference: building?.reference || '', municipality: building?.municipality || '',
+      protocol: cleanLabel(processProtocol(row)), serviceType: serviceType || 'Solicitação',
+      requestNumber: String(first(row, ['n_solicitacao'], '') ?? ''),
+      protocolNumber: String(first(row, ['n_protocolo_format'], '') ?? ''),
+      status: requestLabel(row, ['status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao', 'etapa_atual'], 'Em acompanhamento'),
+      renewal,
+      event: requestLabel(row, ['evento.nome', 'evento.descricao', 'event.name', 'event', 'nome_evento'], ''),
+      protocolDate: String(first(row, ['dt_protocolo', 'data_protocolo', 'created_at', 'protocol_date'], '')),
+      notificationNumber: requestLabel(row, ['n_notificacao_format', 'numero_notificacao', 'n_notificacao', 'notification_number'], ''),
+      acpProtocol: requestLabel(row, ['n_protocolo_acp', 'protocolo_acp', 'acp_protocol', 'projeto.num_projeto'], ''),
+      avcbNumber: requestLabel(row, ['n_avcb', 'numero_avcb', 'avcb', 'avcb_number'], ''),
+      daeNumber: requestLabel(row, ['n_dae', 'numero_dae', 'dae_numero', 'dae.number'], ''),
+      updatedAt: String(first(row, ['updated_at', 'data_atualizacao', 'created_at', 'dt_protocolo'], new Date().toISOString()))
+    };
+    const current = accountRequestsById.get(snapshot.id);
+    if (!current || (Date.parse(snapshot.updatedAt) || 0) >= (Date.parse(current.updatedAt) || 0)) accountRequestsById.set(snapshot.id, snapshot);
+  }
+  const accountRequestSnapshots = [...accountRequestsById.values()];
   const fetchedProcesses = [
     ...requestRows.map((row) => ({ ...row, __source: 'request' })),
     ...projectRows.map((row) => ({ ...row, __source: 'technicalproject' }))
@@ -1272,13 +1591,26 @@ export async function syncFenixUser(userId: string) {
     ON CONFLICT(id) DO UPDATE SET building_id=excluded.building_id, protocol=excluded.protocol,
       type=excluded.type, status=excluded.status, stage=excluded.stage, updated_at=excluded.updated_at,
       notified_by=excluded.notified_by, payload=excluded.payload, source_connection_id=excluded.source_connection_id, remote_id=excluded.remote_id`);
+  const upsertAccountRequest = db.prepare(`INSERT INTO fenix_account_requests
+    (id, user_id, source_connection_id, process_id, remote_id, remote_building_id, building_id, building_reference, municipality,
+      protocol, request_number, protocol_number, service_type, status, renewal, event, protocol_date, notification_number, acp_protocol, avcb_number, dae_number, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET remote_id=excluded.remote_id, remote_building_id=excluded.remote_building_id,
+      process_id=excluded.process_id, building_id=excluded.building_id, building_reference=excluded.building_reference, municipality=excluded.municipality,
+      protocol=excluded.protocol, request_number=excluded.request_number, protocol_number=excluded.protocol_number,
+      service_type=excluded.service_type, status=excluded.status, renewal=excluded.renewal,
+      event=excluded.event, protocol_date=excluded.protocol_date, notification_number=excluded.notification_number,
+      acp_protocol=excluded.acp_protocol, avcb_number=excluded.avcb_number, dae_number=excluded.dae_number,
+      updated_at=excluded.updated_at, source_connection_id=excluded.source_connection_id`);
   const sync = db.transaction(() => {
     if (connection) {
+      db.prepare('DELETE FROM fenix_account_requests WHERE user_id=? AND source_connection_id=?').run(userId, connection.id);
       if (selectedLocalBuildingIds.length) {
         db.prepare(`DELETE FROM processes WHERE user_id=? AND source_connection_id=? AND building_id IN (${selectedIdSql})`)
           .run(userId, connection.id, ...selectedLocalBuildingIds);
       }
     } else {
+      db.prepare('DELETE FROM fenix_account_requests WHERE user_id=? AND source_connection_id IS NULL').run(userId);
       db.prepare('DELETE FROM processes WHERE user_id = ?').run(userId);
       db.prepare('DELETE FROM buildings WHERE user_id = ?').run(userId);
     }
@@ -1305,6 +1637,12 @@ export async function syncFenixUser(userId: string) {
         processStatus(process), String(first(process, ['etapa_atual', 'fase', 'stage'], processStatus(process))),
         process.__source === 'request' ? cleanLabel(first(process, ['notificado_por', 'previous_request_notificado_por'], '')) : '',
         String(first(process, ['updated_at', 'data_atualizacao', 'created_at'], now)), JSON.stringify(safeProcessPayload(process)));
+    }
+    for (const request of accountRequestSnapshots) {
+      upsertAccountRequest.run(request.id, userId, connection?.id || null, request.processId, request.remoteId, request.remoteBuildingId,
+        request.buildingId, request.buildingReference, request.municipality, request.protocol, request.requestNumber, request.protocolNumber, request.serviceType,
+        request.status, request.renewal, request.event, request.protocolDate, request.notificationNumber,
+        request.acpProtocol, request.avcbNumber, request.daeNumber, request.updatedAt);
     }
     const insertNotification = db.prepare('INSERT OR IGNORE INTO notifications (user_id, building_id, process_id, dedupe_key, title, message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
     for (const change of changes) {
@@ -1355,7 +1693,7 @@ export async function syncFenixUser(userId: string) {
         });
     }
   }
-  return { buildings: buildingRows.length, processes: processRows.length, changes: changes.length, completedAt: now };
+  return { buildings: buildingRows.length, processes: processRows.length, requests: accountRequestSnapshots.length, changes: changes.length, completedAt: now };
 }
 
 export function newLocalId() { return randomUUID(); }

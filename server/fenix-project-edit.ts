@@ -1,8 +1,124 @@
-import { FenixError, fenixClientForUser } from './fenix.js';
+import { FenixError, fenixClientForUser, type FenixClient } from './fenix.js';
 import { buildAndValidateFenixProjectPayload, type ProjectDraftInput } from './project-drafts.js';
 
 type FenixProjectUpdatePayload = Record<string, unknown> & { id: number; edificacao_id: number };
-type FenixProjectUpdateResult = { id: number; num_projeto: string; edificacao_id: number; solicitacao_id?: number };
+type FenixProjectUpdateResult = {
+  id: number;
+  num_projeto: string;
+  edificacao_id: number;
+  solicitacao_id?: number;
+  navigation?: {
+    name: 'technicalProjects-form';
+    params: { id: number; edificacao_id: number; solicitacao_id: number; status_slug?: string };
+  };
+};
+
+// Edição oficial de solicitação/projeto (bundle app.05d2a1c1): sem PUT em
+// `solicitacoes` nem em `technicalproject`. A edição é aberta via
+// POST /api/v1/request/definirStatusV2 + navegação para `technicalProjects-form`
+// (editPT); conflito 409 vira o diálogo `request-modified` e retorna à listagem.
+export const FENIX_REQUEST_EDIT_STATUS_PATH = '/api/v1/request/definirStatusV2';
+export const FENIX_REQUEST_EDIT_ACTIONS = ['edit-renovacao', 'edit-reavaliacao-renovacao'] as const;
+export type FenixRequestEditAction = (typeof FENIX_REQUEST_EDIT_ACTIONS)[number];
+export const FENIX_REQUEST_MODIFIED_CODE = 'REQUEST_MODIFIED';
+
+export class FenixRequestModifiedError extends FenixError {
+  readonly code = FENIX_REQUEST_MODIFIED_CODE;
+  constructor() {
+    super(
+      'Esta solicitação teve uma mudança de status. Retorne à listagem e consulte novamente antes de tentar de novo.',
+      409
+    );
+  }
+}
+
+export function isFenixRequestModifiedError(error: unknown): boolean {
+  if (error instanceof FenixRequestModifiedError) return true;
+  if (!(error instanceof FenixError) || error.status !== 409) return false;
+  return /request-modified|some-request-modified|requestalreadymodified|acao ?n[aã]o ?permitida ?para ?status ?atual/i.test(
+    String(error.message ?? '')
+  );
+}
+
+export function resolveFenixRequestEditAction(
+  input: { statusSlug?: string | null; renovacao?: boolean | null } = {}
+): FenixRequestEditAction {
+  const slug = String(input.statusSlug ?? '').trim().toLowerCase();
+  const reavaliacao = Boolean(input.renovacao) && (/notificado/.test(slug) || /reavaliacao/.test(slug));
+  return reavaliacao ? 'edit-reavaliacao-renovacao' : 'edit-renovacao';
+}
+
+export function buildFenixRequestEditStatusBody(input: {
+  solicitacaoId: string | number;
+  sptId: string | number;
+  action?: string;
+  justificativa?: string | null;
+  dados?: unknown;
+}): { valid: boolean; errors: string[]; body: Record<string, unknown> | null } {
+  const errors: string[] = [];
+  const solicitacaoId = Number(input.solicitacaoId);
+  if (!Number.isSafeInteger(solicitacaoId) || solicitacaoId <= 0) {
+    errors.push('O solicitacao_id confirmado por leitura é inválido para edição.');
+  }
+  const sptId = Number(input.sptId);
+  if (!Number.isSafeInteger(sptId) || sptId <= 0) {
+    errors.push('O spt_id confirmado por leitura é inválido para edição.');
+  }
+  const action = String(input.action ?? 'edit-renovacao');
+  if (!(FENIX_REQUEST_EDIT_ACTIONS as readonly string[]).includes(action)) {
+    errors.push(`Ação de edição inválida para definirStatusV2: ${action || '(vazia)'}.`);
+  }
+  if (errors.length > 0) return { valid: false, errors, body: null };
+  return {
+    valid: true,
+    errors: [],
+    body: {
+      solicitacao_id: solicitacaoId,
+      spt_id: sptId,
+      action,
+      justificativa: input.justificativa ?? null,
+      dados: input.dados ?? null
+    }
+  };
+}
+
+export function buildFenixEditNavigationTarget(input: {
+  projectId: string | number;
+  buildingId: string | number;
+  solicitacaoId: string | number;
+  statusSlug?: string | null;
+}): FenixProjectUpdateResult['navigation'] | null {
+  const id = Number(input.projectId);
+  const buildingId = Number(input.buildingId);
+  const solicitacaoId = Number(input.solicitacaoId);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  if (!Number.isSafeInteger(buildingId) || buildingId <= 0) return null;
+  if (!Number.isSafeInteger(solicitacaoId) || solicitacaoId <= 0) return null;
+  const statusSlug = String(input.statusSlug ?? '').trim();
+  return {
+    name: 'technicalProjects-form',
+    params: {
+      id,
+      edificacao_id: buildingId,
+      solicitacao_id: solicitacaoId,
+      ...(statusSlug ? { status_slug: statusSlug } : {})
+    }
+  };
+}
+
+export async function submitFenixRequestEditStatus(
+  client: Pick<FenixClient, 'post'>,
+  body: Record<string, unknown>
+): Promise<unknown> {
+  try {
+    return await client.post(FENIX_REQUEST_EDIT_STATUS_PATH, body);
+  } catch (error) {
+    // No bundle, todo 409 do definirStatusV2 abre o diálogo `request-modified`
+    // e retorna à `request-list`: nunca repetir o envio sem reler a lista.
+    if (error instanceof FenixError && error.status === 409) throw new FenixRequestModifiedError();
+    throw error;
+  }
+}
 
 type SyncedFenixIdentity = {
   id: unknown;
@@ -264,30 +380,52 @@ export async function submitFenixTechnicalProjectUpdate(
   userId: string,
   projectId: number,
   buildingId: number,
-  payload: FenixProjectUpdatePayload
+  payload: FenixProjectUpdatePayload,
+  editIntent?: {
+    solicitacaoId: string | number;
+    sptId: string | number;
+    action?: string;
+    justificativa?: string | null;
+  }
 ): Promise<{ verification: 'confirmed'; result: FenixProjectUpdateResult } | { verification: 'pending'; result: FenixProjectUpdateResult; error: string }> {
+  const statusBody = buildFenixRequestEditStatusBody({
+    solicitacaoId: editIntent?.solicitacaoId ?? 0,
+    sptId: editIntent?.sptId ?? 0,
+    action: editIntent?.action ?? resolveFenixRequestEditAction(),
+    justificativa: editIntent?.justificativa ?? null,
+    dados: payload
+  });
+  if (!statusBody.valid || !statusBody.body) {
+    throw new FenixError(
+      `Não foi possível preparar a edição oficial (${statusBody.errors[0] ?? 'identificadores inválidos'}). Nenhuma operação foi enviada.`,
+      409
+    );
+  }
+  const solicitacaoId = Number(statusBody.body.solicitacao_id);
+  const navigation = buildFenixEditNavigationTarget({ projectId, buildingId, solicitacaoId }) ?? undefined;
   const client = await fenixClientForUser(userId);
   let writeResponse: unknown;
   try {
-    writeResponse = await client.put(`/api/v1/technicalproject/${projectId}`, payload);
+    writeResponse = await submitFenixRequestEditStatus(client, statusBody.body);
   } catch (error) {
+    if (isFenixRequestModifiedError(error)) throw error;
     const status = error instanceof FenixError ? error.status : undefined;
     if (status !== undefined && status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status)) throw error;
     const response = await client.get(`/api/v1/projetos-tecnicos/${projectId}`).catch(() => null);
     if (!response) {
       return {
         verification: 'pending',
-        result: { id: projectId, num_projeto: '', edificacao_id: buildingId },
+        result: { id: projectId, num_projeto: '', edificacao_id: buildingId, ...(navigation ? { navigation } : {}) },
         error: 'O resultado da atualização ficou incerto. Consulte o mesmo Projeto Técnico antes de repetir o envio.'
       };
     }
     try {
       const result = normalizedResult(unwrapProject(response), projectId, buildingId, payload);
-      return { verification: 'confirmed', result };
+      return { verification: 'confirmed', result: { ...result, ...(navigation ? { navigation } : {}) } };
     } catch {
       return {
         verification: 'pending',
-        result: { id: projectId, num_projeto: '', edificacao_id: buildingId },
+        result: { id: projectId, num_projeto: '', edificacao_id: buildingId, ...(navigation ? { navigation } : {}) },
         error: 'O Fênix respondeu à atualização, mas a leitura ainda não confirmou as alterações. Consulte novamente antes de tentar de novo.'
       };
     }
@@ -295,7 +433,13 @@ export async function submitFenixTechnicalProjectUpdate(
 
   const returnedProject = unwrapProject(writeResponse);
   const returnedNumber = String(first(returnedProject, ['num_projeto', 'n_projeto', 'numero_projeto'], ''));
-  const fallbackResult: FenixProjectUpdateResult = { id: projectId, num_projeto: returnedNumber, edificacao_id: buildingId };
+  const fallbackResult: FenixProjectUpdateResult = {
+    id: projectId,
+    num_projeto: returnedNumber,
+    edificacao_id: buildingId,
+    ...(solicitacaoId > 0 ? { solicitacao_id: solicitacaoId } : {}),
+    ...(navigation ? { navigation } : {})
+  };
   try {
     const response = await client.get(`/api/v1/projetos-tecnicos/${projectId}`);
     const result = normalizedResult(unwrapProject(response), projectId, buildingId, payload);

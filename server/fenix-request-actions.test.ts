@@ -5,6 +5,9 @@ import { CookieJar } from 'tough-cookie';
 import {
   computeFenixProcessActions,
   FenixClient,
+  FenixError,
+  fenixWriteRegraOf,
+  resolveGerarSolicitacaoTipoId,
   type FenixProcessAction,
   type FenixProcessMeta
 } from './fenix.js';
@@ -315,7 +318,7 @@ test('6. Servidor local mockando Fênix upstream: postFormData, gerarRelatorioPr
       status_slug: 'cancelado',
       responsavel_id: 0,
       tipo_requisicao: 'cancelar-processo',
-      num_projeto: '020863/45355000/2026'
+      num_projeto: 'DEMO-999999/40000000/2099'
     }) as any;
     assert.equal(cancelResp.ok, true);
 
@@ -327,4 +330,187 @@ test('6. Servidor local mockando Fênix upstream: postFormData, gerarRelatorioPr
     globalThis.fetch = originalFetch;
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+// Escopo 5: gates de cancelamento alinhados aos show* ao vivo
+// (bundle app.05d2a1c1.js). Com slug oficial vale a regra exata; sem slug
+// vale a heurística local (coberta pelos testes 5.1/5.2 acima).
+test('7. computeFenixProcessActions: cancelamento segue slugs ao vivo', () => {
+  const base = (meta: Record<string, unknown>) => ({
+    process: {
+      id: 'request:50001',
+      protocol: '0050001-5/2026',
+      type: 'Solicitação',
+      status: 'Pendente de Documentação',
+      stage: 'Pendente de Documentação',
+      building_id: 'building-1',
+      payload: { fenixMeta: { statusSlug: 'pendente-de-documentacao', ...meta } }
+    },
+    buildingId: 'building-1'
+  });
+
+  // slug vistoria + pendente-doc -> cancelar_solicitacao (sem protocolo na exclusão)
+  assert.deepEqual(
+    computeFenixProcessActions(base({ tipoSolicitacaoSlug: 'vistoria' })).map((a) => a.key),
+    ['cancelar_solicitacao']
+  );
+
+  // slug revistoria + pendente-pagamento -> nenhum cancel (ao vivo só 'vistoria'; tipo 4 fora do processo)
+  assert.deepEqual(
+    computeFenixProcessActions(base({ statusSlug: 'pendente-de-pagamento', tipoSolicitacaoSlug: 'revistoria', tipoSolicitacaoId: 4 })).map((a) => a.key),
+    []
+  );
+
+  // ptsavcb-analise + renovacao + pendente -> cancelar_solicitacao
+  assert.deepEqual(
+    computeFenixProcessActions(base({ tipoSolicitacaoSlug: 'ptsavcb-analise', renovacao: true })).map((a) => a.key),
+    ['cancelar_solicitacao']
+  );
+
+  // analise + renovacao + pendente -> nenhum cancel (processo exige !renovacao)
+  assert.deepEqual(
+    computeFenixProcessActions(base({ tipoSolicitacaoSlug: 'analise', renovacao: true })).map((a) => a.key),
+    []
+  );
+
+  // analise + pendente-pagamento -> cancelar_processo
+  assert.deepEqual(
+    computeFenixProcessActions(base({ statusSlug: 'pendente-de-pagamento', tipoSolicitacaoSlug: 'analise' })).map((a) => a.key),
+    ['cancelar_processo']
+  );
+
+  // analise + tipo 3 + pendente -> nenhum cancel (tipo 3/4 excluído do processo)
+  assert.deepEqual(
+    computeFenixProcessActions(base({ statusSlug: 'pendente-de-pagamento', tipoSolicitacaoSlug: 'analise', tipoSolicitacaoId: 3 })).map((a) => a.key),
+    []
+  );
+});
+
+test('8. computeFenixProcessActions: reanalise exige tipo 6/8 + ativo + sem renovacao', () => {
+  const base = (meta: Record<string, unknown>) => ({
+    process: {
+      id: 'request:50002',
+      protocol: '0050002-5/2026',
+      type: 'PTSAVCB',
+      status: 'Notificado Vistoria',
+      stage: 'Notificado Vistoria',
+      building_id: 'building-1',
+      payload: { fenixMeta: { statusSlug: 'notificado-vistoria', tipoSolicitacaoId: 8, ...meta } }
+    },
+    buildingId: 'building-1'
+  });
+
+  assert.deepEqual(
+    computeFenixProcessActions(base({ ativo: 'S' })).map((a) => a.key),
+    ['solicitar_reanalise', 'baixar_notificacao', 'baixar_protocolo']
+  );
+
+  // ativo N -> sem reanalise (cai no rascunho local)
+  assert.deepEqual(
+    computeFenixProcessActions(base({ ativo: 'N' })).map((a) => a.key),
+    ['editar_projeto', 'baixar_notificacao', 'baixar_protocolo']
+  );
+
+  // renovacao -> reavaliacao da renovacao, não reanalise
+  assert.equal(
+    computeFenixProcessActions(base({ ativo: 'S', renovacao: true }))[0]?.key,
+    'reavaliacao_renovacao'
+  );
+});
+
+test('9. computeFenixProcessActions: homologado-sap sem mutacao; homologado vistoria vira revistoria', () => {
+  const sap = computeFenixProcessActions({
+    process: {
+      id: 'request:50003',
+      protocol: '0050003-5/2026',
+      type: 'Análise de Projeto Técnico · PT',
+      status: 'Homologado Sap',
+      stage: 'Homologado Sap',
+      building_id: 'building-1',
+      payload: { fenixMeta: { statusSlug: 'homologado-sap', tipoSolicitacaoId: 1 } }
+    },
+    buildingId: 'building-1'
+  });
+  assert.equal(sap.some((a) => a.kind === 'mutation'), false);
+  assert.deepEqual(sap.map((a) => a.key), []);
+
+  const vistoriaHomologada = computeFenixProcessActions({
+    process: {
+      id: 'request:50004',
+      protocol: '0050004-5/2026',
+      type: 'Vistoria · AVCB',
+      status: 'Homologado',
+      stage: 'Homologado',
+      building_id: 'building-1',
+      payload: { fenixMeta: { statusSlug: 'homologado', tipoSolicitacaoId: 4 } }
+    },
+    buildingId: 'building-1'
+  });
+  assert.deepEqual(vistoriaHomologada.map((a) => a.key), ['solicitar_revistoria', 'baixar_certificado', 'baixar_protocolo']);
+});
+
+test('10. computeFenixProcessActions: renovacao cobre edit-reavaliacao-renovacao e exige ativo S', () => {
+  const near = new Date(Date.now() + 25 * 86_400_000).toISOString();
+  const base = (meta: Record<string, unknown>) => ({
+    process: {
+      id: 'request:50005',
+      protocol: '0050005-5/2026',
+      type: 'Vistoria · AVCB',
+      status: 'Edit Reavaliacao Renovacao',
+      stage: 'Edit Reavaliacao Renovacao',
+      building_id: 'building-1',
+      payload: { fenixMeta: { statusSlug: 'edit-reavaliacao-renovacao', tipoSolicitacaoSlug: 'vistoria', evento: 'N', dataValidade: near, ...meta } }
+    },
+    buildingId: 'building-1'
+  });
+
+  // O status implica renovacao (derivada do texto): ao vivo, a reavaliacao tem
+  // prioridade e a renovacao usa o mesmo status no caminho editPT.
+  assert.deepEqual(
+    computeFenixProcessActions(base({ ativo: 'S' })).map((a) => a.key),
+    ['reavaliacao_renovacao', 'baixar_protocolo']
+  );
+
+  // ativo N conhecido nega reavaliacao e renovacao (só resta o protocolo, não excluído nesse status)
+  assert.deepEqual(
+    computeFenixProcessActions(base({ ativo: 'N' })).map((a) => a.key),
+    ['baixar_protocolo']
+  );
+
+  // homologado fora de analise: renovacao exige validade proxima + ativo S
+  const licenca = (meta: Record<string, unknown>) => ({
+    process: {
+      id: 'request:50006',
+      protocol: '0050006-5/2026',
+      type: 'Licença AVCB',
+      status: 'Homologado',
+      stage: 'Homologado',
+      building_id: 'building-1',
+      payload: { fenixMeta: { statusSlug: 'homologado', tipoSolicitacaoSlug: 'ptsavcb-analise', evento: 'N', dataValidade: near, ...meta } }
+    },
+    buildingId: 'building-1'
+  });
+  assert.deepEqual(
+    computeFenixProcessActions(licenca({ ativo: 'S' })).map((a) => a.key),
+    ['solicitar_renovacao', 'baixar_certificado', 'baixar_protocolo']
+  );
+  assert.deepEqual(
+    computeFenixProcessActions(licenca({ ativo: 'N' })).map((a) => a.key),
+    ['baixar_certificado', 'baixar_protocolo']
+  );
+});
+
+test('11. resolveGerarSolicitacaoTipoId: reenvia o tipo da linha; fallback por acao', () => {
+  assert.equal(resolveGerarSolicitacaoTipoId(6, 'solicitar_reanalise'), 6);
+  assert.equal(resolveGerarSolicitacaoTipoId(1, 'solicitar_vistoria'), 1);
+  assert.equal(resolveGerarSolicitacaoTipoId(0, 'solicitar_vistoria'), 3);
+  assert.equal(resolveGerarSolicitacaoTipoId(0, 'solicitar_revistoria'), 4);
+  assert.equal(resolveGerarSolicitacaoTipoId(0, 'solicitar_reanalise'), 2);
+});
+
+test('12. fenixWriteRegraOf: extrai regra terminal do erro de escrita', () => {
+  assert.equal(fenixWriteRegraOf(new FenixError('x', 422, undefined, { regra: 'prazoVencido' })), 'prazoVencido');
+  assert.equal(fenixWriteRegraOf(new FenixError('x', 200, undefined, { data: { regra: 'prazoExpirado' } })), 'prazoExpirado');
+  assert.equal(fenixWriteRegraOf(new FenixError('x', 500)), null);
+  assert.equal(fenixWriteRegraOf(null), null);
 });

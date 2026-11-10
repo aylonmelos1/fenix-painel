@@ -171,9 +171,10 @@ globalThis.fetch = async (input, init = {}) => {
 
   const panelToken = randomBytes(32).toString('hex');
   const otherPanelToken = randomBytes(32).toString('hex');
-  const insertPanelSession = panelDb.prepare('INSERT INTO sessions (token_hash,user_id,created_at) VALUES (?,?,?)');
-  insertPanelSession.run(createHash('sha256').update(panelToken).digest('hex'), 'owner', now);
-  insertPanelSession.run(createHash('sha256').update(otherPanelToken).digest('hex'), 'other-owner', now);
+  const sessionExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+  const insertPanelSession = panelDb.prepare('INSERT INTO sessions (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)');
+  insertPanelSession.run(createHash('sha256').update(panelToken).digest('hex'), 'owner', now, sessionExpiresAt);
+  insertPanelSession.run(createHash('sha256').update(otherPanelToken).digest('hex'), 'other-owner', now, sessionExpiresAt);
 
   async function rawApi(path: string, options: { method?: string; body?: unknown; token?: string } = {}) {
     const token = options.token || panelToken;

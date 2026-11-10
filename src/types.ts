@@ -19,6 +19,123 @@ export type DashboardProcess = {
   projectKind?: string | null;
 };
 
+export type FenixAccountRequest = {
+  id: string; processId: string; remoteId: string; remoteBuildingId: string; buildingId: string | null;
+  buildingReference: string; municipality: string; requestNumber: string; protocolNumber: string; protocol: string; serviceType: string; status: string;
+  renewal: string; event: string; protocolDate: string; notificationNumber: string; acpProtocol: string;
+  avcbNumber: string; daeNumber: string; updatedAt: string; sourceConnectionId?: string | null;
+  sourceAccountName?: string | null; sourceAccountPaused?: boolean;
+};
+
+export type OfficialRequestSummary = {
+  remoteId: string | null;
+  requestNumber: string | null;
+  protocolNumber: string | null;
+  buildingReference: string | null;
+  municipality: string | null;
+  serviceType: string | null;
+  status: string | null;
+  renewal: string | null;
+  event: string | null;
+  protocolDate: string | null;
+  notificationNumber: string | null;
+  acpProtocol: string | null;
+  avcbNumber: string | null;
+  daeNumber: string | null;
+};
+
+export type OfficialRequestSummaryResponse = {
+  request: OfficialRequestSummary;
+  sourceAccountName: string | null;
+  readAt: string;
+};
+
+export type OfficialRequestPayment = {
+  id: string;
+  number: string | null;
+  type: string | null;
+  status: string | null;
+  dueDate: string | null;
+  amountDue: string | null;
+  amountPaid: string | null;
+  paymentDate: string | null;
+  hasDocument: boolean;
+};
+
+export type OfficialRequestPaymentsResponse = {
+  daes: OfficialRequestPayment[];
+  readAt: string;
+};
+
+export type RequesterProjectDetailsResponse = {
+  project: {
+    projectNumber: string | null;
+    projectType: string | null;
+    status: string | null;
+    activity: string | null;
+    risk: string | null;
+    building: {
+      reference: string | null;
+      address: string | null;
+      municipality: string | null;
+      totalArea: number | null;
+      buildingArea: number | null;
+      areaToBeBuilt: number | null;
+      floors: number | null;
+      height: string | null;
+    };
+    ownerName: string | null;
+    responsibleName: string | null;
+    occupations: string[];
+    securityMeasures: string[];
+    technicalResponsibles: Array<{ name: string | null; registration: string | null; council: string | null; role: string | null }>;
+    history: Array<{ status: string; startedAt: string | null; endedAt: string | null; current: boolean }>;
+  };
+  sourceAccountName: string;
+  readAt: string;
+};
+
+export type RequesterProfile = {
+  name: string | null;
+  email: string | null;
+  telephone: string | null;
+  verification: {
+    status: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+    startTime: string | null;
+    active: boolean | null;
+    documentCount: number;
+  } | null;
+};
+
+export type RequesterProfileResponse = {
+  profile: RequesterProfile;
+  sourceAccountKey: string;
+  sourceAccountName: string;
+  readAt: string;
+};
+
+export type RequesterSurvey = {
+  id: string;
+  type: string;
+  status: string;
+  date: string;
+  buildingReference: string;
+  address: string;
+  municipality: string;
+  requestNumber: string;
+  protocolNumber: string;
+  sourceAccountKey: string;
+  sourceAccountName: string;
+};
+
+export type RequesterSurveysResponse = {
+  vistorias: RequesterSurvey[];
+  partial: boolean;
+  warnings: Array<{ code: string; message: string }>;
+};
+
 export type ProjectDraftStatus = 'draft' | 'simulated' | 'submitting' | 'verification_pending' | 'submitted' | 'error';
 
 export type DraftSubmissionVerificationResponse<TDraft> = {

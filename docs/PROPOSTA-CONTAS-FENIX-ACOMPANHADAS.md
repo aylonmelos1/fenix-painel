@@ -1,8 +1,8 @@
-# Proposta — Contas Fênix acompanhadas
+# Contas Fênix acompanhadas — registro da implementação
 
-**Status:** implementado e implantado no Dedicated
+**Status:** implementado e implantado no Dedicated; validação contra conta de cliente ainda pendente
 
-**Implementação:** release `5b4f434` publicado; validação com conta Fênix autorizada ainda pendente
+**Implementação:** release `5b4f434` publicado
 
 **Data:** 27/10/2026
 
@@ -10,7 +10,7 @@
 
 Permitir que uma pessoa já autenticada no Fênix Painel conecte uma ou mais contas Fênix de clientes, escolha quais edificações quer acompanhar e veja esses dados junto das edificações atuais. Cada registro deve indicar claramente de qual conexão veio.
 
-O acesso principal ao Painel continua sendo a conta Fênix da empresa. As contas dos clientes são conexões adicionais, com sessões e sincronizações próprias. O Painel continua consultando dados em modo somente leitura.
+O acesso principal ao Painel continua sendo a conta Fênix da empresa. As contas dos clientes são conexões adicionais, com sessões e sincronizações próprias. Essas conexões adicionais são somente leitura; ações de escrita do Painel, quando habilitadas, continuam vinculadas à conta principal.
 
 ### Recomendação principal de produto
 
@@ -33,7 +33,7 @@ O trabalho acaba dividido entre contas e portais. A proposta é dar à equipe um
 - Acompanhar apenas as edificações escolhidas, mantendo a origem visível em tabelas, fichas e exportações.
 - Permitir renomear, reautenticar, pausar e remover cada conexão.
 - Isolar dados, sincronizações, falhas e notificações por conexão.
-- Preservar o caráter somente leitura do Fênix Painel.
+- Manter as conexões adicionais em modo somente leitura, sem alterar dados oficiais das contas acompanhadas.
 
 ## Fora do escopo desta proposta
 
@@ -155,7 +155,7 @@ O aviso de possível duplicidade compara ID remoto e, quando disponível, refer�
 
 A equipe pode conectar várias contas pela identidade compartilhada do Painel. Não foi introduzida uma camada de permissões individuais: quem consegue entrar nessa identidade também consegue administrar as conexões. Cada conta começa com um rótulo derivado do nome retornado pelo Fênix, quando disponível, e esse rótulo pode ser alterado.
 
-As conexões adicionais entram nas visões combinadas, nos filtros por conta, nas exportações, nas notificações e no contexto da IA, respeitando as preferências existentes. O webhook fica desligado por padrão e é habilitado individualmente por conexão. As consultas continuam somente leitura.
+As conexões adicionais entram nas visões combinadas, nos filtros por conta, nas exportações, nas notificações e no contexto da IA, respeitando as preferências existentes. O webhook fica desligado por padrão e é habilitado individualmente por conexão. As consultas dessas conexões continuam somente leitura.
 
 ## Critérios de aceite para a primeira versão
 

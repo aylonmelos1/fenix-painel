@@ -2338,8 +2338,8 @@ async function runDeterministicDraftAssistant(
     address: {
       ...currentDraft.address,
       ...formPatch.address,
-      zip_code: formPatch.address?.zip_code || currentDraft.address?.zip_code || '45355000',
-      municipio_id: formPatch.address?.municipio_id || currentDraft.address?.municipio_id || 22
+      zip_code: formPatch.address?.zip_code || currentDraft.address?.zip_code || '',
+      municipio_id: formPatch.address?.municipio_id ?? currentDraft.address?.municipio_id ?? null
     },
     institution: {
       ...currentDraft.institution,

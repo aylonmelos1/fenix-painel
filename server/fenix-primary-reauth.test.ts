@@ -152,10 +152,11 @@ globalThis.fetch = async (input, init = {}) => {
     seal(JSON.stringify({ cookies: [] })),
     now
   );
-  panelDb.prepare('INSERT INTO sessions (token_hash, user_id, created_at) VALUES (?, ?, ?)').run(
+  panelDb.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(
     tokenHash,
     principalUserId,
-    now
+    now,
+    new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
   );
 
   const authHeader = { Cookie: `fenix_painel_session=${panelSessionToken}` };

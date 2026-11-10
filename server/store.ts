@@ -3,6 +3,8 @@ import { randomBytes, createCipheriv, createDecipheriv, createHash } from 'node:
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+export const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
+
 const dataDir = join(process.cwd(), 'data');
 mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const keyPath = join(dataDir, '.local-key');
@@ -31,6 +33,23 @@ export function unseal(value: string): string {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
+export function sealBuffer(value: Buffer): Buffer {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', masterKey, iv);
+  const encrypted = Buffer.concat([cipher.update(value), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
+}
+
+export function unsealBuffer(value: Buffer): Buffer {
+  if (value.length < 28) throw new Error('Stored file is invalid.');
+  const iv = value.subarray(0, 12);
+  const tag = value.subarray(12, 28);
+  const encrypted = value.subarray(28);
+  const decipher = createDecipheriv('aes-256-gcm', masterKey, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
 export const db = new Database(join(dataDir, 'fenix-painel.sqlite'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -48,7 +67,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS buildings (
   id TEXT PRIMARY KEY,
@@ -63,6 +83,30 @@ CREATE TABLE IF NOT EXISTS buildings (
   height TEXT,
   payload TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS building_documents (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  building_id TEXT NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+  target_process_id TEXT,
+  name TEXT NOT NULL,
+  category_key TEXT NOT NULL,
+  mimetype TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK(size_bytes > 0),
+  sha256 TEXT NOT NULL,
+  content_ciphertext BLOB NOT NULL,
+  send_status TEXT NOT NULL DEFAULT 'awaiting_contract',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS building_documents_owner_building ON building_documents(owner_user_id, building_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS building_document_upload_operations (
+  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  building_id TEXT NOT NULL REFERENCES buildings(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(owner_user_id, idempotency_key)
 );
 CREATE TABLE IF NOT EXISTS odoo_project_links (
   owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -86,6 +130,50 @@ CREATE TABLE IF NOT EXISTS processes (
   updated_at TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS fenix_account_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_connection_id TEXT,
+  process_id TEXT NOT NULL DEFAULT '',
+  remote_id TEXT NOT NULL,
+  remote_building_id TEXT NOT NULL DEFAULT '',
+  building_id TEXT,
+  building_reference TEXT NOT NULL DEFAULT '',
+  municipality TEXT NOT NULL DEFAULT '',
+  protocol TEXT NOT NULL DEFAULT '',
+  request_number TEXT NOT NULL DEFAULT '',
+  protocol_number TEXT NOT NULL DEFAULT '',
+  service_type TEXT NOT NULL DEFAULT 'Solicitação',
+  status TEXT NOT NULL DEFAULT '',
+  renewal TEXT NOT NULL DEFAULT '',
+  event TEXT NOT NULL DEFAULT '',
+  protocol_date TEXT NOT NULL DEFAULT '',
+  notification_number TEXT NOT NULL DEFAULT '',
+  acp_protocol TEXT NOT NULL DEFAULT '',
+  avcb_number TEXT NOT NULL DEFAULT '',
+  dae_number TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fenix_account_requests_user_updated ON fenix_account_requests(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS fenix_account_requests_source ON fenix_account_requests(source_connection_id, remote_id);
+CREATE TABLE IF NOT EXISTS fenix_action_attempts (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  building_id TEXT NOT NULL,
+  process_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('submitting', 'verification_pending', 'confirmed', 'rejected')),
+  baseline_request_ids_json TEXT NOT NULL DEFAULT '[]',
+  project_id INTEGER,
+  request_type_id INTEGER,
+  result_json TEXT NOT NULL DEFAULT '{}',
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fenix_action_attempts_owner_updated ON fenix_action_attempts(owner_user_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS fenix_action_attempts_active_fingerprint ON fenix_action_attempts(owner_user_id, fingerprint) WHERE status IN ('submitting', 'verification_pending');
 CREATE TABLE IF NOT EXISTS sync_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -229,6 +317,35 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 UPDATE user_preferences SET ai_max_processes = 1000 WHERE ai_max_processes = 100 AND ai_custom_prompt = '' AND ai_data_access = 1 AND ai_include_documents = 1;
 `);
 
+const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+if (!sessionColumns.some((column) => column.name === 'expires_at')) {
+  db.exec('ALTER TABLE sessions ADD COLUMN expires_at TEXT');
+}
+const legacySessions = db.prepare('SELECT token_hash, created_at FROM sessions WHERE expires_at IS NULL').all() as Array<{ token_hash: string; created_at: string }>;
+const updateLegacySessionExpiry = db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=?');
+for (const session of legacySessions) {
+  const createdAt = Date.parse(session.created_at);
+  const expiresAt = Number.isFinite(createdAt) ? new Date(createdAt + SESSION_TTL_MS).toISOString() : new Date(0).toISOString();
+  updateLegacySessionExpiry.run(expiresAt, session.token_hash);
+}
+db.exec('CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at)');
+db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString());
+
+const accountRequestColumns = db.prepare('PRAGMA table_info(fenix_account_requests)').all() as Array<{ name: string }>;
+if (!accountRequestColumns.some((column) => column.name === 'process_id')) {
+  db.exec("ALTER TABLE fenix_account_requests ADD COLUMN process_id TEXT NOT NULL DEFAULT ''");
+  db.exec("UPDATE fenix_account_requests SET process_id=id WHERE process_id=''");
+}
+const accountRequestColumnsAfterProcessId = new Set(
+  (db.prepare('PRAGMA table_info(fenix_account_requests)').all() as Array<{ name: string }>).map((column) => column.name)
+);
+if (!accountRequestColumnsAfterProcessId.has('request_number')) {
+  db.exec("ALTER TABLE fenix_account_requests ADD COLUMN request_number TEXT NOT NULL DEFAULT ''");
+}
+if (!accountRequestColumnsAfterProcessId.has('protocol_number')) {
+  db.exec("ALTER TABLE fenix_account_requests ADD COLUMN protocol_number TEXT NOT NULL DEFAULT ''");
+}
+
 // A linked Fênix identity has its own encrypted session and data partition. It
 // is never inserted into `sessions`, which remains the panel's login boundary.
 db.exec(`
@@ -361,19 +478,22 @@ if (!existingDemo) {
 
 export function resolveSession(sessionId: string | undefined) {
   if (!sessionId || sessionId.length > 128) return undefined;
-  if (sessionId === 'demo-local') return db.prepare(`SELECT id, fenix_user_id, name, email, session_ciphertext, demo, last_sync, fenix_session_expired, last_fenix_auth_error
-    FROM users WHERE id = 'demo-local'`).get() as {
-      id: string; fenix_user_id: string | null; name: string; email: string | null;
-      session_ciphertext: string | null; demo: number; last_sync: string | null;
-      fenix_session_expired: number; last_fenix_auth_error: string | null;
-    } | undefined;
   const tokenHash = createHash('sha256').update(sessionId).digest('hex');
   return db.prepare(`SELECT u.id, u.fenix_user_id, u.name, u.email, u.session_ciphertext, u.demo, u.last_sync, u.fenix_session_expired, u.last_fenix_auth_error
-    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`).get(tokenHash) as {
+    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`).get(tokenHash, new Date().toISOString()) as {
       id: string; fenix_user_id: string | null; name: string; email: string | null;
       session_ciphertext: string | null; demo: number; last_sync: string | null;
       fenix_session_expired: number; last_fenix_auth_error: string | null;
     } | undefined;
+}
+
+export function refreshSession(token: string | undefined, now = new Date()) {
+  if (!token || token.length > 128) return undefined;
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const nowIso = now.toISOString();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+  const result = db.prepare('UPDATE sessions SET expires_at=? WHERE token_hash=? AND expires_at>?').run(expiresAt, tokenHash, nowIso);
+  return result.changes ? expiresAt : undefined;
 }
 
 export function markUserFenixSessionExpired(userId: string, errorMessage?: string) {
@@ -408,7 +528,11 @@ export function getUserFenixSession(userId: string) {
 
 export function addSession(token: string, userId: string) {
   const hash = createHash('sha256').update(token).digest('hex');
-  db.prepare('INSERT INTO sessions (token_hash, user_id, created_at) VALUES (?, ?, ?)').run(hash, userId, new Date().toISOString());
+  const now = new Date();
+  const createdAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+  db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(hash, userId, createdAt, expiresAt);
+  return expiresAt;
 }
 
 export function deleteSession(token: string | undefined) {

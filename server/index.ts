@@ -2,20 +2,22 @@ import './env.js';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { CookieJar } from 'tough-cookie';
 import OpenAI from 'openai';
 import { Logger } from 'tslog';
 import { countProcessDocuments, deduplicateProcesses, summarizeProcesses, toDashboardProcess } from './dashboard.js';
-import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSetting, getSetting, getUserFenixSession, markUserFenixSessionExpired, resolveSession, seal, setSetting, unseal } from './store.js';
-import { addProcessDocumentsToWebhook, computeFenixProcessActions, downloadFenixProtocolReport, FenixError, fenixClientForUser, getFenixEdificationProfile, getFenixRequestCertificate, getFenixRequestNotification, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, findFenixTechnicalProjectIdByNumber, verifyFenixTechnicalProjectSubmission, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, type FenixBuildingOption, type FenixProcessAction, type FenixProcessMeta } from './fenix.js';
+import { addSession, clearUserFenixSessionExpired, db, deleteSession, deleteSetting, getSetting, getUserFenixSession, markUserFenixSessionExpired, refreshSession, resolveSession, seal, sealBuffer, setSetting, unseal, unsealBuffer, SESSION_TTL_MS } from './store.js';
+import { addProcessDocumentsToWebhook, computeFenixProcessActions, downloadFenixProtocolReport, FenixError, fenixClientForUser, fenixWriteRegraOf, findFenixTechnicalProjectIdByNumber, getFenixEdificationProfile, getFenixRequestCertificate, getFenixRequestDaeUrl, getFenixRequestNotification, getFenixSapMigrationDetail, getFenixRemanejamentoDetail, getTechnicalProjectBuildingProfile, getTechnicalProjectCertificate, getTechnicalProjectCertificateInfo, getTechnicalProjectDaes, getTechnicalProjectDaePdf, getTechnicalProjectDaeUrl, getTechnicalProjectNotification, getTechnicalProjectProtocolReceipt, getTechnicalProjectProtocolReceiptInfo, inspectFenixSessionCookie, refreshTechnicalProjectDetails, getFenixRequestQueueState, HCAPTCHA_SITE_KEY, listFenixEdificationsForJar, listFenixEdificationsForUser, listFenixRequesterRequests, listFenixSapMigrations, listFenixRemanejamentos, listFenixSurveys, resolveGerarSolicitacaoTipoId, verifyFenixRequesterIdentity, loginFenix, lookupFenixCnae, newSessionId, saveCookieJar, submitFenixTechnicalProject, syncFenixUser, verifyFenixTechnicalProjectSubmission, type FenixBuildingOption, type FenixProcessAction, type FenixProcessMeta } from './fenix.js';
 import { acquireDraftSubmissionLock, deleteProjectDraft, getFenixDomains, getProjectDraft, isProjectEditDraft, listProjectDrafts, lookupCnpjAndIt14, runDraftAiAssistant, streamDraftAiAssistant, simulateProjectDraft, updateDraftSimulation, updateDraftSubmission, upsertProjectDraft, type ProjectDraftInput, type ProjectDraftMetadata, type DraftAiAssistantRequest } from './project-drafts.js';
-import { buildFenixTechnicalProjectUpdatePayload, submitFenixTechnicalProjectUpdate, verifyFenixTechnicalProjectUpdate } from './fenix-project-edit.js';
+import { buildFenixTechnicalProjectUpdatePayload, isFenixRequestModifiedError, resolveFenixRequestEditAction, submitFenixTechnicalProjectUpdate, verifyFenixTechnicalProjectUpdate } from './fenix-project-edit.js';
 import { resolveFenixBuildingRemoteId, resolveFenixTechnicalProjectRemoteId } from './fenix-project-edit.js';
 import { buildWebhookTestPayload, deliverWebhookLogged, getWebhookDeliveryLog, resendWebhookDelivery, validateWebhookUrl, WEBHOOK_SETTING } from './webhook.js';
 import { dispatchPendingPushDeliveries, getWebPushConfig, normalizePushSubscription, removePushSubscription, savePushSubscription } from './push.js';
 import { attachOdooDocument, createOdooActivity, createOdooInternalNote, findOdooProjectSuggestions, getOdooActivityAssignees, getOdooProject, getOdooProjectAttachment, getOdooProjectAttachmentPreviews, getOdooProjectStages, getOdooSettingsStatus, isOdooConfigured, odooProjectExists, OdooApiError, prepareOdooConfiguration, saveOdooConfiguration, searchOdooMentionPeople, setOdooProjectStage, updateOdooActivity, verifyOdooConfiguration, type OdooUploadFile } from './odoo.js';
 import { resolveLatestFenixSituation } from './odoo-document-note.js';
+import { FENIX_UPLOAD_BLOCKED_MESSAGE, FENIX_UPLOAD_CONTEXTS, buildFenixUploadPlan, isFenixUploadSendEnabled } from './fenix-uploads.js';
+import { FENIX_EDIFICACAO_FILTER_KEYS, FENIX_PROJETO_TECNICO_FILTER_KEYS, FENIX_SOLICITACAO_FILTER_KEYS, filterLocalRequestsByFenixFilters } from './fenix-eligibility.js';
 
 const app = express();
 const logger = new Logger({ name: 'fenix-painel', minLevel: 3 });
@@ -135,7 +137,13 @@ function parseOdooUploadPayload(req: Request): { fields: Record<string, unknown>
     const disposition = headers.match(/^Content-Disposition:\s*form-data;([^\r\n]+)/im)?.[1] || '';
     const name = disposition.match(/\bname="([^"]*)"/i)?.[1];
     if (!name) { cursor = nextBoundary; continue; }
-    const filename = disposition.match(/\bfilename="([^"]*)"/i)?.[1];
+    const rawFilename = disposition.match(/\bfilename="([^"]*)"/i)?.[1];
+    const encodedFilename = disposition.match(/\bfilename\*=UTF-8''([^;]+)/i)?.[1];
+    let filename: string | undefined;
+    if (encodedFilename) {
+      try { filename = decodeURIComponent(encodedFilename); }
+      catch { filename = rawFilename ? Buffer.from(rawFilename, 'latin1').toString('utf8') : undefined; }
+    } else if (rawFilename !== undefined) filename = Buffer.from(rawFilename, 'latin1').toString('utf8');
     const content = part.subarray(headerEnd + 4);
     if (filename !== undefined) {
       const mimetype = headers.match(/^Content-Type:\s*([^\r\n]+)/im)?.[1]?.trim() || 'application/octet-stream';
@@ -154,6 +162,41 @@ function validateOdooUploadFiles(files: OdooUploadFile[]) {
 function validOdooProjectId(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,12}$/.test(value.trim()) ? Number(value) : NaN;
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+const BUILDING_DOCUMENT_CATEGORIES: Record<string, string> = {
+  responsabilidade_tecnica: 'Responsabilidade técnica (ART, RRT ou TRT)',
+  formulario_seguranca: 'Formulário de Segurança contra Incêndio (Anexo D)',
+  planta_baixa: 'Planta baixa',
+  outros: 'Outros documentos',
+  nao_classificado: 'Não classificado'
+};
+const BUILDING_DOCUMENT_MIME_TYPES: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.dwg': 'application/acad',
+  '.dxf': 'application/dxf'
+};
+function safeBuildingDocumentName(value: string, extension: string) {
+  const basename = value.replace(/\\/g, '/').split('/').pop() || '';
+  const clean = basename.replace(/[\u0000-\u001f\u007f]/g, '').replace(/[<>:"|?*]/g, '-').trim().slice(0, 180);
+  return clean || `documento${extension}`;
+}
+function listBuildingDocuments(ownerUserId: string, buildingId: string) {
+  const rows = db.prepare(`SELECT d.id,d.name,d.category_key AS categoryKey,d.mimetype,d.size_bytes AS sizeBytes,
+      d.target_process_id AS targetProcessId,d.send_status AS sendStatus,d.created_at AS createdAt,
+      p.protocol AS targetProcessProtocol,p.type AS targetProcessType
+    FROM building_documents d
+    LEFT JOIN processes p ON p.id=d.target_process_id AND p.building_id=d.building_id
+    WHERE d.owner_user_id=? AND d.building_id=? ORDER BY d.created_at DESC,d.id`).all(ownerUserId, buildingId) as Array<Record<string, any>>;
+  return rows.map((row) => ({ ...row, categoryLabel: BUILDING_DOCUMENT_CATEGORIES[row.categoryKey] || 'Não classificado' }));
 }
 
 async function getFenixDocumentForOdoo(userId: string, buildingId: string, processId: string, kind: string, daeId = '') {
@@ -280,10 +323,22 @@ function readCookie(req: Request, name: string) {
   return entry ? decodeURIComponent(entry.slice(name.length + 1)) : undefined;
 }
 
-function sessionUser(req: Request) { return resolveSession(readCookie(req, COOKIE_NAME)); }
+const sessionCookieOptions = { httpOnly: true, sameSite: 'strict' as const, secure: isProduction, path: '/' };
+function setSessionCookie(res: Response, sessionId: string) {
+  res.cookie(COOKIE_NAME, sessionId, { ...sessionCookieOptions, maxAge: SESSION_TTL_MS });
+}
+function clearSessionCookie(res: Response) {
+  res.clearCookie(COOKIE_NAME, sessionCookieOptions);
+}
+
 function requireSession(req: Request, res: Response, next: NextFunction) {
-  const user = sessionUser(req);
-  if (!user) return res.status(401).json({ error: 'Entre com sua conta Fênix para continuar.' });
+  const sessionId = readCookie(req, COOKIE_NAME);
+  const user = resolveSession(sessionId);
+  if (!user) {
+    deleteSession(sessionId);
+    clearSessionCookie(res);
+    return res.status(401).json({ error: 'Entre com sua conta Fênix para continuar.' });
+  }
   res.locals.user = user;
   next();
 }
@@ -343,7 +398,7 @@ async function executeSync(userId: string, source: 'manual' | 'automatic' | 'log
   const connection = db.prepare('SELECT id FROM fenix_connections WHERE data_user_id=?').get(userId) as { id: string } | undefined;
   try {
     const result = await syncFenixUser(userId);
-    const message = `${result.buildings} edificações; ${result.processes} processos${result.changes ? `; ${result.changes} alterações` : ''}`;
+    const message = `${result.buildings} edificações; ${result.processes} processos; ${result.requests} solicitações${result.changes ? `; ${result.changes} alterações` : ''}`;
     db.prepare('UPDATE sync_runs SET completed_at=?, status=?, message=? WHERE id=?').run(result.completedAt, 'success', message, run.lastInsertRowid);
     scheduleHistoryRefresh(userId, true);
     if (!connection) clearUserFenixSessionExpired(userId);
@@ -535,11 +590,24 @@ app.post('/api/auth/login', async (req, res) => {
   const cleanupProgress = () => setTimeout(() => loginProgress.delete(progressId), 5 * 60_000).unref();
   let syncWarning = false;
   try {
-    const result = await loginFenix(email, password, hcaptchaToken, (stage) => updateProgress(stage));
+    let rejectedLogin: { upstreamStatus: number; responseOk: boolean } | undefined;
+    const result = await loginFenix(email, password, hcaptchaToken, (stage) => updateProgress(stage), (upstreamStatus, responseOk) => {
+      rejectedLogin = { upstreamStatus, responseOk };
+      logger.warn('Fênix recusou a autenticação', { upstreamStatus, upstreamResponseOk: responseOk });
+    });
     if (!result) {
-      const message = 'O Fênix não validou essas credenciais ou o hCaptcha. Confira os dados ou tente novamente.';
+      const upstreamStatus = rejectedLogin?.upstreamStatus;
+      const rejectedCredentials = [400, 401, 403, 422].includes(upstreamStatus || 0);
+      const rateLimited = upstreamStatus === 429;
+      const unavailable = rejectedLogin?.responseOk || (!rejectedCredentials && !rateLimited);
+      const message = rateLimited
+        ? 'O Fênix está limitando tentativas de acesso. Aguarde e tente novamente.'
+        : unavailable
+          ? 'O Fênix está indisponível no momento. Tente novamente em instantes.'
+          : 'O Fênix não validou essas credenciais ou o hCaptcha. Confira os dados ou tente novamente.';
+      const status = rateLimited ? 429 : unavailable ? 502 : 401;
       updateProgress(3, { status: 'error', error: message }); cleanupProgress();
-      return res.status(401).json({ error: message });
+      return res.status(status).json({ error: message });
     }
     const sessionId = newSessionId();
     const requester = result.user;
@@ -551,7 +619,7 @@ app.post('/api/auth/login', async (req, res) => {
       ON CONFLICT(id) DO UPDATE SET fenix_user_id=excluded.fenix_user_id, name=excluded.name, email=excluded.email, session_ciphertext=excluded.session_ciphertext`)
       .run(userId, String(requester.id), name, email, saveCookieJar(result.jar), now);
     addSession(sessionId, userId);
-    res.cookie(COOKIE_NAME, sessionId, { httpOnly: true, sameSite: 'strict', secure: isProduction, path: '/', maxAge: 30 * 24 * 60 * 60_000 });
+    setSessionCookie(res, sessionId);
     logger.info('Fênix login concluído');
     updateProgress(4);
     try {
@@ -578,14 +646,28 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+app.post('/api/auth/session/refresh', requireSession, (req, res) => {
+  const sessionId = readCookie(req, COOKIE_NAME);
+  const expiresAt = refreshSession(sessionId);
+  if (!expiresAt) {
+    deleteSession(sessionId);
+    clearSessionCookie(res);
+    return res.status(401).json({ error: 'Sua sessão expirou. Entre novamente.' });
+  }
+  setSessionCookie(res, sessionId!);
+  return res.json({ ok: true, expiresAt });
+});
+
 app.post('/api/auth/demo', (_req, res) => {
-  res.cookie(COOKIE_NAME, 'demo-local', { httpOnly: true, sameSite: 'strict', secure: isProduction, path: '/', maxAge: 24 * 60 * 60_000 });
+  const sessionId = newSessionId();
+  addSession(sessionId, 'demo-local');
+  setSessionCookie(res, sessionId);
   return res.json({ ok: true, demo: true });
 });
 
 app.post('/api/auth/logout', (req, res) => {
   deleteSession(readCookie(req, COOKIE_NAME));
-  res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'strict', secure: isProduction, path: '/' });
+  clearSessionCookie(res);
   res.json({ ok: true });
 });
 
@@ -887,8 +969,9 @@ app.put('/api/fenix-connections/:id/buildings', requireSession, async (req, res)
       .run(new Date().toISOString(), connection.id, ...selectedIds);
   });
   updateSelection();
-  const sync = connection.paused || !selectedIds.length ? null : await executeSync(connection.data_user_id, 'manual');
-  return res.json({ selectedCount: selectedIds.length, syncWarning: Boolean(sync && sync.status !== 'success'), syncMessage: sync?.status === 'error' ? sync.error : sync?.status === 'busy' ? 'A sincronização já está em andamento.' : connection.paused ? 'A conexão está pausada; os dados serão atualizados quando ela for retomada.' : !selectedIds.length ? 'Nenhuma edificação selecionada; esta conexão não fará consultas até uma edificação ser ativada.' : sync?.message || '' });
+  const sync = connection.paused ? null : await executeSync(connection.data_user_id, 'manual');
+  const accountRequestsOnly = !selectedIds.length;
+  return res.json({ selectedCount: selectedIds.length, accountRequestsOnly, syncWarning: Boolean(sync && sync.status !== 'success'), syncMessage: sync?.status === 'error' ? sync.error : sync?.status === 'busy' ? 'A sincronização já está em andamento.' : connection.paused ? 'A conexão está pausada; os dados serão atualizados quando ela for retomada.' : accountRequestsOnly ? `Solicitações da conta atualizadas${sync?.status === 'success' ? `: ${sync.requests} registro(s).` : '.'}` : sync?.message || '' });
 });
 
 app.patch('/api/fenix-connections/:id', requireSession, (req, res) => {
@@ -919,10 +1002,9 @@ app.post('/api/fenix-connections/:id/sync', requireSession, async (req, res) => 
   if (!connection) return res.status(404).json({ error: 'Conexão Fênix não encontrada.' });
   if (connection.paused) return res.status(409).json({ error: 'Retome essa conexão antes de atualizar os dados.' });
   const selectedCount = (db.prepare('SELECT count(*) AS count FROM fenix_connection_buildings WHERE connection_id=? AND selected=1').get(connection.id) as { count: number }).count;
-  if (!selectedCount) return res.status(409).json({ error: 'Selecione ao menos uma edificação antes de atualizar essa conta.' });
   const result = await executeSync(connection.data_user_id, 'manual');
   if (result.status === 'busy') return res.status(409).json({ error: 'Já existe uma sincronização em andamento.' });
-  return res.status(result.status === 'error' ? 502 : 200).json({ ...result, syncWarning: result.status === 'error' });
+  return res.status(result.status === 'error' ? 502 : 200).json({ ...result, requestsOnly: selectedCount === 0, message: selectedCount === 0 && result.status === 'success' ? `Solicitações da conta atualizadas: ${result.requests} registro(s).` : ('message' in result ? result.message : result.error), syncWarning: result.status === 'error' });
 });
 
 app.post('/api/fenix-connections/:id/reauthenticate', requireSession, async (req, res) => {
@@ -1123,6 +1205,17 @@ app.post('/api/drafts/:id/simulate', requireSession, (req, res) => {
     if (!draft) {
       return res.status(404).json({ error: 'Rascunho não encontrado.' });
     }
+    if (draft.status === 'submitted') {
+      const confirmed = draft.lastSubmission?.verification === 'confirmed';
+      return res.status(409).json({
+        ok: false,
+        verification: confirmed ? 'confirmed' : 'pending',
+        error: confirmed ? 'Este rascunho já foi confirmado no Fênix.' : 'Este rascunho foi registrado como enviado antes da verificação. Consulte POST /api/drafts/:id/verify-submission.'
+      });
+    }
+    if (draft.status === 'submitting' || draft.status === 'verification_pending') {
+      return res.status(409).json({ ok: false, verification: 'pending', error: 'O resultado deste envio ainda está sendo confirmado. Consulte POST /api/drafts/:id/verify-submission antes de qualquer nova tentativa.' });
+    }
     const fenixUserId = resolveFenixUserId(res.locals.user);
     const validation = simulateProjectDraft(draft.data, fenixUserId);
     const updated = updateDraftSimulation(res.locals.user.id, draft.id, validation) || draft;
@@ -1194,22 +1287,11 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
     const validation = simulateProjectDraft(draft.data, fenixUserId);
     if (!validation.valid) {
       return res.status(400).json({
-        error: 'Rascunho possui inconsistências e não pode ser enviado ao Fênix.',
+        error: editExistingProject ? 'As alterações possuem inconsistências e não podem ser salvas no Fênix.' : 'Rascunho possui inconsistências e não pode ser enviado ao Fênix.',
         errors: validation.errors
       });
     }
 
-    if (draft.status === 'submitted') {
-      const confirmed = draft.lastSubmission?.verification === 'confirmed';
-      return res.status(409).json({
-        ok: false,
-        verification: confirmed ? 'confirmed' : 'pending',
-        error: confirmed ? 'Este rascunho já foi confirmado no Fênix.' : 'Este rascunho foi registrado como enviado antes da verificação. Consulte POST /api/drafts/:id/verify-submission.'
-      });
-    }
-    if (draft.status === 'submitting' || draft.status === 'verification_pending') {
-      return res.status(409).json({ ok: false, verification: 'pending', error: 'O resultado deste envio ainda está sendo confirmado. Consulte POST /api/drafts/:id/verify-submission antes de qualquer nova tentativa.' });
-    }
     const lock = acquireDraftSubmissionLock(res.locals.user.id, draft.id);
     if (!lock.acquired) {
       if (lock.reason === 'not_found') {
@@ -1249,7 +1331,37 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
           if (!editPayload.valid || !editPayload.payload) {
             return res.status(400).json({ error: 'Não foi possível preparar o corpo de atualização do Projeto Técnico.', errors: editPayload.errors });
           }
-          attempt = await submitFenixTechnicalProjectUpdate(target.dataUserId, target.projectId, target.buildingId, editPayload.payload);
+          // Edição oficial sem PUT: confirmar solicitacao_id + spt_id por leitura (vínculo único)
+          // e editar via POST definirStatusV2 + navegação; 409 vira REQUEST_MODIFIED.
+          let editRequesterRows: any[];
+          try {
+            editRequesterRows = await listFenixRequesterRequests(target.dataUserId, client);
+          } catch {
+            return res.status(502).json({ error: 'Não foi possível consultar as solicitações oficiais antes da edição. Nenhuma operação foi enviada.' });
+          }
+          const editCandidates = editRequesterRows.filter((row) => requesterProjectId(row) === target.projectId);
+          if (editCandidates.length !== 1) {
+            return res.status(409).json({ error: editCandidates.length > 1
+              ? 'Mais de uma solicitação do Fênix corresponde a este projeto. Nenhuma operação foi enviada porque não há vínculo único.'
+              : 'A solicitação atual não foi encontrada na lista pessoal do Fênix. Nenhuma operação foi enviada.' });
+          }
+          const editRow = editCandidates[0];
+          const editSolicitacaoId = Number(requesterRequestValue(editRow, ['solicitacao_id', 'request_id', 'solicitation_id']));
+          const editSptId = requesterSptId(editRow);
+          if (!Number.isSafeInteger(editSolicitacaoId) || editSolicitacaoId <= 0 || editSptId <= 0) {
+            return res.status(409).json({ error: 'A solicitação ou o vínculo oficial não foram confirmados de forma única no Fênix. Nenhuma operação foi enviada.' });
+          }
+          const editRowStatusSlug = String(requesterRequestValue(editRow, ['status_slug', 'status.slug']) ?? '').trim();
+          const editRowRenovacao = requesterRequestValue(editRow, ['renovacao']);
+          const editAction = resolveFenixRequestEditAction({
+            statusSlug: editRowStatusSlug || null,
+            renovacao: editRowRenovacao === true || editRowRenovacao === 1 || String(editRowRenovacao ?? '').toLowerCase() === 'true'
+          });
+          attempt = await submitFenixTechnicalProjectUpdate(target.dataUserId, target.projectId, target.buildingId, editPayload.payload, {
+            solicitacaoId: editSolicitacaoId,
+            sptId: editSptId,
+            action: editAction
+          });
           if (attempt.verification === 'pending' && attempt.result && !attempt.result.num_projeto && draft.metadata?.targetProjectNumber) {
             attempt = { ...attempt, result: { ...attempt.result, num_projeto: draft.metadata.targetProjectNumber } };
           }
@@ -1288,6 +1400,9 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
     } catch (submitErr) {
       const message = submitErr instanceof Error ? submitErr.message : 'Erro na requisição ao Fênix.';
       const updated = updateDraftSubmission(res.locals.user.id, draft.id, { ok: false, error: message });
+      if (isFenixRequestModifiedError(submitErr)) {
+        return res.status(409).json({ ok: false, verification: 'not_pending', code: 'REQUEST_MODIFIED', draft: updated || draft, error: message });
+      }
       if (submitErr instanceof FenixError && submitErr.status === 401 && editTarget) {
         if (draft.metadata?.sourceConnectionId) {
           db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
@@ -1303,47 +1418,6 @@ app.post('/api/drafts/:id/submit', requireSession, async (req, res) => {
     res.status(500).json({ error: message });
   }
 });
-
-async function resolveAiAssistantRequest(req: Request, res: Response): Promise<DraftAiAssistantRequest> {
-  const message = String(req.body?.message || '').trim();
-  const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
-  const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
-
-  let systemContext = (req.body?.systemContext || {}) as NonNullable<DraftAiAssistantRequest['systemContext']>;
-  const currentView = req.body?.currentView || systemContext.currentView || (req.body?.buildingId ? 'buildings' : undefined);
-  const activeTab = req.body?.activeTab || systemContext.activeTab;
-
-  try {
-    const sourceUserIds = dataUserIds(res.locals.user.id);
-    const allBuildings = buildingRows(sourceUserIds);
-    const allProcesses = deduplicateProcesses(processRows(sourceUserIds));
-    const inAnalysis = allProcesses.filter((p) => /an[aá]lise/i.test(`${p.status} ${p.stage}`)).length;
-    const notified = allProcesses.filter((p) => /notific/i.test(`${p.status} ${p.stage}`)).length;
-    const stopped = allProcesses.filter((p) => /rascunho|pendente|parad/i.test(`${p.status} ${p.stage}`)).length;
-
-    const metricsSummary = {
-      totalBuildings: allBuildings.length,
-      inAnalysis,
-      notified,
-      stopped
-    };
-
-    const buildingsOverview = allBuildings.slice(0, 25).map((b) => {
-      const bProcesses = allProcesses.filter((p) => p.building_id === b.id);
-      const latest = bProcesses[0];
-      return {
-        id: b.id,
-        reference: b.reference,
-        municipality: b.municipality,
-        latestProtocol: latest?.protocol || '—',
-        latestStatus: latest?.status || 'Sem processo',
-        latestStage: latest?.stage || '—'
-      };
-    });
-
-    const requestedId = String(req.body?.buildingId || systemContext.activeBuilding?.id || '').trim();
-    const requestedRef = String(systemContext.activeBuilding?.reference || '').trim().toLowerCase();
-    const normalizedMsg = message.toLowerCase();
 
 app.post('/api/drafts/:id/verify-submission', requireSession, async (req, res) => {
   const userId = res.locals.user.id;
@@ -1498,6 +1572,47 @@ app.post('/api/drafts/:id/verify-submission', requireSession, async (req, res) =
     return res.status(202).json({ ok: false, verification: 'pending', draft: updated, result: savedResult, error });
   }
 });
+
+async function resolveAiAssistantRequest(req: Request, res: Response): Promise<DraftAiAssistantRequest> {
+  const message = String(req.body?.message || '').trim();
+  const currentDraft = (req.body?.currentDraft || {}) as Partial<ProjectDraftInput>;
+  const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
+
+  let systemContext = (req.body?.systemContext || {}) as NonNullable<DraftAiAssistantRequest['systemContext']>;
+  const currentView = req.body?.currentView || systemContext.currentView || (req.body?.buildingId ? 'buildings' : undefined);
+  const activeTab = req.body?.activeTab || systemContext.activeTab;
+
+  try {
+    const sourceUserIds = dataUserIds(res.locals.user.id);
+    const allBuildings = buildingRows(sourceUserIds);
+    const allProcesses = deduplicateProcesses(processRows(sourceUserIds));
+    const inAnalysis = allProcesses.filter((p) => /an[aá]lise/i.test(`${p.status} ${p.stage}`)).length;
+    const notified = allProcesses.filter((p) => /notific/i.test(`${p.status} ${p.stage}`)).length;
+    const stopped = allProcesses.filter((p) => /rascunho|pendente|parad/i.test(`${p.status} ${p.stage}`)).length;
+
+    const metricsSummary = {
+      totalBuildings: allBuildings.length,
+      inAnalysis,
+      notified,
+      stopped
+    };
+
+    const buildingsOverview = allBuildings.slice(0, 25).map((b) => {
+      const bProcesses = allProcesses.filter((p) => p.building_id === b.id);
+      const latest = bProcesses[0];
+      return {
+        id: b.id,
+        reference: b.reference,
+        municipality: b.municipality,
+        latestProtocol: latest?.protocol || '—',
+        latestStatus: latest?.status || 'Sem processo',
+        latestStage: latest?.stage || '—'
+      };
+    });
+
+    const requestedId = String(req.body?.buildingId || systemContext.activeBuilding?.id || '').trim();
+    const requestedRef = String(systemContext.activeBuilding?.reference || '').trim().toLowerCase();
+    const normalizedMsg = message.toLowerCase();
 
     let found = null;
     if (requestedId) {
@@ -1680,6 +1795,1121 @@ app.post('/api/drafts/ai-assistant/stream', requireSession, draftAiRateLimiter, 
 
 app.get('/api/dashboard', requireSession, async (_req, res) => res.json(await dashboardPayload(res.locals.user)));
 app.get('/api/buildings', requireSession, async (_req, res) => res.json({ buildings: (await dashboardPayload(res.locals.user)).buildings }));
+app.get('/api/fenix/list-filter-schema', requireSession, (_req, res) => {
+  // Esquema canônico dos filtros novos observados na captura viva
+  // (/tmp/fenix-capture/rede-cdp.json). Somente painel local, sem rede.
+  return res.json({
+    tipoLista: ['solicitacoes', 'minhas_solicitacoes', 'vistoria_revistoria'],
+    tipoPessoa: ['Todas'],
+    ordenacao: ['prioridade'],
+    solicitacaoFiltros: [...FENIX_SOLICITACAO_FILTER_KEYS],
+    projetoTecnicoFiltros: [...FENIX_PROJETO_TECNICO_FILTER_KEYS],
+    edificacaoFiltros: [...FENIX_EDIFICACAO_FILTER_KEYS],
+    projetoFlags: ['projeto_completo', 'consultaParcial'],
+    permissions: ['getSolicitacoesPermitidas', 'getRetificacoesPermitidas'],
+    note: 'Filtros e permissões valem como elegibilidade local; a permissão oficial prevalece quando injetada, sem consulta com sessão real.',
+  });
+});
+
+app.get('/api/requests', requireSession, (req, res) => {
+  try {
+    const sourceUserIds = dataUserIds(res.locals.user.id);
+    const requests = db.prepare(`SELECT r.id,r.process_id,r.remote_id,r.remote_building_id,r.building_id,r.building_reference,r.municipality,
+        r.protocol,r.request_number,r.protocol_number,r.service_type,r.status,r.renewal,r.event,r.protocol_date,r.notification_number,r.acp_protocol,r.avcb_number,
+        r.dae_number,r.updated_at,r.source_connection_id,fc.label AS source_account_name,fc.paused AS source_account_paused
+      FROM fenix_account_requests r LEFT JOIN fenix_connections fc ON fc.id=r.source_connection_id
+      WHERE r.user_id IN (${sqlMarks(sourceUserIds.length)})
+      ORDER BY CASE WHEN r.protocol_date='' THEN r.updated_at ELSE r.protocol_date END DESC,r.updated_at DESC`).all(...sourceUserIds) as any[];
+    const mapped = requests.map((item) => ({
+      id: item.id, processId: item.process_id, remoteId: item.remote_id, remoteBuildingId: item.remote_building_id,
+      buildingId: item.building_id || null, buildingReference: item.building_reference, municipality: item.municipality,
+      protocol: item.protocol, requestNumber: item.request_number, protocolNumber: item.protocol_number,
+      serviceType: item.service_type, status: item.status, renewal: item.renewal, event: item.event,
+      protocolDate: item.protocol_date, notificationNumber: item.notification_number, acpProtocol: item.acp_protocol,
+      avcbNumber: item.avcb_number, daeNumber: item.dae_number, updatedAt: item.updated_at,
+      sourceConnectionId: item.source_connection_id, sourceAccountName: item.source_account_name || null,
+      sourceAccountPaused: Boolean(item.source_account_paused)
+    }));
+    // Filtros novos como elegibilidade local (snapshot, sem rede nem sessão real).
+    const query = req.query as Record<string, unknown>;
+    const hasFilter = ['tipoServico', 'serviceType', 'status', 'renovacao', 'evento', 'solicitacao', 'protocolo', 'municipio']
+      .some((key) => typeof query[key] === 'string' && String(query[key]).trim() !== '');
+    const filtered = hasFilter ? filterLocalRequestsByFenixFilters(mapped, {
+      tipoServico: typeof query.tipoServico === 'string' ? query.tipoServico : typeof query.serviceType === 'string' ? query.serviceType : null,
+      status: typeof query.status === 'string' ? query.status : null,
+      renovacao: typeof query.renovacao === 'string' ? query.renovacao : null,
+      evento: typeof query.evento === 'string' ? query.evento : null,
+      solicitacao: typeof query.solicitacao === 'string' ? query.solicitacao : null,
+      protocolo: typeof query.protocolo === 'string' ? query.protocolo : null,
+      municipio: typeof query.municipio === 'string' ? query.municipio : null,
+    }) : mapped;
+    return res.json({ requests: filtered });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Falha ao listar solicitações sincronizadas.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+const OFFICIAL_REQUEST_NUMBER_PATHS = ['n_solicitacao', 'n_solicitacao_format', 'numero_solicitacao', 'solicitacao_numero'];
+const OFFICIAL_PROTOCOL_NUMBER_PATHS = ['n_protocolo_format', 'n_protocolo', 'numero_protocolo', 'protocolo'];
+const OFFICIAL_BUILDING_ID_PATHS = ['edificacao_id', 'edification_id', 'edificationId', 'edificacao.id', 'edification.id', 'imovel.id'];
+
+type VerifiedRequesterRequest = {
+  local: any;
+  client: Awaited<ReturnType<typeof fenixClientForUser>>;
+  official: any;
+  officialRows: any[];
+  actualFenixUserId: string;
+};
+
+async function resolveVerifiedRequesterRequest(ownerUserId: string, localRequestId: string): Promise<VerifiedRequesterRequest> {
+  const normalizedLocalId = String(localRequestId || '').trim();
+  if (!normalizedLocalId || normalizedLocalId.length > 512) throw new FenixError('Solicitação não encontrada.', 404);
+
+  const allowedDataUserIds = dataUserIds(ownerUserId);
+  const local = db.prepare(`SELECT r.id,r.user_id,r.source_connection_id,r.remote_id,r.remote_building_id,r.request_number,r.protocol_number,
+      r.building_reference,r.municipality,COALESCE(NULLIF(fc.label,''),'Conta principal') AS source_account_name,
+      u.fenix_user_id AS account_fenix_user_id,u.demo AS account_demo,u.fenix_session_expired AS account_session_expired,
+      CASE WHEN u.session_ciphertext IS NULL THEN 0 ELSE 1 END AS account_session_available,
+      fc.id AS connection_id,fc.owner_user_id AS connection_owner_user_id,fc.data_user_id AS connection_data_user_id,
+      fc.fenix_user_id AS connection_fenix_user_id,fc.status AS connection_status,fc.paused AS connection_paused
+    FROM fenix_account_requests r
+    JOIN users u ON u.id=r.user_id
+    LEFT JOIN fenix_connections fc ON fc.id=r.source_connection_id
+    WHERE r.id=? AND r.user_id IN (${sqlMarks(allowedDataUserIds.length)})
+      AND ((r.source_connection_id IS NULL AND r.user_id=?)
+        OR (fc.id=r.source_connection_id AND fc.owner_user_id=? AND fc.data_user_id=r.user_id))`)
+    .get(normalizedLocalId, ...allowedDataUserIds, ownerUserId, ownerUserId) as any;
+  if (!local) throw new FenixError('Solicitação não encontrada.', 404);
+
+  const isConnection = Boolean(local.source_connection_id);
+  if (isConnection && (local.connection_id !== local.source_connection_id
+    || local.connection_owner_user_id !== ownerUserId
+    || local.connection_data_user_id !== local.user_id)) {
+    throw new FenixError('Solicitação não encontrada.', 404);
+  }
+  if (isConnection && Boolean(local.connection_paused)) {
+    throw new FenixError('Retome a conta Fênix para consultar esta solicitação.', 409);
+  }
+  if (isConnection && local.connection_status !== 'active') {
+    throw new FenixError('Reconecte a conta Fênix para consultar esta solicitação.', 409);
+  }
+  if (Boolean(local.account_demo) || Boolean(local.account_session_expired) || !Boolean(local.account_session_available)
+    || !String(local.account_fenix_user_id || '').trim()) {
+    throw new FenixError('Reconecte a conta Fênix para consultar esta solicitação.', 409);
+  }
+  if (isConnection && String(local.connection_fenix_user_id || '').trim() !== String(local.account_fenix_user_id).trim()) {
+    throw new FenixError('Reconecte a conta Fênix para consultar esta solicitação.', 409);
+  }
+
+  const remoteId = String(local.remote_id || '').trim();
+  const requestNumber = canonicalFenixNumber(local.request_number);
+  const protocolNumber = canonicalFenixNumber(local.protocol_number);
+  if (!remoteId || (!requestNumber && !protocolNumber)) {
+    throw new FenixError('Os dados locais não permitem confirmar esta solicitação no Fênix.', 409);
+  }
+
+  const client = await fenixClientForUser(local.user_id);
+  const actualFenixUserId = await verifyFenixRequesterIdentity(local.user_id, client);
+  if (actualFenixUserId !== String(local.account_fenix_user_id).trim()
+    || (isConnection && actualFenixUserId !== String(local.connection_fenix_user_id).trim())) {
+    throw new FenixError('Reconecte a conta Fênix para consultar esta solicitação.', 409);
+  }
+
+  const officialRows = await listFenixRequesterRequests(local.user_id, client);
+  const officialRowsMatching = officialRows.filter((row) => {
+    if (fenixRecordIdentifier(row, ['solicitacao_id', 'id', 'request_id']) !== remoteId) return false;
+    for (const ownerPath of ['usuario_id', 'usuario.id']) {
+      const officialOwnerId = fenixRecordValue(row, [ownerPath]);
+      if (officialOwnerId !== undefined && String(officialOwnerId).trim() !== actualFenixUserId) return false;
+    }
+    const officialRequestNumber = fenixRecordText(row, OFFICIAL_REQUEST_NUMBER_PATHS);
+    const officialProtocolNumber = fenixRecordText(row, OFFICIAL_PROTOCOL_NUMBER_PATHS);
+    if (requestNumber && canonicalFenixNumber(officialRequestNumber) !== requestNumber) return false;
+    if (protocolNumber && canonicalFenixNumber(officialProtocolNumber) !== protocolNumber) return false;
+    const officialBuildingId = fenixRecordIdentifier(row, OFFICIAL_BUILDING_ID_PATHS);
+    if (local.remote_building_id && officialBuildingId && officialBuildingId !== String(local.remote_building_id)) return false;
+    return true;
+  });
+  if (officialRowsMatching.length !== 1) {
+    throw new FenixError('Não foi possível confirmar uma solicitação única no Fênix.', officialRowsMatching.length > 1 ? 409 : 404);
+  }
+  return { local, client, official: officialRowsMatching[0], officialRows, actualFenixUserId };
+}
+
+function sendVerifiedRequesterReadError(res: Response, error: unknown, logMessage: string) {
+  const upstreamStatus = error instanceof FenixError ? Number(error.status) : 0;
+  if ([401, 403, 419].includes(upstreamStatus)) return res.status(409).json({ error: 'Reconecte a conta Fênix para consultar esta solicitação.' });
+  if (upstreamStatus === 404) return res.status(404).json({ error: 'Solicitação não encontrada.' });
+  if (upstreamStatus === 409) return res.status(409).json({ error: error instanceof Error ? error.message : 'Não foi possível confirmar a solicitação.' });
+  logger.warn(logMessage, { status: upstreamStatus || undefined });
+  return res.status(upstreamStatus === 429 ? 429 : 502).json({ error: 'Não foi possível consultar a solicitação no Fênix agora.' });
+}
+
+function numericFenixId(value: unknown): string {
+  if ((typeof value !== 'string' && typeof value !== 'number') || !/^\d+$/.test(String(value).trim())) return '';
+  const parsed = Number(String(value).trim());
+  return Number.isSafeInteger(parsed) && parsed > 0 ? String(parsed) : '';
+}
+
+function numericFenixLinks(row: any, paths: string[]) {
+  const identifiers: string[] = [];
+  let present = false;
+  let valid = true;
+  for (const path of paths) {
+    const value = path.split('.').reduce((current: any, part) => current?.[part], row);
+    if (value === undefined || value === null || value === '') continue;
+    present = true;
+    const identifier = numericFenixId(value);
+    if (!identifier) valid = false;
+    else identifiers.push(identifier);
+  }
+  return { present, valid, identifiers };
+}
+
+function requesterDaeRows(response: any): any[] {
+  return Array.isArray(response?.data?.daes) ? response.data.daes : [];
+}
+
+function requesterDaeDto(row: any) {
+  const daeUrl = fenixRecordValue(row, ['url_dae']);
+  return {
+    id: numericFenixId(fenixRecordValue(row, ['id'])),
+    number: fenixRecordText(row, ['seq_dae_emitido']),
+    type: fenixRecordText(row, ['tipo_taxa']),
+    status: fenixRecordText(row, ['status.status', 'status.slug']),
+    dueDate: fenixRecordText(row, ['data_vencimento', 'data_max_pagamento']),
+    amountDue: fenixRecordText(row, ['valor_dae']),
+    amountPaid: fenixRecordText(row, ['valor_pago']),
+    paymentDate: fenixRecordText(row, ['data_pagamento']),
+    hasDocument: typeof daeUrl === 'string' && Boolean(daeUrl.trim())
+  };
+}
+
+app.get('/api/requests/:localRequestId/official-summary', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A consulta oficial está disponível para contas Fênix conectadas.' });
+  try {
+    const verified = await resolveVerifiedRequesterRequest(res.locals.user.id, String(req.params.localRequestId || ''));
+    const official = verified.official;
+    const rawRenewal = fenixRecordValue(official, ['renovacao.descricao', 'renovacao.nome', 'tipo_renovacao.descricao', 'renovacao', 'is_renewal']);
+    const renewalLabel = typeof rawRenewal === 'boolean'
+      ? (rawRenewal ? 'Sim' : 'Não')
+      : fenixRecordText(official, ['renovacao.descricao', 'renovacao.nome', 'tipo_renovacao.descricao', 'renovacao', 'is_renewal']);
+    const renewalKey = renewalLabel.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+    const renewal = /^(s|sim|true|1|yes)$/.test(renewalKey) ? 'Sim' : /^(n|nao|false|0|sem)$/.test(renewalKey) ? 'Não' : renewalLabel;
+    return res.json({
+      request: {
+        remoteId: fenixRecordIdentifier(official, ['solicitacao_id', 'id', 'request_id']),
+        requestNumber: fenixRecordText(official, OFFICIAL_REQUEST_NUMBER_PATHS),
+        protocolNumber: fenixRecordText(official, OFFICIAL_PROTOCOL_NUMBER_PATHS),
+        buildingReference: fenixRecordText(official, [
+          'edificacao.reference_name', 'edificacao.nome', 'edificacao.name', 'edificacao.razao_social', 'edificacao.nome_fantasia',
+          'edification.reference_name', 'edification.nome', 'edification.name', 'building.reference_name', 'building.name', 'reference_name', 'nome_edificacao'
+        ]),
+        municipality: fenixRecordText(official, [
+          'edificacao.address.county', 'edificacao.county', 'edificacao.municipio.nome', 'edificacao.municipality', 'edificacao.cidade',
+          'edification.address.county', 'edification.county', 'edification.municipality', 'building.address.county', 'building.municipality', 'municipality', 'county'
+        ]),
+        serviceType: fenixRecordText(official, ['tipo_solicitacao_display', 'tipo_servico.descricao', 'tipo_solicitacao.descricao', 'tipo_solicitacao.nome', 'servico.nome', 'tipo_servico']),
+        status: fenixRecordText(official, ['status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao', 'etapa_atual']),
+        renewal,
+        event: fenixRecordText(official, ['evento.nome', 'evento.descricao', 'event.name', 'event', 'nome_evento']),
+        protocolDate: fenixRecordText(official, ['dt_protocolo', 'data_protocolo', 'created_at', 'protocol_date']),
+        notificationNumber: fenixRecordText(official, ['n_notificacao_format', 'numero_notificacao', 'n_notificacao', 'notification_number']),
+        acpProtocol: fenixRecordText(official, ['n_protocolo_acp', 'protocolo_acp', 'acp_protocol', 'projeto.num_projeto']),
+        avcbNumber: fenixRecordText(official, ['n_avcb', 'numero_avcb', 'avcb', 'avcb_number']),
+        daeNumber: fenixRecordText(official, ['n_dae', 'numero_dae', 'dae_numero', 'dae.number'])
+      },
+      sourceAccountName: String(verified.local.source_account_name || 'Conta principal').slice(0, 80),
+      readAt: new Date().toISOString()
+    });
+  } catch (error) {
+    return sendVerifiedRequesterReadError(res, error, 'Falha ao atualizar solicitação oficial da conta');
+  }
+});
+
+app.get('/api/requests/:localRequestId/payments', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A consulta oficial está disponível para contas Fênix conectadas.' });
+  try {
+    const verified = await resolveVerifiedRequesterRequest(res.locals.user.id, String(req.params.localRequestId || ''));
+    const solicitationId = numericFenixId(fenixRecordValue(verified.official, ['solicitacao_id']));
+    if (!solicitationId || numericFenixLinks(verified.official, ['solicitacao_id']).identifiers.length !== 1
+      || verified.officialRows.filter((row) => numericFenixId(fenixRecordValue(row, ['solicitacao_id'])) === solicitationId).length !== 1) {
+      return res.status(409).json({ error: 'O Fênix não retornou um identificador numérico único para esta solicitação.' });
+    }
+    const response = await verified.client.get('/api/v1/solicitacoes/' + encodeURIComponent(solicitationId) + '/daes');
+    const rows = requesterDaeRows(response);
+    const eligible = rows.filter((row) => {
+      const id = numericFenixId(fenixRecordValue(row, ['id']));
+      if (!id) return false;
+      const requestLink = numericFenixLinks(row, ['solicitacao_id']);
+      return requestLink.present && requestLink.valid && requestLink.identifiers.length === 1
+        && requestLink.identifiers[0] === solicitationId;
+    });
+    const counts = new Map<string, number>();
+    for (const row of eligible) {
+      const id = numericFenixId(fenixRecordValue(row, ['id']));
+      counts.set(id, (counts.get(id) || 0) + 1);
+    }
+    const daes = eligible
+      .filter((row) => counts.get(numericFenixId(fenixRecordValue(row, ['id']))) === 1)
+      .map(requesterDaeDto);
+    return res.json({ daes, readAt: new Date().toISOString() });
+  } catch (error) {
+    return sendVerifiedRequesterReadError(res, error, 'Falha ao consultar DAEs da solicitação oficial');
+  }
+});
+
+app.get('/api/requests/:localRequestId/payments/:daeId/open', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'DAEs oficiais não estão disponíveis no ambiente demonstrativo.' });
+  const daeId = numericFenixId(req.params.daeId);
+  if (!daeId) return res.status(404).json({ error: 'Documento DAE não encontrado.' });
+  let verified: VerifiedRequesterRequest;
+  try {
+    verified = await resolveVerifiedRequesterRequest(res.locals.user.id, String(req.params.localRequestId || ''));
+  } catch (error) {
+    return sendVerifiedRequesterReadError(res, error, 'Falha ao validar solicitação para abrir DAE oficial');
+  }
+  const solicitationId = numericFenixId(fenixRecordValue(verified.official, ['solicitacao_id']));
+  if (!solicitationId || numericFenixLinks(verified.official, ['solicitacao_id']).identifiers.length !== 1
+    || verified.officialRows.filter((row) => numericFenixId(fenixRecordValue(row, ['solicitacao_id'])) === solicitationId).length !== 1) {
+    return res.status(409).json({ error: 'O Fênix não retornou um identificador numérico único para esta solicitação.' });
+  }
+  try {
+    const url = await getFenixRequestDaeUrl(verified.local.user_id, solicitationId, daeId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.redirect(302, url);
+  } catch (error) {
+    const status = error instanceof FenixError ? Number(error.status) : 0;
+    if ([401, 403, 419].includes(status)) return res.status(409).json({ error: 'Reconecte a conta Fênix para consultar este DAE.' });
+    if (status === 404) return res.status(404).json({ error: 'O Fênix não disponibilizou um DAE para esta solicitação.' });
+    if (status === 409) return res.status(409).json({ error: 'Não foi possível confirmar um DAE único para esta solicitação.' });
+    logger.warn('Falha ao resolver endereço oficial de DAE da solicitação', { status: status || undefined });
+    return res.status(status === 429 ? 429 : 502).json({ error: 'Não foi possível abrir o DAE oficial agora.' });
+  }
+});
+
+app.get('/api/requests/:localRequestId/project-details', requireSession, async (req, res) => {
+  if (res.locals.user.demo) return res.status(403).json({ error: 'A consulta oficial está disponível para contas Fênix conectadas.' });
+  let verified: VerifiedRequesterRequest;
+  try {
+    verified = await resolveVerifiedRequesterRequest(res.locals.user.id, String(req.params.localRequestId || ''));
+  } catch (error) {
+    return sendVerifiedRequesterReadError(res, error, 'Falha ao validar solicitação para consultar projeto oficial');
+  }
+
+  try {
+    const requestIdLinks = numericFenixLinks(verified.official, ['solicitacao_id']);
+    const requestId = requestIdLinks.identifiers.length === 1 ? requestIdLinks.identifiers[0] : '';
+    const listedBuildingId = numericFenixId(fenixRecordIdentifier(verified.official, OFFICIAL_BUILDING_ID_PATHS));
+    const storedBuildingId = numericFenixId(verified.local.remote_building_id);
+    if (!requestId || !requestIdLinks.present || !requestIdLinks.valid || !listedBuildingId || !storedBuildingId || listedBuildingId !== storedBuildingId) {
+      return res.status(409).json({ error: 'O Fênix não confirmou um vínculo único entre esta solicitação e a edificação.' });
+    }
+
+    const edificationResponse = await verified.client.get(`/api/v1/edifications/${encodeURIComponent(listedBuildingId)}`) as any;
+    const edification = edificationResponse?.data?.edification ?? edificationResponse?.data ?? edificationResponse;
+    const returnedBuildingId = numericFenixId(fenixRecordValue(edification, ['id', 'edificacao_id', 'edification_id']));
+    if (returnedBuildingId !== listedBuildingId) {
+      return res.status(409).json({ error: 'A edificação retornada pelo Fênix não corresponde à solicitação selecionada.' });
+    }
+    const edificationOwnerLinks = numericFenixLinks(edification, ['usuario_id', 'user.id', 'usuario.id', 'user_id']);
+    if ((edificationOwnerLinks.present && !edificationOwnerLinks.valid)
+      || edificationOwnerLinks.identifiers.some((id) => id !== numericFenixId(verified.actualFenixUserId))) {
+      return res.status(409).json({ error: 'A edificação retornada pelo Fênix não pertence à conta conectada.' });
+    }
+
+    const edificationProjectLinks = numericFenixLinks(edification, [
+      'technical_project.id', 'technical_project.projeto_tecnico_id', 'projeto_tecnico.id', 'projeto_tecnico_id', 'technical_project_id'
+    ]);
+    const projectId = edificationProjectLinks.identifiers.length ? edificationProjectLinks.identifiers[0] : '';
+    if (!edificationProjectLinks.valid || new Set(edificationProjectLinks.identifiers).size > 1) {
+      return res.status(409).json({ error: 'O Fênix retornou vínculos divergentes entre a edificação e o Projeto Técnico.' });
+    }
+    if (!projectId) return res.status(404).json({ error: 'O Fênix não retornou um Projeto Técnico vinculado a esta edificação.' });
+
+    const projectResponse = await verified.client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(projectId)}`) as any;
+    const project = projectResponse?.data?.technicalproject ?? projectResponse?.data?.projeto_tecnico ?? projectResponse?.data ?? projectResponse;
+    const returnedProjectId = numericFenixId(fenixRecordValue(project, ['id', 'projeto_tecnico_id', 'technical_project_id']));
+    const projectRequestLinks = numericFenixLinks(project, ['solicitacao_atual.id', 'solicitacao_id', 'request_id']);
+    const ownerLinks = numericFenixLinks(project, ['usuario_id', 'solicitante.id', 'user.id', 'usuario.id']);
+    const projectBuildingLinks = numericFenixLinks(project, ['edification.id', 'edificacao.id', 'edificacao_id', 'edification_id']);
+    if (returnedProjectId !== projectId || !projectRequestLinks.present || !projectRequestLinks.valid
+      || !projectRequestLinks.identifiers.every((id) => id === requestId)
+      || !ownerLinks.present || !ownerLinks.valid || !ownerLinks.identifiers.every((id) => id === numericFenixId(verified.actualFenixUserId))
+      || (projectBuildingLinks.present && (!projectBuildingLinks.valid || !projectBuildingLinks.identifiers.every((id) => id === listedBuildingId)))) {
+      return res.status(409).json({ error: 'O Fênix não confirmou a identidade e os vínculos do Projeto Técnico para esta solicitação.' });
+    }
+
+    const address = fenixRecordValue(edification, ['address']) ?? fenixRecordValue(project, ['edification.address']);
+    const text = (row: any, paths: string[]) => fenixRecordText(row, paths) || null;
+    const nonNegativeNumber = (row: any, paths: string[]) => {
+      const raw = fenixRecordValue(row, paths);
+      if (raw === undefined || raw === null || raw === '') return null;
+      const value = Number(raw);
+      return Number.isFinite(value) && value >= 0 ? value : null;
+    };
+    const collection = (row: any, paths: string[]) => {
+      const raw = fenixRecordValue(row, paths);
+      return Array.isArray(raw) ? raw : raw === undefined || raw === null || raw === '' ? [] : [raw];
+    };
+    const cleanCollection = (rows: any[], paths: string[]) => [...new Set(rows.map((item) => {
+      if (typeof item === 'string' || typeof item === 'number') return String(item).trim().slice(0, 160);
+      return fenixRecordText(item, paths);
+    }).filter((value) => value && value !== '[object Object]'))].slice(0, 80);
+
+    const street = text(address, ['public_place', 'logradouro']);
+    const number = text(address, ['number', 'numero']);
+    const complement = text(address, ['complement', 'complemento']);
+    const district = text(address, ['district', 'bairro']);
+    const addressLabel = [street, number, complement, district].filter(Boolean).join(', ') || null;
+    const occupationRows = collection(project, ['occupation_division_technical_projects']);
+    const occupations = cleanCollection(occupationRows.map((item) => {
+      const occupation = fenixRecordText(item, ['occupation.occupation_use', 'occupation.group.name', 'occupation.group.nome', 'occupation.name', 'occupation.nome']);
+      const division = fenixRecordText(item, ['division.division_use', 'division.group.name', 'division.group.nome', 'division.name', 'division.nome']);
+      return [occupation, division].filter(Boolean).join(' / ');
+    }), []);
+    const measures = cleanCollection(collection(project, ['medida_seguranca', 'medidas_seguranca', 'security_measures']), [
+      'medida_seguranca', 'nome', 'name', 'descricao', 'description'
+    ]);
+    const responsibleRows = collection(project, ['projeto_responsavel_tecnico', 'responsaveis_tecnicos', 'technical_responsibles']);
+    const technicalResponsibles = responsibleRows.map((item) => ({
+      name: text(item, ['technical.name', 'responsavel.nome', 'responsavel.name', 'tecnico.nome', 'nome', 'name']),
+      registration: text(item, ['crea_cau', 'registro_profissional', 'numero_registro', 'registro', 'crea', 'caubr', 'cft', 'technical.crea_cau', 'responsavel_tecnico.crea_cau']),
+      council: text(item, ['tipo_conselho', 'conselho', 'tipo_registro', 'orgao_registro', 'registro.tipo']),
+      role: text(item, ['tipo_responsabilidade', 'responsabilidade', 'funcao', 'role'])
+    })).filter((item) => item.name || item.registration || item.council).slice(0, 40);
+
+    const historyRows = collection(project, ['status_projeto_tecnico']);
+    const currentStatusId = numericFenixId(fenixRecordValue(project, ['status_atual.status_id', 'status_atual.id', 'status_id']));
+    const history = historyRows.map((item) => {
+      const statusId = numericFenixId(fenixRecordValue(item, ['status_id', 'status.id']));
+      return {
+        status: fenixRecordText(item, ['status.status', 'status.nome', 'status.name', 'status.slug', 'status']) || 'Etapa do processo',
+        startedAt: text(item, ['data_inicial', 'created_at']),
+        endedAt: text(item, ['data_final']),
+        current: Boolean(currentStatusId && statusId && statusId === currentStatusId)
+      };
+    }).sort((a, b) => Date.parse(a.startedAt || '') - Date.parse(b.startedAt || '')).slice(-200);
+
+    return res.json({
+      project: {
+        projectNumber: text(project, ['num_projeto', 'n_projeto', 'numero_projeto']),
+        projectType: text(project, ['tipo_projeto.sigla', 'tipo_projeto.nome', 'tipoProjeto.sigla', 'tipoProjeto.nome', 'tipo_projeto_id']),
+        status: text(project, ['status_atual.status.status', 'status_atual.status.nome', 'status_atual.status.name', 'status_atual.status.slug', 'status_atual']),
+        activity: text(project, ['instituicao.atividade_economica', 'institution.activity_economica', 'activity_economica', 'uso']),
+        risk: text(project, ['instituicao.risco', 'institution.risco', 'risco']),
+        building: {
+          reference: text(edification, ['reference_name', 'nome', 'name', 'razao_social', 'nome_fantasia']) || verified.local.building_reference || null,
+          address: addressLabel,
+          municipality: text(address, ['county', 'municipality', 'municipio.nome', 'cidade']) || verified.local.municipality || null,
+          totalArea: nonNegativeNumber(edification, ['total_area', 'area_total']) ?? nonNegativeNumber(project, ['edification.total_area', 'total_area', 'area_total']),
+          buildingArea: nonNegativeNumber(edification, ['building_area', 'area_construida']) ?? nonNegativeNumber(project, ['edification.building_area', 'building_area', 'area_construida']),
+          areaToBeBuilt: nonNegativeNumber(edification, ['area_to_be_built', 'area_construir']) ?? nonNegativeNumber(project, ['edification.area_to_be_built', 'area_to_be_built', 'area_construir']),
+          floors: nonNegativeNumber(edification, ['number_floors', 'numberFloors', 'pavimentos']) ?? nonNegativeNumber(project, ['edification.number_floors', 'number_floors', 'numberFloors', 'pavimentos']),
+          height: text(edification, ['height']) || text(project, ['edification.height', 'height'])
+        },
+        ownerName: text(project, ['proprietario.nome', 'proprietario.name', 'prop_projeto.nome', 'prop_projeto.razao_social', 'owner.name']),
+        responsibleName: text(project, ['responsavel.nome', 'responsavel.name', 'resp_projeto.nome', 'resp_projeto.razao_social']),
+        occupations,
+        securityMeasures: measures,
+        technicalResponsibles,
+        history
+      },
+      sourceAccountName: String(verified.local.source_account_name || 'Conta principal').slice(0, 80),
+      readAt: new Date().toISOString()
+    });
+  } catch (error) {
+    const status = error instanceof FenixError ? Number(error.status) : 0;
+    if ([401, 403, 419].includes(status)) return res.status(409).json({ error: 'Reconecte a conta Fênix para consultar os dados do projeto.' });
+    if (status === 404) return res.status(404).json({ error: 'O Fênix não encontrou o projeto vinculado a esta solicitação.' });
+    if (status === 409) return res.status(409).json({ error: error instanceof Error ? error.message : 'Os vínculos do projeto precisam ser confirmados.' });
+    logger.warn('Falha ao consultar dados oficiais de projeto da solicitação', { status: status || undefined });
+    return res.status(status === 429 ? 429 : 502).json({ error: 'Não foi possível consultar os dados do projeto no Fênix agora.' });
+  }
+});
+
+type FenixRequesterReadAccount = {
+  sourceAccountKey: string;
+  dataUserId: string;
+  fenixUserId: string;
+  sourceAccountName: string;
+  connectionStatus: string | null;
+  paused: boolean;
+  sessionAvailable: boolean;
+  sessionExpired: boolean;
+  demo: boolean;
+  identityMatches: boolean;
+  client?: Awaited<ReturnType<typeof fenixClientForUser>>;
+};
+type FenixRequesterReadWarning = { accountName: string; code: string; message: string };
+
+function requesterReadAccountCandidates(ownerUserId: string) {
+  const warnings: FenixRequesterReadWarning[] = [];
+  const accounts: FenixRequesterReadAccount[] = [];
+  const principal = db.prepare(`SELECT id,fenix_user_id,session_ciphertext,demo,fenix_session_expired
+    FROM users WHERE id=?`).get(ownerUserId) as {
+      id: string; fenix_user_id: string | null; session_ciphertext: string | null; demo: number; fenix_session_expired: number
+    } | undefined;
+
+  if (principal) {
+    accounts.push({
+      sourceAccountKey: 'primary',
+      dataUserId: principal.id,
+      fenixUserId: String(principal.fenix_user_id || ''),
+      sourceAccountName: 'Conta principal',
+      connectionStatus: null,
+      paused: false,
+      sessionAvailable: Boolean(principal.session_ciphertext),
+      sessionExpired: Boolean(principal.fenix_session_expired),
+      demo: Boolean(principal.demo),
+      identityMatches: true
+    });
+  }
+
+  const connections = db.prepare(`SELECT c.id AS connection_id,c.fenix_user_id AS connection_fenix_user_id,c.label,c.status,c.paused,
+      u.id AS data_user_id,u.fenix_user_id AS user_fenix_user_id,u.session_ciphertext,u.fenix_session_expired,u.demo
+    FROM fenix_connections c JOIN users u ON u.id=c.data_user_id
+    WHERE c.owner_user_id=? ORDER BY c.created_at,c.id`).all(ownerUserId) as Array<{
+      connection_id: string; connection_fenix_user_id: string; label: string; status: string; paused: number;
+      data_user_id: string; user_fenix_user_id: string | null; session_ciphertext: string | null;
+      fenix_session_expired: number; demo: number;
+    }>;
+  connections.forEach((connection, index) => {
+    accounts.push({
+      sourceAccountKey: connection.connection_id,
+      dataUserId: connection.data_user_id,
+      fenixUserId: String(connection.connection_fenix_user_id || ''),
+      sourceAccountName: String(connection.label || `Conta conectada ${index + 1}`).trim().slice(0, 80),
+      connectionStatus: connection.status,
+      paused: Boolean(connection.paused),
+      sessionAvailable: Boolean(connection.session_ciphertext),
+      sessionExpired: Boolean(connection.fenix_session_expired),
+      demo: Boolean(connection.demo),
+      identityMatches: Boolean(connection.connection_fenix_user_id)
+        && String(connection.connection_fenix_user_id) === String(connection.user_fenix_user_id || '')
+    });
+  });
+
+  return { accounts, warnings };
+}
+
+async function activeFenixRequesterReadAccounts(ownerUserId: string, onlySourceAccountKey?: string) {
+  const { accounts, warnings } = requesterReadAccountCandidates(ownerUserId);
+  const active: FenixRequesterReadAccount[] = [];
+  const scopedAccounts = onlySourceAccountKey === undefined
+    ? accounts
+    : accounts.filter((account) => account.sourceAccountKey === onlySourceAccountKey);
+  for (const account of scopedAccounts) {
+    const warn = (code: string, message: string) => warnings.push({ accountName: account.sourceAccountName, code, message });
+    if (account.demo) {
+      warn('demo_account', 'Conta demonstrativa ignorada; a lista pode estar parcial.');
+      continue;
+    }
+    if (account.paused) {
+      warn('paused', 'Conta pausada; a lista pode estar parcial.');
+      continue;
+    }
+    if (account.connectionStatus && account.connectionStatus !== 'active') {
+      warn(account.connectionStatus === 'reauth_required' ? 'reauth_required' : 'account_unavailable',
+        account.connectionStatus === 'reauth_required' ? 'Conta precisa ser reconectada; a lista pode estar parcial.' : 'Conta indisponível; a lista pode estar parcial.');
+      continue;
+    }
+    if (account.sessionExpired || !account.sessionAvailable || !account.fenixUserId) {
+      warn(account.sessionExpired ? 'reauth_required' : 'session_unavailable',
+        account.sessionExpired ? 'Sessão precisa ser reconectada; a lista pode estar parcial.' : 'Sessão Fênix indisponível; a lista pode estar parcial.');
+      continue;
+    }
+    if (!account.identityMatches) {
+      warn('identity_mismatch', 'A conta vinculada precisa ser reconectada; a lista pode estar parcial.');
+      continue;
+    }
+    try {
+      const client = await fenixClientForUser(account.dataUserId);
+      const actualFenixUserId = await verifyFenixRequesterIdentity(account.dataUserId, client);
+      if (actualFenixUserId !== account.fenixUserId) {
+        warn('identity_mismatch', 'A sessão Fênix não corresponde à conta vinculada; a lista pode estar parcial.');
+        continue;
+      }
+      active.push({ ...account, client });
+    } catch (error) {
+      const status = error instanceof FenixError ? Number(error.status) : 0;
+      if ([401, 403, 419].includes(status)) {
+        warn('reauth_required', 'Sessão precisa ser reconectada; a lista pode estar parcial.');
+      } else {
+        warn('upstream_unavailable', 'Consulta Fênix indisponível; a lista pode estar parcial.');
+      }
+    }
+  }
+  return { accounts: active, warnings };
+}
+
+function fenixRecordValue(row: any, paths: string[]): unknown {
+  for (const path of paths) {
+    const value = path.split('.').reduce((current: any, part) => current?.[part], row);
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function fenixRecordText(row: any, paths: string[]): string {
+  const value = fenixRecordValue(row, paths);
+  if (typeof value === 'string' || typeof value === 'number') return String(value).trim().slice(0, 160);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const key of ['descricao', 'name', 'slug', 'formatado', 'numero']) {
+      const nested = (value as Record<string, unknown>)[key];
+      if (typeof nested === 'string' || typeof nested === 'number') return String(nested).trim().slice(0, 160);
+    }
+  }
+  return '';
+}
+
+function fenixRecordIdentifier(row: any, paths: string[]): string {
+  const value = fenixRecordValue(row, paths);
+  if (typeof value !== 'string' && typeof value !== 'number') return '';
+  const identifier = String(value).trim();
+  return identifier.length > 0 && identifier.length <= 160 && !/[\u0000-\u001f\u007f]/.test(identifier) ? identifier : '';
+}
+
+function canonicalFenixNumber(value: unknown) {
+  return String(value ?? '').trim().normalize('NFKC').toLocaleUpperCase('pt-BR');
+}
+
+function localProcessIdForFenixRecord(dataUserId: string, projectId: string, requestId: string, numbers: string[]) {
+  const rows = db.prepare('SELECT id,remote_id,protocol FROM processes WHERE user_id=?').all(dataUserId) as Array<{
+    id: string; remote_id: string | null; protocol: string
+  }>;
+  const byOfficialId = (kind: 'technicalproject' | 'request', officialId: string) => {
+    if (!officialId) return [];
+    return rows.filter((row) => {
+      const pieces = row.id.split(':');
+      if (pieces[0] !== kind) return false;
+      return String(row.remote_id || '') === officialId || pieces[pieces.length - 1] === officialId;
+    });
+  };
+  for (const [kind, officialId] of [['technicalproject', projectId], ['request', requestId]] as const) {
+    const matches = byOfficialId(kind, officialId);
+    if (matches.length === 1) return matches[0]?.id;
+    if (matches.length > 1) return undefined;
+  }
+  const numberKeys = new Set(numbers.map(canonicalFenixNumber).filter(Boolean));
+  if (!numberKeys.size) return undefined;
+  const matches = rows.filter((row) => numberKeys.has(canonicalFenixNumber(row.protocol)));
+  return matches.length === 1 ? matches[0]?.id : undefined;
+}
+
+function migrationSapDto(row: any, account: FenixRequesterReadAccount) {
+  const projectId = fenixRecordText(row, ['projeto_tecnico_id', 'id_projeto_tecnico', 'projeto_id', 'id_projeto', 'project_id', 'projeto_tecnico.id']);
+  const requestId = fenixRecordText(row, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id']);
+  const sapProtocol = fenixRecordText(row, ['n_protocolo_sap', 'protocolo_sap']);
+  const projectNumber = fenixRecordText(row, ['num_projeto', 'n_projeto', 'numero_projeto', 'projeto_tecnico.num_projeto']);
+  const requestNumber = fenixRecordText(row, ['n_solicitacao_format', 'n_solicitacao', 'numero_solicitacao']);
+  const protocolNumber = fenixRecordText(row, ['n_protocolo_format', 'n_protocolo', 'numero_protocolo', 'protocolo']);
+  const linkedProcessId = localProcessIdForFenixRecord(account.dataUserId, projectId, requestId,
+    [sapProtocol, projectNumber, requestNumber, protocolNumber]);
+  return {
+    id: fenixRecordIdentifier(row, ['id', 'migracao_sap_id']),
+    projectId,
+    requestId,
+    status: fenixRecordText(row, ['status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao', 'status_slug']),
+    sapProtocol,
+    projectNumber,
+    requestNumber,
+    protocolNumber,
+    createdAt: fenixRecordText(row, ['created_at', 'createdAt']),
+    updatedAt: fenixRecordText(row, ['updated_at', 'updatedAt']),
+    sourceAccountKey: account.sourceAccountKey,
+    sourceAccountName: account.sourceAccountName,
+    ...(linkedProcessId ? { linkedProcessId } : {})
+  };
+}
+
+function requesterRequestNumbers(row: any) {
+  return [
+    fenixRecordText(row, ['n_solicitacao_format']),
+    fenixRecordText(row, ['n_protocolo_format'])
+  ].map(canonicalFenixNumber).filter(Boolean);
+}
+
+function remanejamentoNumbers(row: any) {
+  return [
+    fenixRecordText(row, ['n_solicitacao_format']),
+    fenixRecordText(row, ['n_protocolo_format'])
+  ].map(canonicalFenixNumber).filter(Boolean);
+}
+
+function requiredFenixIdentifierMatches(row: any, paths: string[], expected: string) {
+  let found = false;
+  for (const path of paths) {
+    const value = fenixRecordValue(row, [path]);
+    if (value === undefined) continue;
+    found = true;
+    const actual = fenixRecordIdentifier(row, [path]);
+    if (!actual || actual !== expected) return false;
+  }
+  return found;
+}
+
+function requiredFenixOwnerMatches(row: any, account: FenixRequesterReadAccount) {
+  let found = false;
+  const matches = ['id_user', 'user.id', 'usuario.id'].every((path) => {
+    const ownerId = fenixRecordValue(row, [path]);
+    if (ownerId === undefined) return true;
+    found = true;
+    return String(ownerId).trim() === account.fenixUserId;
+  });
+  return found && matches;
+}
+
+function fenixDocumentMetadata(row: any, type: 'migration' | 'remanejamento') {
+  type FenixDocumentMetadataDto = { id: string; name: string; type: string; createdAt?: string; updatedAt?: string; slug?: string };
+  const documents = fenixRecordValue(row, ['documentos']);
+  if (!Array.isArray(documents)) return [];
+  return documents.flatMap((document): FenixDocumentMetadataDto[] => {
+    const id = fenixRecordIdentifier(document, ['id']);
+    if (!id) return [];
+    if (type === 'migration') {
+      return [{
+        id,
+        name: fenixRecordText(document, ['nome']),
+        type: fenixRecordText(document, ['tipo']),
+        createdAt: fenixRecordText(document, ['created_at']),
+        updatedAt: fenixRecordText(document, ['updated_at'])
+      }];
+    }
+    return [{
+      id,
+      name: fenixRecordText(document, ['nome']),
+      type: fenixRecordText(document, ['tipo']),
+      slug: fenixRecordText(document, ['slug'])
+    }];
+  });
+}
+
+function migrationSapDetailDto(row: any, listRow: any) {
+  return {
+    id: fenixRecordIdentifier(row, ['id', 'migracao_sap_id']) || fenixRecordIdentifier(listRow, ['id', 'migracao_sap_id']),
+    status: fenixRecordText(row, ['status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao', 'status_slug']),
+    sapProtocol: fenixRecordText(row, ['n_protocolo_sap', 'protocolo_sap']),
+    projectNumber: fenixRecordText(row, ['num_projeto', 'n_projeto', 'numero_projeto', 'projeto_tecnico.num_projeto']),
+    requestNumber: fenixRecordText(row, ['n_solicitacao_format', 'n_solicitacao', 'numero_solicitacao']),
+    protocolNumber: fenixRecordText(row, ['n_protocolo_format', 'n_protocolo', 'numero_protocolo', 'protocolo']),
+    createdAt: fenixRecordText(row, ['created_at', 'createdAt']),
+    updatedAt: fenixRecordText(row, ['updated_at', 'updatedAt']),
+    documents: fenixDocumentMetadata(row, 'migration')
+  };
+}
+
+function remanejamentoDetailDto(row: any, listRow: any, requestRow: any) {
+  const parsedArea = Number(fenixRecordValue(row, ['total_area', 'area_total', 'totalArea']));
+  return {
+    id: fenixRecordIdentifier(row, ['id', 'remanejamento_id']) || fenixRecordIdentifier(listRow, ['id', 'remanejamento_id']),
+    status: fenixRecordText(row, ['status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao', 'status_slug']),
+    sapProtocol: fenixRecordText(row, ['n_protocolo_sap', 'protocolo_sap']),
+    projectNumber: fenixRecordText(row, ['num_projeto', 'n_projeto', 'numero_projeto', 'projeto_tecnico.num_projeto'])
+      || fenixRecordText(requestRow, ['num_projeto', 'n_projeto', 'projeto_tecnico.num_projeto']),
+    requestNumber: fenixRecordText(row, ['n_solicitacao_format', 'n_solicitacao', 'numero_solicitacao'])
+      || fenixRecordText(requestRow, ['n_solicitacao_format']),
+    protocolNumber: fenixRecordText(row, ['n_protocolo_format', 'n_protocolo', 'numero_protocolo', 'protocolo'])
+      || fenixRecordText(requestRow, ['n_protocolo_format']),
+    reference: fenixRecordText(row, ['reference_name', 'reference']),
+    municipality: fenixRecordText(row, ['municipio', 'municipality']),
+    totalArea: Number.isFinite(parsedArea) && parsedArea >= 0 ? parsedArea : null,
+    documents: fenixDocumentMetadata(row, 'remanejamento')
+  };
+}
+
+function requesterRowProjectId(row: any) {
+  return fenixRecordText(row, ['projeto_tecnico_id', 'projeto_tecnico.id', 'id_projeto_tecnico', 'id']);
+}
+
+function requesterRowRequestId(row: any) {
+  return fenixRecordText(row, ['solicitacao_id']);
+}
+
+function remanejamentoDto(row: any, requestRow: any, account: FenixRequesterReadAccount) {
+  const projectId = fenixRecordText(row, ['projeto_tecnico_id', 'id_projeto_tecnico', 'projeto_id', 'id_projeto', 'project_id', 'projeto_tecnico.id'])
+    || requesterRowProjectId(requestRow);
+  const requestId = fenixRecordText(row, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id'])
+    || requesterRowRequestId(requestRow);
+  const sapProtocol = fenixRecordText(row, ['n_protocolo_sap', 'protocolo_sap']);
+  const projectNumber = fenixRecordText(row, ['num_projeto', 'n_projeto', 'numero_projeto', 'projeto_tecnico.num_projeto'])
+    || fenixRecordText(requestRow, ['num_projeto', 'n_projeto', 'projeto_tecnico.num_projeto']);
+  const requestNumber = fenixRecordText(row, ['n_solicitacao_format', 'n_solicitacao', 'numero_solicitacao'])
+    || fenixRecordText(requestRow, ['n_solicitacao_format']);
+  const protocolNumber = fenixRecordText(row, ['n_protocolo_format', 'n_protocolo', 'numero_protocolo', 'protocolo'])
+    || fenixRecordText(requestRow, ['n_protocolo_format']);
+  const linkedProcessId = localProcessIdForFenixRecord(account.dataUserId, projectId, requestId,
+    [sapProtocol, projectNumber, requestNumber, protocolNumber]);
+  const parsedArea = Number(fenixRecordValue(row, ['total_area', 'area_total', 'totalArea']));
+  return {
+    id: fenixRecordIdentifier(row, ['id', 'remanejamento_id']),
+    projectId,
+    requestId,
+    status: fenixRecordText(row, ['status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao', 'status_slug']),
+    reference: fenixRecordText(row, ['reference_name', 'reference']),
+    municipality: fenixRecordText(row, ['municipio', 'municipality']),
+    totalArea: Number.isFinite(parsedArea) && parsedArea >= 0 ? parsedArea : null,
+    sapProtocol,
+    projectNumber,
+    requestNumber,
+    protocolNumber,
+    sourceAccountKey: account.sourceAccountKey,
+    sourceAccountName: account.sourceAccountName,
+    ...(linkedProcessId ? { linkedProcessId } : {})
+  };
+}
+
+function fenixBooleanOrNull(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1 ? true : value === 0 ? false : null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+  if (['1', 'true', 'sim', 'ativo', 'yes'].includes(normalized)) return true;
+  if (['0', 'false', 'nao', 'inativo', 'no'].includes(normalized)) return false;
+  return null;
+}
+
+app.get('/api/fenix/requester-profile/:sourceAccountKey', requireSession, async (req, res) => {
+  const ownerUserId = res.locals.user.id;
+  const sourceAccountKey = String(req.params.sourceAccountKey || '').trim();
+  if (!sourceAccountKey || sourceAccountKey.length > 160) return res.status(404).json({ error: 'Conta Fênix não encontrada.' });
+
+  const candidate = requesterReadAccountCandidates(ownerUserId).accounts
+    .find((item) => item.sourceAccountKey === sourceAccountKey);
+  if (!candidate) return res.status(404).json({ error: 'Conta Fênix não encontrada.' });
+  try {
+    const { accounts } = await activeFenixRequesterReadAccounts(ownerUserId, sourceAccountKey);
+    const account = accounts.find((item) => item.sourceAccountKey === sourceAccountKey);
+    if (!account?.client) return res.status(409).json({ error: 'Retome ou reconecte esta conta Fênix para consultar o perfil.' });
+
+    const requesterDetails = await account.client.get('/api/v1/detailsRequester') as any;
+    const requesterId = String(fenixRecordValue(requesterDetails, ['data.user.id', 'user.id', 'id']) ?? '').trim();
+    if (!requesterId || requesterId !== account.fenixUserId) {
+      return res.status(409).json({ error: 'A sessão Fênix não corresponde à conta selecionada.' });
+    }
+
+    const currentVerification = fenixRecordValue(requesterDetails, ['data.user.current_verification']);
+    let verification: {
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+      startTime: string;
+      active: boolean | null;
+      documentCount: number;
+    } | null = null;
+    const verificationId = numericFenixId(fenixRecordValue(currentVerification, ['id']));
+    if (verificationId) {
+      const verificationResponse = await account.client.get('/api/v1/autenticidade-usuarios/' + encodeURIComponent(verificationId)) as any;
+      const solicitationOwnerId = fenixRecordValue(verificationResponse, ['data.solicitacao.user.id']);
+      if (solicitationOwnerId === undefined || String(solicitationOwnerId).trim() !== requesterId) {
+        return res.status(404).json({ error: 'Verificação de autenticidade não encontrada para esta conta.' });
+      }
+      const documents = fenixRecordValue(verificationResponse, ['data.solicitacao.documentos', 'data.documentos']);
+      verification = {
+        status: fenixRecordText(currentVerification, ['status.descricao', 'status.name', 'status']),
+        createdAt: fenixRecordText(currentVerification, ['created_at']),
+        updatedAt: fenixRecordText(currentVerification, ['updated_at']),
+        startTime: fenixRecordText(currentVerification, ['start_time']),
+        active: fenixBooleanOrNull(fenixRecordValue(currentVerification, ['ativo'])),
+        documentCount: Array.isArray(documents) ? documents.length : 0
+      };
+    }
+
+    return res.json({
+      profile: {
+        name: fenixRecordText(requesterDetails, ['data.user.name']),
+        email: fenixRecordText(requesterDetails, ['data.user.email']),
+        telephone: fenixRecordText(requesterDetails, ['data.requester.telephone']),
+        verification
+      },
+      sourceAccountKey: account.sourceAccountKey,
+      sourceAccountName: account.sourceAccountName,
+      readAt: new Date().toISOString()
+    });
+  } catch (error) {
+    const upstreamStatus = error instanceof FenixError ? Number(error.status) : 0;
+    if ([401, 403, 419].includes(upstreamStatus)) return res.status(409).json({ error: 'Reconecte esta conta Fênix para consultar o perfil.' });
+    if (upstreamStatus === 404) return res.status(404).json({ error: 'Dados de perfil não encontrados para esta conta.' });
+    logger.warn('Falha ao consultar perfil autenticado Fênix', { status: upstreamStatus || undefined });
+    return res.status(upstreamStatus === 429 ? 429 : 502).json({ error: 'Não foi possível consultar o perfil no Fênix agora.' });
+  }
+});
+
+function requesterSurveyDto(row: any, requestRow: any, account: FenixRequesterReadAccount) {
+  return {
+    id: fenixRecordIdentifier(row, ['id', 'survey_id']),
+    type: fenixRecordText(row, [
+      'tipo_solicitacao_display', 'tipo_solicitacao.descricao', 'tipo_solicitacao.nome',
+      'tipo_vistoria.descricao', 'tipo_vistoria.nome', 'tipo_vistoria', 'tipo_survey', 'tipo'
+    ]),
+    status: fenixRecordText(row, ['status.status', 'status_slug', 'status.descricao', 'status.name', 'status', 'situacao.descricao', 'situacao']),
+    date: fenixRecordText(row, [
+      'data_inicial', 'dt_protocolo', 'created_at', 'data_inicio', 'spt_data_final',
+      'data_vistoria', 'data_agendada', 'scheduled_at', 'data_solicitacao', 'updated_at'
+    ]),
+    buildingReference: fenixRecordText(row, [
+      'edificacao.reference_name', 'edificacao.nome', 'edificacao.name', 'reference_name', 'nome_edificacao'
+    ]) || fenixRecordText(requestRow, [
+      'edificacao.reference_name', 'edificacao.nome', 'edificacao.name', 'reference_name', 'nome_edificacao'
+    ]),
+    address: fenixRecordText(row, [
+      'public_place', 'edificacao.endereco_completo', 'edificacao.address.formatted', 'edificacao.address.line',
+      'endereco_completo', 'address.formatted', 'endereco', 'address'
+    ]) || fenixRecordText(requestRow, [
+      'public_place', 'edificacao.endereco_completo', 'edificacao.address.formatted', 'edificacao.address.line',
+      'endereco_completo', 'address.formatted', 'endereco', 'address'
+    ]),
+    district: fenixRecordText(row, ['district', 'edificacao.district', 'edificacao.bairro']) || fenixRecordText(requestRow, [
+      'district', 'edificacao.district', 'edificacao.bairro'
+    ]),
+    municipality: fenixRecordText(row, [
+      'county', 'municipality', 'edificacao.address.county', 'edificacao.municipio.nome', 'edificacao.municipality', 'edificacao.cidade', 'municipio'
+    ]) || fenixRecordText(requestRow, [
+      'county', 'municipality', 'edificacao.address.county', 'edificacao.municipio.nome', 'edificacao.municipality', 'edificacao.cidade', 'municipio'
+    ]),
+    requestNumber: fenixRecordText(requestRow, OFFICIAL_REQUEST_NUMBER_PATHS),
+    protocolNumber: fenixRecordText(requestRow, OFFICIAL_PROTOCOL_NUMBER_PATHS),
+    sourceAccountKey: account.sourceAccountKey,
+    sourceAccountName: account.sourceAccountName
+  };
+}
+
+app.get('/api/fenix/vistorias', requireSession, async (_req, res) => {
+  const { accounts, warnings } = await activeFenixRequesterReadAccounts(res.locals.user.id);
+  const vistorias: Array<ReturnType<typeof requesterSurveyDto>> = [];
+  for (const account of accounts) {
+    try {
+      const [requests, surveyRows] = await Promise.all([
+        listFenixRequesterRequests(account.dataUserId, account.client),
+        listFenixSurveys(account.dataUserId, account.client)
+      ]);
+      const requestRowsById = new Map<string, any[]>();
+      for (const request of requests) {
+        const requestId = numericFenixId(fenixRecordValue(request, ['solicitacao_id']));
+        if (!requestId) continue;
+        const matches = requestRowsById.get(requestId) || [];
+        matches.push(request);
+        requestRowsById.set(requestId, matches);
+      }
+
+      const eligible = surveyRows.flatMap((row) => {
+        const surveyOwnerId = fenixRecordValue(row, ['usuario_id']);
+        if (surveyOwnerId === undefined || String(surveyOwnerId).trim() !== account.fenixUserId) return [];
+        const requestId = numericFenixId(fenixRecordValue(row, ['solicitacao_id']));
+        if (!requestId) return [];
+        const linkedRequests = requestRowsById.get(requestId);
+        if (!linkedRequests || linkedRequests.length !== 1) return [];
+        const surveyId = fenixRecordIdentifier(row, ['id', 'survey_id']);
+        if (!surveyId) return [];
+        return [{ row, requestRow: linkedRequests[0], surveyId }];
+      });
+      const surveyIdCounts = new Map<string, number>();
+      for (const item of eligible) surveyIdCounts.set(item.surveyId, (surveyIdCounts.get(item.surveyId) || 0) + 1);
+      for (const item of eligible) {
+        if (surveyIdCounts.get(item.surveyId) !== 1) continue;
+        vistorias.push(requesterSurveyDto(item.row, item.requestRow, account));
+      }
+    } catch (error) {
+      const status = error instanceof FenixError ? Number(error.status) : 0;
+      const reauthRequired = [401, 403, 419].includes(status);
+      warnings.push({
+        accountName: account.sourceAccountName,
+        code: reauthRequired ? 'reauth_required' : 'upstream_unavailable',
+        message: reauthRequired
+          ? 'Sessão precisa ser reconectada; a lista de vistorias pode estar parcial.'
+          : 'Consulta de vistorias indisponível; a lista pode estar parcial.'
+      });
+    }
+  }
+  const publicWarnings = warnings.map(({ code, message }) => ({ code, message }));
+  return res.json({ vistorias, partial: publicWarnings.length > 0, warnings: publicWarnings });
+});
+
+app.get('/api/fenix/migracoes-sap', requireSession, async (_req, res) => {
+  const { accounts, warnings } = await activeFenixRequesterReadAccounts(res.locals.user.id);
+  const migrations: ReturnType<typeof migrationSapDto>[] = [];
+  for (const account of accounts) {
+    try {
+      const rows = await listFenixSapMigrations(account.dataUserId, account.client);
+      for (const row of rows) {
+        if (String(fenixRecordValue(row, ['id_user']) ?? '').trim() !== account.fenixUserId) continue;
+        migrations.push(migrationSapDto(row, account));
+      }
+    } catch (error) {
+      const status = error instanceof FenixError ? Number(error.status) : 0;
+      const reauthRequired = [401, 403, 419].includes(status);
+      warnings.push({
+        accountName: account.sourceAccountName,
+        code: reauthRequired ? 'reauth_required' : 'upstream_unavailable',
+        message: reauthRequired
+          ? 'Sessão precisa ser reconectada; a lista de migrações SAP pode estar parcial.'
+          : 'Consulta de migrações SAP indisponível; a lista pode estar parcial.'
+      });
+    }
+  }
+  return res.json({ migracoes: migrations, partial: warnings.length > 0, warnings });
+});
+
+app.get('/api/fenix/migracoes-sap/:sourceAccountKey/:recordId', requireSession, async (req, res) => {
+  const sourceAccountKey = String(req.params.sourceAccountKey || '');
+  const requestedId = String(req.params.recordId || '').trim();
+  if (!sourceAccountKey || !requestedId || requestedId.length > 160) return res.status(404).json({ error: 'Registro não encontrado.' });
+  try {
+    const { accounts } = await activeFenixRequesterReadAccounts(res.locals.user.id, sourceAccountKey);
+    const account = accounts.find((item) => item.sourceAccountKey === sourceAccountKey);
+    if (!account) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+    const rows = await listFenixSapMigrations(account.dataUserId, account.client);
+    const matches = rows.filter((row) =>
+      fenixRecordIdentifier(row, ['id', 'migracao_sap_id']) === requestedId
+      && String(fenixRecordValue(row, ['id_user']) ?? '').trim() === account.fenixUserId
+    );
+    if (matches.length !== 1) return res.status(404).json({ error: 'Registro não encontrado.' });
+    const listRow = matches[0];
+    const migrationId = fenixRecordIdentifier(listRow, ['id', 'migracao_sap_id']);
+    const detail = await getFenixSapMigrationDetail(account.dataUserId, migrationId, account.client);
+    const listProjectId = fenixRecordIdentifier(listRow, ['projeto_tecnico_id', 'id_projeto_tecnico', 'projeto_id', 'id_projeto', 'project_id', 'projeto_tecnico.id']);
+    const detailProjectId = fenixRecordIdentifier(detail, ['projeto_tecnico_id', 'id_projeto_tecnico', 'projeto_id', 'id_projeto', 'project_id', 'projeto_tecnico.id']);
+    const listRequestId = fenixRecordIdentifier(listRow, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id']);
+    const detailRequestId = fenixRecordIdentifier(detail, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id']);
+    if (!detail
+      || !requiredFenixIdentifierMatches(detail, ['id', 'migracao_sap_id'], migrationId)
+      || !requiredFenixOwnerMatches(detail, account)
+      || (detailProjectId && listProjectId && detailProjectId !== listProjectId)
+      || (detailRequestId && listRequestId && detailRequestId !== listRequestId)) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+    return res.json({ migration: migrationSapDetailDto(detail, listRow) });
+  } catch (error) {
+    const upstreamStatus = error instanceof FenixError ? Number(error.status) : 0;
+    if (upstreamStatus === 404) return res.status(404).json({ error: 'Registro não encontrado.' });
+    logger.warn('Falha ao consultar detalhe de migração SAP', { status: upstreamStatus || undefined });
+    return res.status(upstreamStatus === 429 ? 429 : 502).json({ error: 'Não foi possível consultar o detalhe no Fênix agora.' });
+  }
+});
+
+app.get('/api/fenix/remanejamentos', requireSession, async (_req, res) => {
+  const { accounts, warnings } = await activeFenixRequesterReadAccounts(res.locals.user.id);
+  const remanejamentos: Array<ReturnType<typeof remanejamentoDto>> = [];
+  const candidates: Array<{ row: any; requestRow: any | null; account: FenixRequesterReadAccount; identity: string }> = [];
+  for (const account of accounts) {
+    try {
+      const requests = await listFenixRequesterRequests(account.dataUserId, account.client);
+      const remanejamentoRows = await listFenixRemanejamentos(account.dataUserId, account.client);
+      for (const row of remanejamentoRows) {
+        const rowNumbers = remanejamentoNumbers(row);
+        if (!rowNumbers.length) continue;
+        const matches = requests.filter((request) => requesterRequestNumbers(request).some((number) => rowNumbers.includes(number)));
+        if (!matches.length) continue;
+        const remoteId = fenixRecordIdentifier(row, ['id', 'remanejamento_id']);
+        const rowProjectId = fenixRecordText(row, ['projeto_tecnico_id', 'id_projeto_tecnico', 'projeto_id', 'id_projeto', 'project_id', 'projeto_tecnico.id']);
+        const rowRequestId = fenixRecordText(row, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id']);
+        const identity = remoteId
+          ? `id:${remoteId}`
+          : `numbers:${[...new Set(rowNumbers)].sort().join('|')}:project:${rowProjectId}:request:${rowRequestId}`;
+        candidates.push({ row, requestRow: matches.length === 1 ? matches[0] : null, account, identity });
+      }
+    } catch (error) {
+      const status = error instanceof FenixError ? Number(error.status) : 0;
+      warnings.push({
+        accountName: account.sourceAccountName,
+        code: [401, 403, 419].includes(status) ? 'reauth_required' : 'upstream_unavailable',
+        message: [401, 403, 419].includes(status)
+          ? 'Sessão precisa ser reconectada; a lista de remanejamentos pode estar parcial.'
+          : 'Consulta de remanejamentos indisponível; a lista pode estar parcial.'
+      });
+    }
+  }
+
+  const accountsByRemanejamento = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    const owners = accountsByRemanejamento.get(candidate.identity) || new Set<string>();
+    owners.add(candidate.account.dataUserId);
+    accountsByRemanejamento.set(candidate.identity, owners);
+  }
+  const returned = new Set<string>();
+  for (const candidate of candidates) {
+    const owners = accountsByRemanejamento.get(candidate.identity) || new Set<string>();
+    if (owners.size !== 1) continue;
+    const dedupeKey = `${candidate.account.dataUserId}:${candidate.identity}`;
+    if (returned.has(dedupeKey)) continue;
+    returned.add(dedupeKey);
+    remanejamentos.push(remanejamentoDto(candidate.row, candidate.requestRow || {}, candidate.account));
+  }
+  if ([...accountsByRemanejamento.values()].some((owners) => owners.size > 1)) {
+    warnings.push({
+      accountName: 'Contas conectadas', code: 'ambiguous_account_match',
+      message: 'Um remanejamento corresponde a solicitações de mais de uma conta e foi omitido; a lista pode estar parcial.'
+    });
+  }
+  return res.json({ remanejamentos, partial: warnings.length > 0, warnings });
+});
+
+app.get('/api/fenix/remanejamentos/:sourceAccountKey/:recordId', requireSession, async (req, res) => {
+  const sourceAccountKey = String(req.params.sourceAccountKey || '');
+  const requestedId = String(req.params.recordId || '').trim();
+  if (!sourceAccountKey || !requestedId || requestedId.length > 160) return res.status(404).json({ error: 'Registro não encontrado.' });
+  try {
+    const { accounts } = await activeFenixRequesterReadAccounts(res.locals.user.id, sourceAccountKey);
+    const account = accounts.find((item) => item.sourceAccountKey === sourceAccountKey);
+    if (!account) return res.status(404).json({ error: 'Registro não encontrado.' });
+
+    const requests = await listFenixRequesterRequests(account.dataUserId, account.client);
+    const rows = await listFenixRemanejamentos(account.dataUserId, account.client);
+    const listedMatches = rows.filter((row) => fenixRecordIdentifier(row, ['id', 'remanejamento_id']) === requestedId);
+    if (listedMatches.length !== 1) return res.status(404).json({ error: 'Registro não encontrado.' });
+    const listRow = listedMatches[0];
+    const remanejamentoId = fenixRecordIdentifier(listRow, ['id', 'remanejamento_id']);
+    const listedNumbers = remanejamentoNumbers(listRow);
+    if (!listedNumbers.length) return res.status(404).json({ error: 'Registro não encontrado.' });
+    const requestMatches = requests.filter((request) =>
+      requesterRequestNumbers(request).some((number) => listedNumbers.includes(number))
+    );
+    if (requestMatches.length !== 1) return res.status(404).json({ error: 'Registro não encontrado.' });
+    const requestRow = requestMatches[0];
+    const requestNumbers = requesterRequestNumbers(requestRow);
+    const listRequestId = fenixRecordIdentifier(listRow, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id']);
+    const matchedRequestId = requesterRowRequestId(requestRow);
+    if (listRequestId && matchedRequestId && listRequestId !== matchedRequestId) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+    const projectIdPaths = ['projeto_tecnico_id', 'id_projeto_tecnico', 'projeto_id', 'id_projeto', 'project_id', 'projeto_tecnico.id'];
+    const listProjectId = fenixRecordIdentifier(listRow, projectIdPaths);
+    const matchedProjectId = fenixRecordIdentifier(requestRow, projectIdPaths);
+    if (listProjectId && matchedProjectId && listProjectId !== matchedProjectId) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+
+    const detail = await getFenixRemanejamentoDetail(account.dataUserId, remanejamentoId, account.client);
+    if (!detail
+      || !requiredFenixIdentifierMatches(detail, ['id', 'remanejamento_id'], remanejamentoId)
+      || !requiredFenixOwnerMatches(detail, account)) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+    const detailNumbers = remanejamentoNumbers(detail);
+    if (detailNumbers.length && !detailNumbers.some((number) => requestNumbers.includes(number))) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+    const detailRequestId = fenixRecordIdentifier(detail, ['solicitacao_id', 'id_solicitacao', 'request_id', 'solicitacao.id']);
+    const expectedRequestId = listRequestId || matchedRequestId;
+    if (detailRequestId && expectedRequestId && detailRequestId !== expectedRequestId) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+    const detailProjectId = fenixRecordIdentifier(detail, projectIdPaths);
+    const expectedProjectId = listProjectId || matchedProjectId;
+    if (detailProjectId && expectedProjectId && detailProjectId !== expectedProjectId) {
+      return res.status(404).json({ error: 'Registro não encontrado.' });
+    }
+    return res.json({ remanejamento: remanejamentoDetailDto(detail, listRow, requestRow) });
+  } catch (error) {
+    const upstreamStatus = error instanceof FenixError ? Number(error.status) : 0;
+    if (upstreamStatus === 404) return res.status(404).json({ error: 'Registro não encontrado.' });
+    logger.warn('Falha ao consultar detalhe de remanejamento', { status: upstreamStatus || undefined });
+    return res.status(upstreamStatus === 429 ? 429 : 502).json({ error: 'Não foi possível consultar o detalhe no Fênix agora.' });
+  }
+});
+
 app.get('/api/buildings/:buildingId/odoo', requireSession, (req, res) => {
   const user = res.locals.user;
   const buildingId = String(req.params.buildingId || '');
@@ -1909,6 +3139,167 @@ app.post('/api/buildings/:buildingId/odoo/documents', requireSession, async (req
     const file = await getFenixDocumentForOdoo(user.id, buildingId, processId, kind, daeId);
     return res.json(await attachOdooDocument(linked.odoo_project_id, { name: file.filename, content: file.content }, file.reference, file.documentContext));
   } catch (error) { return sendOdooError(res, error); }
+});
+app.get('/api/buildings/:buildingId/documents', requireSession, (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  return res.json({ documents: listBuildingDocuments(user.id, buildingId) });
+});
+app.post('/api/buildings/:buildingId/documents', requireSession, express.raw({ type: 'multipart/form-data', limit: '15mb' }), (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'O envio de arquivos está disponível nas contas conectadas.' });
+  try {
+    const suppliedIdempotencyKey = String(req.get('Idempotency-Key') || '').trim();
+    if (suppliedIdempotencyKey && !/^[A-Za-z0-9._:-]{1,128}$/.test(suppliedIdempotencyKey)) {
+      return res.status(400).json({ error: 'A chave de repetição do envio é inválida.' });
+    }
+    const payload = parseOdooUploadPayload(req);
+    validateOdooUploadFiles(payload.files);
+    const categoryKey = typeof payload.fields.category === 'string' ? payload.fields.category : '';
+    if (!BUILDING_DOCUMENT_CATEGORIES[categoryKey]) return res.status(400).json({ error: 'Selecione uma categoria local válida.' });
+    const targetProcessId = typeof payload.fields.targetProcessId === 'string' ? payload.fields.targetProcessId.trim() : '';
+    if (targetProcessId && (targetProcessId.length > 180 || !ownedProcess(user.id, targetProcessId, buildingId))) {
+      return res.status(400).json({ error: 'O processo selecionado não pertence a esta edificação.' });
+    }
+    const normalizedFiles = payload.files.map((file) => {
+      const extension = file.name.match(/\.[a-z0-9]{1,10}$/i)?.[0].toLowerCase() || '';
+      const mimetype = BUILDING_DOCUMENT_MIME_TYPES[extension];
+      if (!mimetype) throw new OdooApiError('Formato não permitido. Use PDF, imagem, Office, DWG ou DXF.', 400);
+      if (!file.content.length) throw new OdooApiError('Um dos arquivos está vazio.', 400);
+      const contentHash = createHash('sha256').update(file.content).digest('hex');
+      return { ...file, name: safeBuildingDocumentName(file.name, extension), extension, mimetype, contentHash };
+    });
+    const requestFingerprint = createHash('sha256').update(JSON.stringify({
+      buildingId,
+      categoryKey,
+      targetProcessId: targetProcessId || null,
+      files: normalizedFiles.map(({ name, content, contentHash }) => ({ name, size: content.length, sha256: contentHash }))
+    })).digest('hex');
+    const now = new Date().toISOString();
+    const insert = db.prepare(`INSERT INTO building_documents
+      (id,owner_user_id,building_id,target_process_id,name,category_key,mimetype,size_bytes,sha256,content_ciphertext,send_status,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,'awaiting_contract',?,?)`);
+    const insertOperation = db.prepare(`INSERT OR IGNORE INTO building_document_upload_operations
+      (owner_user_id,building_id,idempotency_key,request_fingerprint,created_at) VALUES (?,?,?,?,?)`);
+    const findOperation = db.prepare(`SELECT building_id AS buildingId,request_fingerprint AS requestFingerprint
+      FROM building_document_upload_operations WHERE owner_user_id=? AND idempotency_key=?`);
+    const saveFiles = db.transaction((): { state: 'created' | 'replayed' | 'conflict' } => {
+      if (suppliedIdempotencyKey) {
+        const operationInsert = insertOperation.run(user.id, buildingId, suppliedIdempotencyKey, requestFingerprint, now);
+        if (operationInsert.changes === 0) {
+          const existing = findOperation.get(user.id, suppliedIdempotencyKey) as { buildingId: string; requestFingerprint: string } | undefined;
+          if (!existing || existing.buildingId !== buildingId || existing.requestFingerprint !== requestFingerprint) {
+            return { state: 'conflict' };
+          }
+          return { state: 'replayed' };
+        }
+      }
+
+      for (const file of normalizedFiles) {
+        insert.run(
+          randomUUID(), user.id, buildingId, targetProcessId || null, file.name, categoryKey, file.mimetype,
+          file.content.length, file.contentHash, sealBuffer(file.content), now, now
+        );
+      }
+      return { state: 'created' };
+    });
+    const saved = saveFiles();
+    if (saved.state === 'conflict') {
+      return res.status(409).json({ error: 'Esta chave de envio já foi usada com outro conteúdo. Reenvie a seleção atual.' });
+    }
+    return res.status(saved.state === 'created' ? 201 : 200).json({
+      documents: listBuildingDocuments(user.id, buildingId),
+      replayed: saved.state === 'replayed'
+    });
+  } catch (error) {
+    if (error instanceof OdooApiError) return res.status(error.httpStatus).json({ error: error.message });
+    logger.warn('Falha ao guardar documentos da edificação', { errorName: error instanceof Error ? error.name : 'unknown' });
+    return res.status(500).json({ error: 'Não foi possível guardar os arquivos. Tente novamente.' });
+  }
+});
+app.get('/api/buildings/:buildingId/documents/:documentId/download', requireSession, (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  const row = db.prepare(`SELECT name,mimetype,content_ciphertext FROM building_documents
+    WHERE id=? AND owner_user_id=? AND building_id=?`).get(String(req.params.documentId || ''), user.id, buildingId) as
+    { name: string; mimetype: string; content_ciphertext: Buffer } | undefined;
+  if (!row) return res.status(404).json({ error: 'Arquivo não encontrado.' });
+  try {
+    const content = unsealBuffer(row.content_ciphertext);
+    const asciiName = row.name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_').slice(0, 180) || 'documento';
+    res.setHeader('Content-Type', row.mimetype);
+    res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(row.name)}`);
+    res.setHeader('Content-Length', content.length);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(content);
+  } catch {
+    logger.warn('Falha de integridade ao abrir documento local', { buildingId });
+    return res.status(500).json({ error: 'Não foi possível abrir o arquivo guardado.' });
+  }
+});
+app.delete('/api/buildings/:buildingId/documents/:documentId', requireSession, (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'A remoção de arquivos está disponível nas contas conectadas.' });
+  const documentId = String(req.params.documentId || '');
+  const row = db.prepare('SELECT send_status AS sendStatus FROM building_documents WHERE id=? AND owner_user_id=? AND building_id=?')
+    .get(documentId, user.id, buildingId) as { sendStatus: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Arquivo não encontrado.' });
+  if (row.sendStatus !== 'awaiting_contract') return res.status(409).json({ error: 'Este arquivo não pode ser removido porque já está vinculado a uma tentativa de envio.' });
+  db.prepare('DELETE FROM building_documents WHERE id=? AND owner_user_id=? AND building_id=?').run(documentId, user.id, buildingId);
+  return res.json({ ok: true });
+});
+app.get('/api/fenix/uploads/contexts', requireSession, (_req, res) => {
+  const sendEnabled = isFenixUploadSendEnabled();
+  return res.json({
+    sendEnabled,
+    blocked: true,
+    blockReason: FENIX_UPLOAD_BLOCKED_MESSAGE,
+    contexts: FENIX_UPLOAD_CONTEXTS,
+  });
+});
+app.post('/api/buildings/:buildingId/documents/:documentId/send-plan', requireSession, (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  const documentId = String(req.params.documentId || '');
+  const row = db.prepare('SELECT id,name FROM building_documents WHERE id=? AND owner_user_id=? AND building_id=?')
+    .get(documentId, user.id, buildingId) as { id: string; name: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Arquivo não encontrado.' });
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const plan = buildFenixUploadPlan({
+      context: String(body.context || ''),
+      projetoTecnicoId: body.projetoTecnicoId,
+      solicitacaoId: body.solicitacaoId,
+      retificacaoId: body.retificacaoId,
+      remanejamentoId: body.remanejamentoId,
+      sptId: body.sptId,
+      usuarioId: body.usuarioId,
+      tipoDocumento: body.tipoDocumento,
+      descricao: body.descricao,
+      fileName: row.name,
+    });
+    return res.json({ documentId: row.id, fileName: row.name, sendEnabled: isFenixUploadSendEnabled(), ...plan });
+  } catch (error) {
+    return res.status(400).json({ error: error instanceof Error ? error.message : 'Plano de envio inválido.' });
+  }
+});
+app.post('/api/buildings/:buildingId/documents/:documentId/send', requireSession, (req, res) => {
+  const user = res.locals.user;
+  const buildingId = String(req.params.buildingId || '');
+  if (!ownedBuilding(user.id, buildingId)) return res.status(404).json({ error: 'Edificação não encontrada.' });
+  if (user.demo) return res.status(403).json({ error: 'O envio de arquivos está disponível nas contas conectadas.' });
+  if (!isFenixUploadSendEnabled()) {
+    return res.status(409).json({ error: FENIX_UPLOAD_BLOCKED_MESSAGE, blocked: true, reason: 'flag_desligada' });
+  }
+  return res.status(409).json({ error: FENIX_UPLOAD_BLOCKED_MESSAGE, blocked: true, reason: 'contrato_sem_homologacao' });
 });
 app.get('/api/sync/status', requireSession, (_req, res) => {
   const userId = res.locals.user.id;
@@ -2388,6 +3779,103 @@ app.get('/api/buildings/:buildingId/processes/:processId/notification', requireS
   }
 });
 
+type RequestActionAttemptRow = {
+  id: string;
+  baseline_request_ids_json: string;
+  project_id: number | null;
+  request_type_id: number | null;
+  result_json: string;
+};
+
+function requesterRequestValue(row: any, paths: string[]): unknown {
+  for (const path of paths) {
+    const value = path.split('.').reduce((current: any, part) => current?.[part], row);
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function requesterSolicitationId(row: any): string {
+  const raw = requesterRequestValue(row, ['solicitacao_id', 'request_id', 'solicitation_id']);
+  const value = String(raw ?? '').trim();
+  return /^\d+$/.test(value) && Number(value) > 0 ? value : '';
+}
+
+function requesterRequestIdentityValues(row: any): string[] {
+  const values: string[] = [];
+  const fields: Array<[string, string[]]> = [
+    ['sol', ['solicitacao_id', 'request_id', 'solicitation_id']],
+    ['id', ['id']],
+    ['ns', ['n_solicitacao_format', 'n_solicitacao']],
+    ['np', ['n_protocolo_format', 'protocolo']]
+  ];
+  for (const [prefix, paths] of fields) {
+    const value = String(requesterRequestValue(row, paths) ?? '').trim();
+    if (value) values.push(`${prefix}:${value}`);
+  }
+  return values;
+}
+
+function requesterProjectId(row: any): number {
+  const value = Number(requesterRequestValue(row, ['projeto_tecnico_id', 'projeto_tecnico.id', 'id_projeto_tecnico', 'technical_project_id']));
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function requesterSptId(row: any): number {
+  const value = Number(requesterRequestValue(row, ['spt_id', 'spt.id']));
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function requesterTypeId(row: any): number {
+  const value = Number(requesterRequestValue(row, ['tipo_solicitacao_id', 'tipo_solicitacao.id', 'request_type_id']));
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function verifyCreatedRequesterActionRequest(rows: any[], attempt: RequestActionAttemptRow) {
+  const baseline = new Set<string>();
+  try {
+    const ids = JSON.parse(attempt.baseline_request_ids_json || '[]');
+    if (Array.isArray(ids)) for (const id of ids) baseline.add(String(id));
+  } catch {}
+  let returnedId = '';
+  let returnedSolicitationId = '';
+  try {
+    const result = JSON.parse(attempt.result_json || '{}');
+    returnedId = String(result?.id || '');
+    returnedSolicitationId = String(result?.solicitacao_id || '');
+  } catch {}
+  const matches = rows.filter((row) => {
+    const identities = requesterRequestIdentityValues(row);
+    if (!identities.length || identities.every((identity) => baseline.has(identity))) return false;
+    const rowId = String(requesterRequestValue(row, ['id']) ?? '');
+    const rowSolicitationId = requesterSolicitationId(row);
+    if (returnedId && rowId !== returnedId && rowSolicitationId !== returnedId) return false;
+    if (returnedSolicitationId && rowSolicitationId !== returnedSolicitationId) return false;
+    const projectIdMatches = requesterProjectId(row) === Number(attempt.project_id);
+    let expectedProjectNumber = '';
+    try { expectedProjectNumber = String(JSON.parse(attempt.result_json || '{}')?.num_projeto || '').trim(); } catch {}
+    const projectNumberMatches = expectedProjectNumber && String(requesterRequestValue(row, ['num_projeto', 'projeto_tecnico.num_projeto']) || '').trim() === expectedProjectNumber;
+    return (projectIdMatches || projectNumberMatches)
+      && requesterTypeId(row) === Number(attempt.request_type_id);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function requesterActionReadbackResult(row: any) {
+  const result: Record<string, string> = {};
+  for (const [key, paths] of Object.entries({
+    id: ['id'],
+    solicitacao_id: ['solicitacao_id', 'request_id', 'solicitation_id'],
+    n_solicitacao_format: ['n_solicitacao_format', 'n_solicitacao'],
+    n_protocolo_format: ['n_protocolo_format', 'protocolo'],
+    num_projeto: ['num_projeto', 'projeto_tecnico.num_projeto']
+  })) {
+    const value = requesterRequestValue(row, paths);
+    if (value !== undefined && value !== null && String(value).trim()) result[key] = String(value).trim();
+  }
+  return result;
+}
+
 app.post('/api/buildings/:buildingId/processes/:processId/fenix-action', requireSession, async (req, res) => {
   const user = res.locals.user;
   if (user.demo) {
@@ -2454,57 +3942,218 @@ app.post('/api/buildings/:buildingId/processes/:processId/fenix-action', require
 
   let solicitacaoId = meta.solicitacaoId ?? (process.id.startsWith('request:') ? Number(process.remote_id || process.id.slice('request:'.length)) : null);
   let projetoTecnicoId = meta.projetoTecnicoId ?? (process.id.startsWith('technicalproject:') ? Number(process.remote_id || process.id.slice('technicalproject:'.length)) : null);
-  let sptId = meta.sptId ?? null;
   let statusSlugOld = meta.statusSlug ?? null;
   let responsavelId = meta.responsavelId ?? null;
-  let tipoSolicitacaoId = meta.tipoSolicitacaoId ?? null;
   let numProjeto = meta.numProjeto ?? null;
 
-  let remoteItem: any = null;
-
-  const needsRemoteResolution =
-    !solicitacaoId ||
-    !sptId ||
-    !responsavelId ||
-    !statusSlugOld ||
-    (!projetoTecnicoId && ['solicitar_vistoria', 'solicitar_revistoria', 'solicitar_reanalise', 'cancelar_processo'].includes(action));
-
-  if (needsRemoteResolution) {
-    try {
-      const resp = await client.get('/api/v1/request', { tipo_lista: 'minhas_solicitacoes' }) as any;
-      const root = resp?.data ?? resp;
-      const rows: any[] = Array.isArray(root) ? root : Array.isArray(root?.data) ? root.data : Array.isArray(root?.rows) ? root.rows : [];
-      const remoteId = process.remote_id || process.id.slice(process.id.indexOf(':') + 1);
-      const matched = rows.find((row) =>
-        String(row.id) === String(remoteId) ||
-        String(row.solicitacao_id) === String(remoteId) ||
-        (process.protocol && (String(row.n_solicitacao_format || '').trim() === process.protocol.trim() || String(row.protocolo || '').trim() === process.protocol.trim()))
-      );
-      if (matched) {
-        remoteItem = matched;
-        solicitacaoId = solicitacaoId || Number(matched.solicitacao_id || matched.id) || null;
-        sptId = sptId || Number(matched.spt_id || matched.spt?.id) || null;
-        projetoTecnicoId = projetoTecnicoId || Number(matched.projeto_tecnico_id || matched.projeto_tecnico?.id) || null;
-        statusSlugOld = statusSlugOld || String(matched.status_slug || matched.status?.slug || '');
-        responsavelId = responsavelId || Number(matched.responsavel_id || matched.responsavel?.id || matched.user_id) || null;
-        tipoSolicitacaoId = tipoSolicitacaoId || Number(matched.tipo_solicitacao_id || matched.tipo_solicitacao?.id) || null;
-        numProjeto = numProjeto || String(matched.num_projeto || matched.n_projeto || matched.num_processo || matched.projeto_tecnico?.num_projeto || '');
+  let requesterRows: any[];
+  try {
+    requesterRows = await listFenixRequesterRequests(building.data_user_id, client);
+  } catch (reqErr) {
+    logger.info('Falha ao consultar minhas_solicitacoes antes da ação', { error: reqErr instanceof Error ? reqErr.message : String(reqErr) });
+    if (reqErr instanceof FenixError && reqErr.status === 401) {
+      if (building.source_connection_id) {
+        db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
+          .run(new Date().toISOString(), building.source_connection_id);
+      } else {
+        markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
       }
-    } catch (reqErr) {
-      logger.info('Falha ao consultar minhas_solicitacoes para enriquecer ação', { error: reqErr instanceof Error ? reqErr.message : String(reqErr) });
+      return res.status(401).json({ error: 'Sessão do Fênix expirada. Reconecte sua conta antes de executar ações.' });
     }
+    return res.status(502).json({ error: 'Não foi possível consultar as solicitações oficiais antes da ação. Nenhuma operação foi enviada.' });
   }
+
+  const remoteId = String(process.remote_id || process.id.slice(process.id.indexOf(':') + 1));
+  const exactRequestId = Number(solicitacaoId || (process.id.startsWith('request:') ? remoteId : 0));
+  let remoteMatches = exactRequestId > 0
+    ? requesterRows.filter((row) => String(requesterRequestValue(row, ['solicitacao_id', 'request_id', 'solicitation_id']) ?? '') === String(exactRequestId))
+    : [];
+  if (!remoteMatches.length && !exactRequestId && process.id.startsWith('technicalproject:')) {
+    const targetProjectId = Number(projetoTecnicoId || remoteId);
+    const targetProjectNumber = String(numProjeto || process.protocol || '').trim();
+    remoteMatches = requesterRows.filter((row) =>
+      (targetProjectId > 0 && requesterProjectId(row) === targetProjectId) ||
+      (targetProjectNumber && String(requesterRequestValue(row, ['num_projeto', 'projeto_tecnico.num_projeto']) || '').trim() === targetProjectNumber)
+    );
+  }
+  if (remoteMatches.length !== 1) {
+    return res.status(409).json({ error: remoteMatches.length > 1
+      ? 'Mais de uma solicitação do Fênix corresponde a este projeto. Nenhuma operação foi enviada porque não há vínculo único.'
+      : 'A solicitação atual não foi encontrada na lista pessoal do Fênix. Nenhuma operação foi enviada.' });
+  }
+  const matchedRequesterRequest = remoteMatches[0];
+  const matchedRequestId = Number(requesterRequestValue(matchedRequesterRequest, ['solicitacao_id', 'request_id', 'solicitation_id']));
+  if (!Number.isSafeInteger(matchedRequestId) || matchedRequestId <= 0 || (solicitacaoId && Number(solicitacaoId) !== matchedRequestId)) {
+    return res.status(409).json({ error: 'O ID da solicitação atual não foi confirmado de forma única no Fênix. Nenhuma operação foi enviada.' });
+  }
+  const officialProjectId = requesterProjectId(matchedRequesterRequest);
+  const expectedProjectId = Number(projetoTecnicoId || (process.id.startsWith('technicalproject:') ? remoteId : 0));
+  const officialProjectNumber = String(requesterRequestValue(matchedRequesterRequest, ['num_projeto', 'n_projeto', 'num_processo', 'projeto_tecnico.num_projeto']) || '').trim();
+  const expectedProjectNumber = String(numProjeto || process.protocol || '').trim();
+  const hasProjectIdMatch = Number.isSafeInteger(expectedProjectId) && expectedProjectId > 0 && officialProjectId === expectedProjectId;
+  const hasProjectNumberMatch = Boolean(expectedProjectNumber && officialProjectNumber && expectedProjectNumber === officialProjectNumber);
+  if (!hasProjectIdMatch && !hasProjectNumberMatch) {
+    return res.status(409).json({ error: 'O projeto associado à solicitação atual não corresponde ao processo selecionado. Nenhuma operação foi enviada.' });
+  }
+  if (officialProjectId > 0 && expectedProjectId > 0 && officialProjectId !== expectedProjectId) {
+    return res.status(409).json({ error: 'O identificador do projeto diverge da solicitação oficial. Nenhuma operação foi enviada.' });
+  }
+  const officialBuildingId = String(requesterRequestValue(matchedRequesterRequest, ['edificacao_id', 'edification_id', 'edification.id']) ?? '').trim();
+  const localBuildingRemoteId = String((building as any).remote_id || '').trim();
+  if (officialBuildingId && localBuildingRemoteId && officialBuildingId !== localBuildingRemoteId) {
+    return res.status(409).json({ error: 'A edificação associada à solicitação oficial não corresponde ao processo selecionado. Nenhuma operação foi enviada.' });
+  }
+  solicitacaoId = matchedRequestId;
+  projetoTecnicoId = projetoTecnicoId || officialProjectId || null;
+  responsavelId = responsavelId || Number(matchedRequesterRequest.responsavel_id || matchedRequesterRequest.responsavel?.id || matchedRequesterRequest.user_id) || null;
+  numProjeto = numProjeto || String(matchedRequesterRequest.num_projeto || matchedRequesterRequest.n_projeto || matchedRequesterRequest.num_processo || matchedRequesterRequest.projeto_tecnico?.num_projeto || '');
 
   if (!projetoTecnicoId && process.id.startsWith('technicalproject:')) {
     projetoTecnicoId = Number(process.remote_id || process.id.slice('technicalproject:'.length)) || null;
   }
 
-  try {
-    let upstream: unknown = null;
-    let message = 'Ação executada com sucesso no Fênix CBMBA.';
+  if (['reavaliacao_renovacao', 'solicitar_renovacao', 'cancelar_solicitacao', 'cancelar_processo'].includes(action)) {
+    return res.status(409).json({ error: 'Esta ação está bloqueada até confirmar a rota, a permissão do perfil solicitante e o estado oficial que deve ser lido depois do envio. Nenhuma operação foi enviada.' });
+  }
 
-    if (action === 'solicitar_vistoria' || action === 'solicitar_revistoria' || action === 'solicitar_reanalise') {
-      const targetTipoId = action === 'solicitar_vistoria' ? 3 : action === 'solicitar_revistoria' ? 4 : 2;
+  let liveProject: any;
+  try {
+    liveProject = await client.get(`/api/v1/projetos-tecnicos/${encodeURIComponent(String(projetoTecnicoId))}`) as any;
+  } catch (error) {
+    const status = error instanceof FenixError ? Number(error.status) : 0;
+    if (status === 401) {
+      if (building.source_connection_id) {
+        db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?").run(new Date().toISOString(), building.source_connection_id);
+      } else {
+        markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+      }
+      return res.status(401).json({ error: 'Sessão do Fênix expirada. Reconecte sua conta antes de executar ações.' });
+    }
+    return res.status(status === 429 ? 429 : 502).json({ error: 'Não foi possível reler o Projeto Técnico e seu estado oficial. Nenhuma operação foi enviada.' });
+  }
+  const liveProjectRoot = liveProject?.data?.technicalproject ?? liveProject?.data?.projeto_tecnico ?? liveProject?.data ?? liveProject;
+  const liveProjectId = Number(requesterRequestValue(liveProjectRoot, ['id', 'projeto_tecnico_id', 'technical_project_id']));
+  const liveProjectRequestLinks = numericFenixLinks(liveProjectRoot, ['solicitacao_atual.id', 'status_atual.solicitacao_id']);
+  const liveProjectOwnerLinks = numericFenixLinks(liveProjectRoot, ['usuario_id', 'solicitante.id']);
+  const liveProjectBuildingLinks = numericFenixLinks(liveProjectRoot, ['edificacao_id', 'edification.id']);
+  const liveStatusSlugValue = requesterRequestValue(liveProjectRoot, ['status_atual.status.slug', 'status_slug', 'status.slug']);
+  const liveStatusSlug = typeof liveStatusSlugValue === 'string' ? liveStatusSlugValue.trim() : '';
+  const liveStatusLabel = String(requesterRequestValue(liveProjectRoot, ['status_atual.status.status', 'status_atual.status.nome', 'status_atual.status.name', 'status_atual.status.slug']) || liveStatusSlug);
+  let actualRequesterId = '';
+  try {
+    actualRequesterId = await verifyFenixRequesterIdentity(building.data_user_id, client);
+  } catch (error) {
+    const status = error instanceof FenixError ? Number(error.status) : 0;
+    if ([401, 403, 419].includes(status)) return res.status(409).json({ error: 'Reconecte a conta Fênix para confirmar a identidade antes da ação.' });
+    return res.status(502).json({ error: 'Não foi possível confirmar a identidade da conta. Nenhuma operação foi enviada.' });
+  }
+  if (!Number.isSafeInteger(liveProjectId) || liveProjectId !== Number(projetoTecnicoId)
+    || !liveProjectRequestLinks.present || !liveProjectRequestLinks.valid || !liveProjectRequestLinks.identifiers.includes(String(solicitacaoId))
+    || !liveProjectOwnerLinks.present || !liveProjectOwnerLinks.valid || !liveProjectOwnerLinks.identifiers.every((ownerId) => ownerId === actualRequesterId)
+    || (liveProjectBuildingLinks.present && (!liveProjectBuildingLinks.valid || !liveProjectBuildingLinks.identifiers.every((id) => id === String(officialBuildingId || localBuildingRemoteId))))) {
+    return res.status(409).json({ error: 'O estado atual do Projeto Técnico não corresponde à conta, solicitação e edificação selecionadas. Nenhuma operação foi enviada.' });
+  }
+  const liveProjectType = String(requesterRequestValue(liveProjectRoot, ['tipo_projeto.sigla', 'tipo_projeto.nome', 'tipoProjeto.sigla', 'tipoProjeto.nome']) || process.type);
+  const liveActionMeta = {
+    ...meta,
+    statusSlug: liveStatusSlug || undefined,
+    solicitacaoId,
+    projetoTecnicoId,
+    edificacaoId: Number(officialBuildingId || localBuildingRemoteId) || undefined,
+    responsavelId,
+    tipoSolicitacaoId: requesterTypeId(matchedRequesterRequest) || meta.tipoSolicitacaoId,
+    tipoSolicitacaoSlug: String(requesterRequestValue(matchedRequesterRequest, ['tipo_solicitacao_slug', 'tipo_solicitacao.slug']) || meta.tipoSolicitacaoSlug || ''),
+    sptDataFinal: String(requesterRequestValue(matchedRequesterRequest, ['spt_data_final']) || meta.sptDataFinal || ''),
+    numProjeto: String(requesterRequestValue(liveProjectRoot, ['num_projeto', 'n_projeto', 'numero_projeto']) || numProjeto || '')
+  };
+  const liveActions = computeFenixProcessActions({ process: {
+    ...process,
+    status: liveStatusLabel,
+    stage: liveStatusLabel,
+    type: liveProjectType,
+    fenixMeta: liveActionMeta
+  } });
+  if (!liveStatusSlug || !liveActions.some((candidate) => candidate.key === action && candidate.kind === 'mutation')) {
+    return res.status(409).json({ error: 'O estado oficial atual não disponibiliza esta ação para a solicitação selecionada. Nenhuma operação foi enviada.' });
+  }
+  statusSlugOld = liveStatusSlug;
+
+  // Ao vivo, homologado-sap nunca gera POST: gerarSolicitacao desvia para
+  // abrirSolicitacao (abre a solicitação existente). Sem escrita, sem tentativa.
+  if (liveStatusSlug === 'homologado-sap' && (action === 'solicitar_vistoria' || action === 'solicitar_revistoria' || action === 'solicitar_reanalise')) {
+    return res.status(409).json({ error: 'Esta solicitação possui desdobramento homologado no SAP: o Fênix abre a solicitação existente em vez de gerar uma nova. Nenhuma operação foi enviada.' });
+  }
+
+  try {
+    // Ao vivo, gerarSolicitacao reenvia o tipo_solicitacao_id da linha oficial
+    // (lista, detalhe e survey); o mapa por ação só vale como fallback.
+    const targetTipoId = resolveGerarSolicitacaoTipoId(requesterTypeId(matchedRequesterRequest), action);
+    if (!Number.isSafeInteger(Number(projetoTecnicoId)) || Number(projetoTecnicoId) <= 0 || !Number.isSafeInteger(Number(solicitacaoId)) || Number(solicitacaoId) <= 0 || !Number.isSafeInteger(Number(responsavelId)) || Number(responsavelId) <= 0) {
+      return res.status(409).json({ error: 'O projeto, a solicitação ou o responsável não foram identificados de forma confiável. Nenhuma operação foi enviada.' });
+    }
+
+    const fingerprint = createHash('sha256').update(JSON.stringify({
+      buildingId, processId, action, projetoTecnicoId, solicitacaoId, targetTipoId
+    })).digest('hex');
+    const confirmedMessage = action === 'solicitar_vistoria'
+      ? 'Solicitação de vistoria confirmada por leitura no Fênix CBMBA.'
+      : action === 'solicitar_revistoria'
+        ? 'Solicitação de revistoria confirmada por leitura no Fênix CBMBA.'
+        : 'Solicitação de reanálise confirmada por leitura no Fênix CBMBA.';
+    const pendingMessage = 'O resultado ainda não apareceu na leitura do Fênix. A tentativa foi preservada; consulte novamente antes de qualquer novo envio.';
+
+    const previous = db.prepare(`SELECT * FROM fenix_action_attempts
+      WHERE owner_user_id=? AND fingerprint=? ORDER BY updated_at DESC LIMIT 1`)
+      .get(user.id, fingerprint) as (RequestActionAttemptRow & { status: string; last_error?: string }) | undefined;
+    if (previous?.status === 'confirmed') {
+      let result: unknown = {};
+      try { result = JSON.parse(previous.result_json || '{}'); } catch {}
+      return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, action, message: confirmedMessage, result });
+    }
+    if (previous && ['submitting', 'verification_pending'].includes(previous.status)) {
+      const matched = verifyCreatedRequesterActionRequest(requesterRows, previous);
+      if (matched) {
+        const result = requesterActionReadbackResult(matched);
+        const now = new Date().toISOString();
+        db.prepare(`UPDATE fenix_action_attempts SET status='confirmed',result_json=?,last_error=NULL,updated_at=? WHERE id=? AND owner_user_id=?`)
+          .run(JSON.stringify(result), now, previous.id, user.id);
+        void executeSync(building.data_user_id, 'manual').catch(() => {});
+        return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, action, message: confirmedMessage, result });
+      }
+      const now = new Date().toISOString();
+      db.prepare(`UPDATE fenix_action_attempts SET status='verification_pending',last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+        .run(pendingMessage, now, previous.id, user.id);
+      return res.status(202).json({ ok: false, verification: 'pending', action, message: pendingMessage });
+    }
+
+    const baselineIds = Array.from(new Set(requesterRows.flatMap(requesterRequestIdentityValues)));
+    const now = new Date().toISOString();
+    const attemptId = randomUUID();
+    const preparedResult = JSON.stringify({ num_projeto: String(numProjeto || process.protocol || '').trim() });
+    const inserted = db.prepare(`INSERT OR IGNORE INTO fenix_action_attempts
+      (id,owner_user_id,building_id,process_id,action,fingerprint,status,baseline_request_ids_json,project_id,request_type_id,result_json,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,'submitting',?,?,?,?,?,?)`)
+      .run(attemptId, user.id, buildingId, processId, action, fingerprint, JSON.stringify(baselineIds), Number(projetoTecnicoId), targetTipoId, preparedResult, now, now);
+    if (inserted.changes === 0) {
+      const active = db.prepare(`SELECT * FROM fenix_action_attempts WHERE owner_user_id=? AND fingerprint=? AND status IN ('submitting','verification_pending') ORDER BY updated_at DESC LIMIT 1`)
+        .get(user.id, fingerprint) as (RequestActionAttemptRow & { status: string }) | undefined;
+      if (active) {
+        const matched = verifyCreatedRequesterActionRequest(requesterRows, active);
+        if (matched) {
+          const result = requesterActionReadbackResult(matched);
+          db.prepare(`UPDATE fenix_action_attempts SET status='confirmed',result_json=?,last_error=NULL,updated_at=? WHERE id=? AND owner_user_id=?`)
+            .run(JSON.stringify(result), now, active.id, user.id);
+          return res.json({ ok: true, verification: 'confirmed', alreadyVerified: true, action, message: confirmedMessage, result });
+        }
+        db.prepare(`UPDATE fenix_action_attempts SET status='verification_pending',last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+          .run(pendingMessage, now, active.id, user.id);
+        return res.status(202).json({ ok: false, verification: 'pending', action, message: pendingMessage });
+      }
+      return res.status(409).json({ error: 'Já existe uma operação equivalente em processamento. Consulte o resultado antes de continuar.' });
+    }
+
+    let upstream: unknown;
+    try {
       upstream = await client.postFormData('/api/v1/gerarNumeroSolicitacao', {
         projeto_tecnico_id: projetoTecnicoId,
         status_slug: 'pendente-de-documentacao',
@@ -2513,53 +4162,66 @@ app.post('/api/buildings/:buildingId/processes/:processId/fenix-action', require
         tipo_solicitacao_id: targetTipoId,
         solicitacao_id: solicitacaoId
       });
-      message = action === 'solicitar_vistoria'
-        ? 'Solicitação de vistoria gerada com sucesso no Fênix CBMBA.'
-        : action === 'solicitar_revistoria'
-          ? 'Solicitação de revistoria gerada com sucesso no Fênix CBMBA.'
-          : 'Solicitação de reanálise gerada com sucesso no Fênix CBMBA.';
-    } else if (action === 'reavaliacao_renovacao') {
-      upstream = await client.post('/api/v1/request/definirStatusV2', {
-        solicitacao_id: solicitacaoId,
-        spt_id: sptId,
-        action: 'edit-reavaliacao-renovacao',
-        justificativa: null,
-        dados: remoteItem || {}
-      });
-      message = 'Reavaliação da renovação solicitada com sucesso no Fênix CBMBA.';
-    } else if (action === 'solicitar_renovacao') {
-      upstream = await client.post('/api/v1/request/definirStatusV2', {
-        solicitacao_id: solicitacaoId,
-        spt_id: sptId,
-        action: 'edit-renovacao',
-        justificativa: null,
-        dados: remoteItem || {}
-      });
-      message = 'Renovação iniciada com sucesso no Fênix CBMBA.';
-    } else if (action === 'cancelar_solicitacao') {
-      upstream = await client.post('/api/v1/request/definirStatusV2', {
-        solicitacao_id: solicitacaoId,
-        spt_id: sptId,
-        action: 'cancelar-solicitacao',
-        justificativa: null,
-        dados: remoteItem || {}
-      });
-      message = 'Solicitação cancelada com sucesso no Fênix CBMBA.';
-    } else if (action === 'cancelar_processo') {
-      upstream = await client.post('/api/v1/setProjectStatus', {
-        projeto_tecnico_id: projetoTecnicoId,
-        solicitacao_id: solicitacaoId,
-        spt_id: sptId,
-        status_slug: 'cancelado',
-        responsavel_id: 0,
-        tipo_requisicao: 'cancelar-processo',
-        num_projeto: numProjeto
-      });
-      message = 'Processo cancelado com sucesso no Fênix CBMBA.';
+    } catch (writeError) {
+      const upstreamStatus = writeError instanceof FenixError ? writeError.status : undefined;
+      // Ao vivo, gerarSolicitacao trata data.regra=prazoVencido|prazoExpirado com
+      // diálogo próprio e sem repetir o POST: regra terminal, não ambígua.
+      const regra = fenixWriteRegraOf(writeError);
+      if (regra === 'prazoVencido' || regra === 'prazoExpirado') {
+        db.prepare(`UPDATE fenix_action_attempts SET status='rejected',last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+          .run(`O Fênix recusou a solicitação (${regra}): prazo do evento encerrado.`, new Date().toISOString(), attemptId, user.id);
+        return res.status(422).json({ error: 'O Fênix recusou a nova solicitação: prazo do evento encerrado (regra oficial). Nenhuma operação foi enviada.' });
+      }
+      const ambiguous = upstreamStatus === undefined || upstreamStatus >= 500 || [408, 409, 425, 429].includes(upstreamStatus);
+      const errorMessage = writeError instanceof Error ? writeError.message : 'Não foi possível confirmar a resposta do Fênix.';
+      db.prepare(`UPDATE fenix_action_attempts SET status=?,last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+        .run(ambiguous ? 'verification_pending' : 'rejected', errorMessage, new Date().toISOString(), attemptId, user.id);
+      if (upstreamStatus === 401) {
+        if (building.source_connection_id) {
+          db.prepare("UPDATE fenix_connections SET status='reauth_required',updated_at=? WHERE id=?")
+            .run(new Date().toISOString(), building.source_connection_id);
+        } else {
+          markUserFenixSessionExpired(building.data_user_id, 'Sessão do Fênix expirada. Reconecte sua conta em Configurações.');
+        }
+        return res.status(401).json({ error: 'Sessão do Fênix expirada. Reconecte sua conta. A tentativa permanece registrada para evitar duplicidade.' });
+      }
+      if (ambiguous) return res.status(202).json({ ok: false, verification: 'pending', action, message: pendingMessage });
+      const status = upstreamStatus && upstreamStatus >= 400 && upstreamStatus < 500 ? upstreamStatus : 502;
+      return res.status(status).json({ error: errorMessage });
     }
 
+    const responseRow = (upstream as any)?.data?.solicitacao ?? (upstream as any)?.data?.request ?? (upstream as any)?.solicitacao ?? (upstream as any)?.request ?? (upstream as any)?.data ?? upstream;
+    const writeResult: Record<string, string> = { num_projeto: String(numProjeto || process.protocol || '').trim() };
+    const returnedId = requesterRequestValue(responseRow, ['solicitacao_id', 'request_id', 'solicitation_id', 'id']);
+    const returnedSolicitationId = requesterRequestValue(responseRow, ['solicitacao_id', 'request_id', 'solicitation_id']);
+    if (returnedId !== undefined) writeResult.id = String(returnedId);
+    if (returnedSolicitationId !== undefined) writeResult.solicitacao_id = String(returnedSolicitationId);
+    const afterPostAt = new Date().toISOString();
+    db.prepare(`UPDATE fenix_action_attempts SET status='verification_pending',result_json=?,last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+      .run(JSON.stringify(writeResult), 'Solicitação enviada; aguardando confirmação por leitura.', afterPostAt, attemptId, user.id);
+
+    try {
+      requesterRows = await listFenixRequesterRequests(building.data_user_id, client);
+    } catch (readError) {
+      logger.info('Solicitação gerada, mas a leitura de confirmação falhou', { error: readError instanceof Error ? readError.message : String(readError) });
+      db.prepare(`UPDATE fenix_action_attempts SET last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+        .run(pendingMessage, new Date().toISOString(), attemptId, user.id);
+      return res.status(202).json({ ok: false, verification: 'pending', action, message: pendingMessage });
+    }
+
+    const attempt = db.prepare('SELECT * FROM fenix_action_attempts WHERE id=? AND owner_user_id=?').get(attemptId, user.id) as RequestActionAttemptRow;
+    const matched = verifyCreatedRequesterActionRequest(requesterRows, attempt);
+    if (!matched) {
+      db.prepare(`UPDATE fenix_action_attempts SET last_error=?,updated_at=? WHERE id=? AND owner_user_id=?`)
+        .run(pendingMessage, new Date().toISOString(), attemptId, user.id);
+      return res.status(202).json({ ok: false, verification: 'pending', action, message: pendingMessage });
+    }
+
+    const result = requesterActionReadbackResult(matched);
+    db.prepare(`UPDATE fenix_action_attempts SET status='confirmed',result_json=?,last_error=NULL,updated_at=? WHERE id=? AND owner_user_id=?`)
+      .run(JSON.stringify(result), new Date().toISOString(), attemptId, user.id);
     void executeSync(building.data_user_id, 'manual').catch(() => {});
-    return res.json({ ok: true, action, message, upstream });
+    return res.json({ ok: true, verification: 'confirmed', action, message: confirmedMessage, result });
   } catch (error) {
     if (error instanceof FenixError && error.status === 401) {
       if (building.source_connection_id) {
@@ -2905,8 +4567,7 @@ app.post('/api/sync/now', requireSession, async (_req, res) => {
   const primary = await executeSync(user.id, 'manual');
   if (primary.status === 'busy') return res.status(409).json({ error: 'Já existe uma sincronização em andamento.' });
   results.push({ id: null, label: 'Conta principal', status: primary.status, message: primary.status === 'error' ? primary.error : primary.message });
-  const connections = db.prepare(`SELECT c.id,c.data_user_id,c.label FROM fenix_connections c WHERE c.owner_user_id=? AND c.paused=0
-    AND EXISTS (SELECT 1 FROM fenix_connection_buildings b WHERE b.connection_id=c.id AND b.selected=1) ORDER BY c.created_at`).all(user.id) as Array<{ id: string; data_user_id: string; label: string }>;
+  const connections = db.prepare(`SELECT c.id,c.data_user_id,c.label FROM fenix_connections c WHERE c.owner_user_id=? AND c.paused=0 ORDER BY c.created_at`).all(user.id) as Array<{ id: string; data_user_id: string; label: string }>;
   for (const connection of connections) {
     const result = await executeSync(connection.data_user_id, 'manual');
     results.push({ id: connection.id, label: connection.label, status: result.status === 'busy' ? 'running' : result.status, message: result.status === 'error' ? result.error : result.status === 'busy' ? 'Uma atualização já está em andamento.' : result.message });
@@ -3273,8 +4934,9 @@ if (isProduction) {
 
 const server = app.listen(port, '127.0.0.1', () => logger.info(`Fênix Painel disponível localmente na porta ${port}`));
 async function runDueSyncs() {
-  const users = db.prepare(`SELECT DISTINCT u.id, u.last_sync FROM users u JOIN sessions s ON s.user_id = u.id
-    WHERE u.demo = 0 AND u.session_ciphertext IS NOT NULL`).all() as { id: string; last_sync: string | null }[];
+  const activeAfter = new Date().toISOString();
+  const users = db.prepare(`SELECT DISTINCT u.id, u.last_sync FROM users u JOIN sessions s ON s.user_id = u.id AND s.expires_at > ?
+    WHERE u.demo = 0 AND u.session_ciphertext IS NOT NULL`).all(activeAfter) as { id: string; last_sync: string | null }[];
   for (const { id, last_sync } of users) {
     const intervalMinutes = userPreferences(id).sync_interval_minutes;
     const processCount = (db.prepare("SELECT COUNT(*) AS count FROM processes WHERE user_id=? AND id LIKE 'technicalproject:%'").get(id) as { count: number }).count;
@@ -3287,15 +4949,15 @@ async function runDueSyncs() {
   }
   const linked = db.prepare(`SELECT c.id,c.data_user_id,c.owner_user_id,u.last_sync,
       (SELECT count(*) FROM fenix_connection_buildings b WHERE b.connection_id=c.id AND b.selected=1) AS selected_count
-    FROM fenix_connections c JOIN users owner ON owner.id=c.owner_user_id JOIN sessions s ON s.user_id=owner.id
+    FROM fenix_connections c JOIN users owner ON owner.id=c.owner_user_id
     JOIN users u ON u.id=c.data_user_id
-    WHERE owner.demo=0 AND c.paused=0 AND u.session_ciphertext IS NOT NULL`).all() as Array<{ id: string; data_user_id: string; owner_user_id: string; last_sync: string | null; selected_count: number }>;
+    WHERE owner.demo=0 AND c.paused=0 AND u.session_ciphertext IS NOT NULL
+      AND EXISTS (SELECT 1 FROM sessions s WHERE s.user_id=owner.id AND s.expires_at > ?)`).all(activeAfter) as Array<{ id: string; data_user_id: string; owner_user_id: string; last_sync: string | null; selected_count: number }>;
   for (const connection of linked) {
-    if (!connection.selected_count) continue;
     const intervalMinutes = userPreferences(connection.owner_user_id).sync_interval_minutes;
     const lastSyncTime = Date.parse(connection.last_sync || '');
     if (intervalMinutes > 0 && (!Number.isFinite(lastSyncTime) || Date.now() - lastSyncTime >= intervalMinutes * 60_000)) await executeSync(connection.data_user_id, 'automatic');
-    else {
+    else if (connection.selected_count) {
       const processCount = (db.prepare("SELECT COUNT(*) AS count FROM processes WHERE user_id=? AND id LIKE 'technicalproject:%'").get(connection.data_user_id) as { count: number }).count;
       const historyCount = (db.prepare('SELECT COUNT(*) AS count FROM process_histories WHERE user_id=?').get(connection.data_user_id) as { count: number }).count;
       const historyState = db.prepare('SELECT status FROM history_refresh_state WHERE user_id=?').get(connection.data_user_id) as { status: string } | undefined;

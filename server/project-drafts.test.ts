@@ -33,39 +33,40 @@ test('getFenixDomains loads domains correctly from json', () => {
   assert.ok(domains.blockedPtsCnaes.includes('4731800'));
 });
 
-test('Caso Real 1: VAL SAT #89735 -> PTSCLCB2 (434.11 m², 2 pavimentos, 5 medidas)', () => {
+test('Enquadramento sintético 1: PTSCLCB2 (434.11 m², 2 pavimentos, 5 medidas)', () => {
   const input: ProjectDraftInput = {
-    reference_name: 'VAL SAT',
+    reference_name: 'Edificação Exemplo',
     building_area: '434.11',
     area_to_be_built: '0',
     discount_area: '0',
     number_floors: 2,
     height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
-    n_art_rrt: 'BA20261628773',
+    n_art_rrt: 'ART-EXEMPLO-0000',
     responsaveis_tecnicos: [
       {
-        nome_tecnico: 'ENG. MARCOS VINICIUS ALMEIDA',
-        cpf_cnpj_tecnico: '09566970000123',
+        nome_tecnico: 'Responsável Técnico Exemplo',
+        cpf_cnpj_tecnico: '00000000000',
         conselho: 'CREA',
-        n_registro_conselho: '05189283-BA',
-        email_tecnico: 'engenharia@abaincendio.com.br',
-        tel_tecnico: '7140002895',
-        n_art_rrt: 'BA20261628773'
+        n_registro_conselho: 'CREA-EXEMPLO',
+        email_tecnico: 'tecnico@example.invalid',
+        tel_tecnico: '71000000000',
+        n_art_rrt: 'ART-EXEMPLO-0000'
       }
     ],
     address: {
-      zip_code: '45355000',
-      public_place: 'RUA OTACILIO PINHEIRO',
-      number: 'S/N',
+      zip_code: '00000000',
+      public_place: 'RUA DO EXEMPLO',
+      number: '100',
       complement: '***',
       district: 'CENTRO',
-      municipio_id: 22
+      county: 'MUNICIPIO EXEMPLO',
+      municipio_id: 1
     },
     institution: {
       cnae: '4754701',
-      razao_social: 'VANDERLEI DA SILVA SANTOS DE APUAREMA',
+      razao_social: 'EMPRESA EXEMPLO LTDA',
       tipo_pessoa: 'PJ',
-      cnpj: '09566970000123'
+      cnpj: '00000000000000'
     },
     occupation: {
       occupation_group_id: 3,
@@ -74,7 +75,7 @@ test('Caso Real 1: VAL SAT #89735 -> PTSCLCB2 (434.11 m², 2 pavimentos, 5 medid
     }
   };
 
-  const result = buildAndValidateFenixProjectPayload(input, 14574);
+  const result = buildAndValidateFenixProjectPayload(input, 999999);
 
   assert.equal(result.valid, true);
   assert.deepEqual(result.errors, []);
@@ -94,8 +95,8 @@ test('Caso Real 1: VAL SAT #89735 -> PTSCLCB2 (434.11 m², 2 pavimentos, 5 medid
   assert.equal(payload.building_area, '434.11');
   assert.equal(payload.number_floors, 2);
   assert.equal(payload.height, 'Baixa-Média = 6,00 m < H <= 12,00 m');
-  assert.equal((payload.address as any).county, 'APUAREMA');
-  assert.equal((payload.solicitante as any).id, 14574);
+  assert.equal((payload.address as any).county, 'ABAIRA');
+  assert.equal((payload.solicitante as any).id, 999999);
 
   // Verifica inclusão automática do subsolo vazio
   const occs = payload.occupationsDivisions as Array<any>;
@@ -106,10 +107,10 @@ test('Caso Real 1: VAL SAT #89735 -> PTSCLCB2 (434.11 m², 2 pavimentos, 5 medid
   assert.equal(underground.division_group_id, 58);
 });
 
-test('Caso Real 2: Casa do Pão #32719 -> PTSCLCB1 (41.61 m², térrea, rtOptional: true)', () => {
+test('Enquadramento sintético 2: PTSCLCB1 (41.61 m², térrea, rtOptional: true)', () => {
   const input: ProjectDraftInput = {
     edification: {
-      reference_name: 'Casa do Pão',
+      reference_name: 'Comércio Exemplo',
       building_area: 41.61,
       area_to_be_built: 0,
       discount_area: 0,
@@ -117,16 +118,16 @@ test('Caso Real 2: Casa do Pão #32719 -> PTSCLCB1 (41.61 m², térrea, rtOption
       height: 'Térrea = Um pavimento'
     },
     address: {
-      zip_code: '45355-000',
-      public_place: 'RUA DO COMERCIO',
+      zip_code: '00000000',
+      public_place: 'RUA DO EXEMPLO',
       number: '10',
       complement: 'SALA A',
       district: 'CENTRO',
-      municipio_id: 22
+      municipio_id: 1
     },
     institution: {
       cnae: '1091-1/02',
-      razao_social: 'PANIFICADORA CASA DO PAO LTDA'
+      razao_social: 'EMPRESA EXEMPLO LTDA'
     },
     occupation: {
       occupation_group_id: 1,
@@ -154,36 +155,36 @@ test('Caso Real 2: Casa do Pão #32719 -> PTSCLCB1 (41.61 m², térrea, rtOption
   assert.equal(result.fenixPayload.total_area, '41.61');
 });
 
-test('Caso Real 3: Bamaq #1069 -> PT (3.695,76 m², 12 medidas recomendadas)', () => {
+test('Enquadramento sintético 3: PT (3.695,76 m², 12 medidas recomendadas)', () => {
   const input: ProjectDraftInput = {
     process_category: 'pt',
-    reference_name: 'Bamaq Imóveis',
+    reference_name: 'Edificação Exemplo PT',
     building_area: '3695.76',
     number_floors: 3,
     height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
-    n_art_rrt: 'BA20230506751',
+    n_art_rrt: 'ART-EXEMPLO-0000',
     responsaveis_tecnicos: [
       {
-        nome_tecnico: 'ENG. CIVIL RESPONSAVEL BAMAQ',
+        nome_tecnico: 'Responsável Técnico Exemplo',
         cpf_cnpj_tecnico: '12345678901',
         conselho: 'CREA',
         n_registro_conselho: '123456-BA',
-        email_tecnico: 'engenharia@bamaq.com.br',
-        tel_tecnico: '71999998888',
-        n_art_rrt: 'BA20230506751'
+        email_tecnico: 'tecnico@example.invalid',
+        tel_tecnico: '71000000000',
+        n_art_rrt: 'ART-EXEMPLO-0000'
       }
     ],
     address: {
-      zip_code: '45355000',
-      public_place: 'RODOVIA BA 026',
-      number: 'KM 02',
-      complement: 'GALPAO',
+      zip_code: '00000000',
+      public_place: 'RUA DO EXEMPLO',
+      number: '100',
+      complement: 'SEM COMPLEMENTO',
       district: 'ZONA RURAL',
-      municipio_id: 22
+      municipio_id: 1
     },
     institution: {
       cnae: '4511101',
-      razao_social: 'BAMAQ S.A.'
+      razao_social: 'EMPRESA EXEMPLO LTDA'
     },
     occupation: {
       occupation_group_id: 3,
@@ -212,12 +213,12 @@ test('Caso 4: CNAE Bloqueado 4731800 (Posto de Combustíveis) rejeita PTS', () =
     number_floors: 1,
     height: 'Térrea = Um pavimento',
     address: {
-      zip_code: '45355000',
+      zip_code: '40000000',
       public_place: 'AVENIDA CENTRAL',
       number: '500',
       complement: 'POSTO',
       district: 'CENTRO',
-      municipio_id: 22
+      municipio_id: 323
     },
     institution: {
       cnae: '4731-8/00',
@@ -242,12 +243,12 @@ test('Caso 5: Complemento vazio define automaticamente "***" e emite warning', (
     number_floors: 1,
     height: 'Térrea = Um pavimento',
     address: {
-      zip_code: '45355000',
+      zip_code: '40000000',
       public_place: 'RUA DIREITA',
       number: '42',
       complement: '',
       district: 'CENTRO',
-      municipio_id: 22
+      municipio_id: 323
     },
     institution: {
       cnae: '4754701'
@@ -271,10 +272,10 @@ test('Validação de consistência: altura Térrea com mais de 1 pavimento falha
     number_floors: 2,
     height: 'Térrea = Um pavimento',
     address: {
-      zip_code: '45355000',
+      zip_code: '40000000',
       public_place: 'RUA A',
       number: '1',
-      municipio_id: 22
+      municipio_id: 323
     }
   };
 
@@ -295,10 +296,10 @@ test('Validação de áreas: desconto superior à área construída falha', () =
     number_floors: 1,
     height: 'Térrea = Um pavimento',
     address: {
-      zip_code: '45355000',
+      zip_code: '40000000',
       public_place: 'RUA A',
       number: '1',
-      municipio_id: 22
+      municipio_id: 323
     }
   };
 
@@ -326,7 +327,7 @@ test('Persistência SQLite: ciclo completo de CRUD para fenix_project_drafts', (
       building_area: 250,
       number_floors: 2,
       height: 'Baixa = H <= 6,00 m',
-      n_art_rrt: 'BA20261628773',
+      n_art_rrt: 'ART-EXEMPLO-NAO-ENVIAR',
       responsaveis_tecnicos: [
         {
           nome_tecnico: 'ENG. TESTE CRUD',
@@ -335,15 +336,15 @@ test('Persistência SQLite: ciclo completo de CRUD para fenix_project_drafts', (
           n_registro_conselho: '99999-BA',
           email_tecnico: 'eng@teste.com',
           tel_tecnico: '71988887777',
-          n_art_rrt: 'BA20261628773'
+          n_art_rrt: 'ART-EXEMPLO-NAO-ENVIAR'
         }
       ],
       address: {
-        zip_code: '45355000',
+        zip_code: '40000000',
         public_place: 'RUA DO TESTE',
         number: '123',
         district: 'BAIRRO',
-        municipio_id: 22
+        municipio_id: 323
       },
       institution: {
         cnae: '4754701',
@@ -378,7 +379,7 @@ test('Persistência SQLite: ciclo completo de CRUD para fenix_project_drafts', (
     // 5. Atualização com submissão
     const submitted = updateDraftSubmission(testUserId, created.id, {
       ok: true,
-      result: { id: 89735, num_projeto: '020863/45355000/2026' }
+      result: { id: 999999, num_projeto: 'DEMO-999999/40000000/2099' }
     });
     assert.ok(submitted);
     assert.equal(submitted.status, 'submitted');
@@ -398,7 +399,7 @@ test('Persistência SQLite: ciclo completo de CRUD para fenix_project_drafts', (
   }
 });
 
-test('mapIt14MeasuresToFenix maps Decreto 16.302 BA real names to Fenix keys', () => {
+test('mapIt14MeasuresToFenix maps official Decreto 16.302 BA names to Fenix keys', () => {
   const rawMeasures = [
     'Saídas de Emergência',
     'Iluminação de Emergência X³',
@@ -436,31 +437,13 @@ test('mapIt14MeasuresToFenix maps Decreto 16.302 BA real names to Fenix keys', (
   assert.equal(mapped.sis_prot_cont_desc_elet, false);
 });
 
-test('lookupCnpjAndIt14 validates CNPJ length and consults IT14 ABA API', async () => {
-  // CNPJ inválido
-  await assert.rejects(
-    async () => lookupCnpjAndIt14('12345'),
-    (err: Error) => err.message.includes('14 dígitos')
-  );
-
-  // CNPJ real do VAL SAT (Apuarema)
-  const result = await lookupCnpjAndIt14('09566970000123', {
-    areaM2: 434.11,
-    floors: 2,
-    height: 'Baixa-Média = 6,00 m < H <= 12,00 m'
-  });
-
-  assert.equal(result.cnpj, '09566970000123');
-  assert.equal(result.razao_social, 'VANDERLEI DA SILVA SANTOS DE APUAREMA');
-  assert.equal(result.address.county_id, 22);
-  assert.equal(result.address.county, 'APUAREMA');
-  assert.equal(result.address.uf, 'BA');
-  assert.ok(result.it14.allCnaes.length > 0);
-  assert.equal(result.it14.areaBand, '200_750');
-  assert.equal(result.it14.alturaMeters, 10);
-  assert.equal(result.it14.project_type_sugerido, 'PTS');
-  assert.equal(result.it14.mappedMeasures.saidas_emergencia, true);
-  assert.equal(result.it14.mappedMeasures.extintores, true);
+test('lookupCnpjAndIt14 rejects invalid CNPJ length before contacting providers', async () => {
+  for (const cnpj of ['12345', '0000000000000', '']) {
+    await assert.rejects(
+      async () => lookupCnpjAndIt14(cnpj),
+      (err: Error) => err.message.includes('14 dígitos')
+    );
+  }
 });
 
 test('runDraftAiAssistant interpreta comando em linguagem natural e gera formPatch completo', async () => {
@@ -516,11 +499,11 @@ test('runDraftAiAssistant revisa e auto-corrige pendências de rascunho incomple
       number_floors: 1,
       height: 'Baixa = H <= 6,00 m', // Incompatível com 1 pavimento
       address: {
-        zip_code: '45355000',
+        zip_code: '40000000',
         public_place: 'Rua A',
         number: '12',
         complement: '', // Vazio
-        municipio_id: 22
+        municipio_id: 323
       }
     }
   };
@@ -555,7 +538,7 @@ test('acquireDraftSubmissionLock gerencia concorrência e idempotência atômica
       building_area: 100,
       number_floors: 1,
       height: 'Térrea = Um pavimento',
-      address: { zip_code: '45355000', public_place: 'RUA LOCK', number: '10', municipio_id: 22 },
+      address: { zip_code: '40000000', public_place: 'RUA LOCK', number: '10', municipio_id: 323 },
       institution: { cnae: '4754701', razao_social: 'EMPRESA LOCK' }
     };
 
@@ -615,10 +598,10 @@ test('Persistência SQLite: criptografia AES-256-GCM do payload_json e compatibi
       number_floors: 2,
       height: 'Baixa = H <= 6,00 m',
       address: {
-        zip_code: '45355000',
+        zip_code: '40000000',
         public_place: 'AVENIDA DA PRIVACIDADE',
         number: '777',
-        municipio_id: 22
+        municipio_id: 323
       },
       institution: {
         tipo_pessoa: 'PJ',
@@ -697,7 +680,7 @@ test('runDraftAiAssistant responde sobre a situação da edificação e processo
         height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
         processes: [
           {
-            protocol: '020863/45355000/2026',
+            protocol: 'DEMO-999999/40000000/2099',
             type: 'Projeto Técnico Simplificado (PTS)',
             status: 'Em análise',
             stage: 'Análise Técnica de Projeto',
@@ -711,7 +694,7 @@ test('runDraftAiAssistant responde sobre a situação da edificação e processo
   const res = await runDraftAiAssistant(req);
 
   assert.ok(res.reply.includes('Galpão Principal Feira'));
-  assert.ok(res.reply.includes('020863/45355000/2026'));
+  assert.ok(res.reply.includes('DEMO-999999/40000000/2099'));
   assert.ok(res.reply.includes('Em análise'));
   assert.ok(res.thinkingSteps.includes('Consultando base sincronizada de edificações e processos no Fênix...'));
   assert.ok(res.thinkingSteps.includes('Verificando etapas, notificações e status de tramitação...'));
@@ -750,8 +733,8 @@ test('runDraftAiAssistant preenche formPatch ao solicitar "✦ Iniciar novo cada
     systemContext: {
       activeBuilding: {
         id: 'b-202',
-        reference: 'Centro Comercial Apuarema',
-        municipality: 'APUAREMA',
+        reference: 'Centro Comercial Exemplo',
+        municipality: 'SALVADOR',
         area: '220.00',
         floors: '2',
         height: 'Baixa = H <= 6,00 m'
@@ -762,10 +745,10 @@ test('runDraftAiAssistant preenche formPatch ao solicitar "✦ Iniciar novo cada
   const res = await runDraftAiAssistant(req);
 
   assert.ok(res.formPatch);
-  assert.equal(res.formPatch.name, 'Centro Comercial Apuarema');
+  assert.equal(res.formPatch.name, 'Centro Comercial Exemplo');
   assert.equal(res.formPatch.edification?.building_area, 220);
-  assert.equal(res.formPatch.address?.county, 'APUAREMA');
-  assert.equal(res.formPatch.address?.municipio_id, 22);
+  assert.equal(res.formPatch.address?.county, 'SALVADOR');
+  assert.equal(res.formPatch.address?.municipio_id, 336);
 });
 
 test('runDraftAiAssistant explica indisponibilidade de documentos sem vazar erros de rascunho ou formPatch quando currentView !== register', async () => {
@@ -917,7 +900,7 @@ test('Validação de eventos temporários: duração <= 180 dias em PTS e antece
     building_area: 500,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    n_art_rrt: 'BA20261628773',
+    n_art_rrt: 'ART-EXEMPLO-NAO-ENVIAR',
     responsaveis_tecnicos: [
       {
         nome_tecnico: 'ENG. RESPONSAVEL EVENTO',
@@ -926,10 +909,10 @@ test('Validação de eventos temporários: duração <= 180 dias em PTS e antece
         n_registro_conselho: '54321-BA',
         email_tecnico: 'evento@eng.com.br',
         tel_tecnico: '71999990000',
-        n_art_rrt: 'BA20261628773'
+        n_art_rrt: 'ART-EXEMPLO-NAO-ENVIAR'
       }
     ],
-    address: { zip_code: '45355000', public_place: 'Praça Central', number: 'S/N', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Praça Central', number: 'S/N', municipio_id: 323 },
     institution: { cnae: '9001901' },
     questionario: {
       data_inicio_evento: '2026-12-01',
@@ -982,7 +965,7 @@ test('Validação de eventos temporários: duração <= 180 dias em PTS e antece
     building_area: 2500,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    address: { zip_code: '45355000', public_place: 'Parque de Exposições', number: '1', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Parque de Exposições', number: '1', municipio_id: 323 },
     institution: { cnae: '9001901' },
     responsaveis_tecnicos: [
       { nome: 'Engenheiro Teste', crea_cau: '12345/BA', email: 'eng@teste.com', telefone: '71999999999', art_rrt: 'ART123' }
@@ -1012,7 +995,7 @@ test('22 Medidas de Segurança: 6 básicas ativas em PTS e 16 avançadas zeradas
     building_area: 180,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    address: { zip_code: '45355000', public_place: 'Rua Comercial', number: '10', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Rua Comercial', number: '10', municipio_id: 323 },
     institution: { cnae: '4712100' },
     securityMeasures: allMeasures
   };
@@ -1053,7 +1036,7 @@ test('22 Medidas de Segurança: 6 básicas ativas em PTS e 16 avançadas zeradas
     building_area: 3000,
     number_floors: 5,
     height: 'Média = 12,00 m < H <= 23,00 m',
-    address: { zip_code: '45355000', public_place: 'Av Central', number: '100', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Av Central', number: '100', municipio_id: 323 },
     institution: { cnae: '6821801' },
     responsaveis_tecnicos: [
       { nome: 'Engenheiro Responsável', crea_cau: '54321/BA', email: 'eng@obra.com', telefone: '71988888888', art_rrt: 'ART999' }
@@ -1072,21 +1055,21 @@ test('22 Medidas de Segurança: 6 básicas ativas em PTS e 16 avançadas zeradas
 });
 
 test('Formatos oficiais do payload: registration_zip_code, subsolo dummy e warning de bloqueio PTS via tela PT', () => {
-  // 1. registration nulo -> registration_zip_code deve ser "-45355000"
+  // 1. registration nulo -> registration_zip_code deve refletir o CEP informado
   const draftNullReg: ProjectDraftInput = {
     reference_name: 'Imóvel Sem Inscrição',
     registration: null,
     building_area: 120,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    address: { zip_code: '45355-000', public_place: 'Rua Sem Inscrição', number: '5', municipio_id: 22 },
+    address: { zip_code: '45355-000', public_place: 'Rua Sem Inscrição', number: '5', municipio_id: 323 },
     institution: { cnae: '4754701' }
   };
 
   const resNullReg = buildAndValidateFenixProjectPayload(draftNullReg, 123);
   assert.equal((resNullReg.fenixPayload as any).registration_zip_code, '-45355000');
 
-  // 2. registration preenchido -> registration_zip_code deve ser "12345-45355000"
+  // 2. registration preenchido -> registration_zip_code deve combinar inscrição e CEP informado
   const draftWithReg: ProjectDraftInput = {
     ...draftNullReg,
     registration: '12345'
@@ -1122,7 +1105,7 @@ test('Formulário unificado: derivação de modalidade diretamente por tipo_proj
     building_area: 150,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    address: { zip_code: '45355000', public_place: 'Rua Central', number: '10', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Rua Central', number: '10', municipio_id: 323 },
     institution: { cnae: '4754701' }
   };
 
@@ -1158,7 +1141,7 @@ test('Formulário unificado: 16 medidas avançadas de PT e enquadramento automá
     building_area: 180,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    address: { zip_code: '45355000', public_place: 'Rua das Indústrias', number: '50', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Rua das Indústrias', number: '50', municipio_id: 323 },
     institution: { cnae: '4754701' }
   };
 
@@ -1203,7 +1186,7 @@ test('Copiloto IA atualiza tipo_projeto_id diretamente no formulário unificado'
       building_area: 300,
       number_floors: 1,
       height: 'Térrea = Um pavimento',
-      address: { zip_code: '45355000', public_place: 'Rua A', number: '1', municipio_id: 22 }
+      address: { zip_code: '40000000', public_place: 'Rua A', number: '1', municipio_id: 323 }
     }
   };
 
@@ -1298,7 +1281,7 @@ test('Bloqueio estrito de RT e ART/RRT: rascunhos PTSCLCB2 ou PT sem RT ou sem A
     building_area: 300,
     number_floors: 2,
     height: 'Baixa = H <= 6,00 m',
-    address: { zip_code: '45355000', public_place: 'Rua Central', number: '10', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Rua Central', number: '10', municipio_id: 323 },
     institution: { cnae: '4754701', razao_social: 'LOJA TESTE' }
   };
   const resPts = buildAndValidateFenixProjectPayload(ptsSemRt);
@@ -1316,7 +1299,7 @@ test('Bloqueio estrito de RT e ART/RRT: rascunhos PTSCLCB2 ou PT sem RT ou sem A
     number_floors: 4,
     height: 'Média = 12,00 m < H <= 23,00 m',
     n_art_rrt: 'BA20261234567',
-    address: { zip_code: '45355000', public_place: 'Av Central', number: '100', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Av Central', number: '100', municipio_id: 323 },
     institution: { cnae: '6821801', razao_social: 'EMPRESA PT' },
     responsaveis_tecnicos: [
       {
@@ -1344,7 +1327,7 @@ test('Mapeamento completo de RT: propriedades do frontend (nome_tecnico, tel_tec
     building_area: 250,
     number_floors: 1,
     height: 'Térrea = Um pavimento',
-    address: { zip_code: '45355000', public_place: 'Rua Principal', number: '50', municipio_id: 22 },
+    address: { zip_code: '40000000', public_place: 'Rua Principal', number: '50', municipio_id: 323 },
     institution: { cnae: '4754701', razao_social: 'COMERCIO TESTE' },
     n_art_rrt: 'BA20269999999',
     responsaveis_tecnicos: [

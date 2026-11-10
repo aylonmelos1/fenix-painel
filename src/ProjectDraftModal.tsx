@@ -109,7 +109,7 @@ export function normalizeProjectDraftInput(
     number: String(addrRaw.number ?? src.numero ?? base.address.number ?? ''),
     complement: String(addrRaw.complement ?? src.complemento ?? base.address.complement ?? '***'),
     district: String(addrRaw.district ?? src.district ?? src.neighborhood ?? src.bairro ?? base.address.district ?? ''),
-    county: String(addrRaw.county ?? src.cidade ?? src.municipio ?? base.address.county ?? 'SALVADOR'),
+    county: String(addrRaw.county ?? src.cidade ?? src.municipio ?? base.address.county ?? ''),
     municipio_id:
       addrRaw.municipio_id !== undefined && addrRaw.municipio_id !== null
         ? Number(addrRaw.municipio_id)
@@ -689,17 +689,17 @@ const BLOCKED_PTS_CNAES_DEFAULT = [
   '4789006'
 ];
 
-// Dados Gabarito Reais do VAL SAT extraídos de docs/FENIX-CADASTRO-EDIFICACAO-E-PROJETO.md
-export const VAL_SAT_SAMPLE: ProjectDraftInput = {
-  name: 'VAL SAT - Apuarema (Gabarito Oficial CBMBA)',
+// Exemplo sintético para demonstração; os dados não representam uma pessoa ou empresa real.
+export const SYNTHETIC_PROJECT_SAMPLE: ProjectDraftInput = {
+  name: 'Exemplo fictício — não enviar ao Fênix',
   edificacao_mode: 'new',
   edificacao_id: null,
   form_mode: 'pts',
-  tipo_projeto_id: 5,
+  tipo_projeto_id: 4,
   process_category: 'pts',
   license_type: 'CLCB',
   isencao_id: 1,
-  n_art_rrt: 'BA20261628773',
+  n_art_rrt: 'ART-EXEMPLO-NAO-ENVIAR',
   data_inicio: '',
   data_fim: '',
   projeto_anterior: false,
@@ -714,30 +714,30 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
   subsolo_maior_50m: false,
   cobertura_fsps_sup200: false,
   edification: {
-    reference_name: 'VAL SAT',
+    reference_name: 'Edificação Exemplo',
     registration: '',
-    height: 'Baixa-Média = 6,00 m < H <= 12,00 m',
-    number_floors: 2,
-    building_area: 434.11,
+    height: 'Térrea = Um pavimento',
+    number_floors: 1,
+    building_area: 180,
     area_to_be_built: 0,
     discount_area: 0
   },
   address: {
-    zip_code: '45355000',
-    public_place: 'RUA OTACILIO PINHEIRO',
-    number: 'S/N',
-    complement: '***',
+    zip_code: '',
+    public_place: 'RUA DO EXEMPLO',
+    number: '100',
+    complement: 'SEM COMPLEMENTO',
     district: 'CENTRO',
-    county: 'APUAREMA',
-    municipio_id: 22,
+    county: '',
+    municipio_id: null,
     state: 'BA',
-    geographic_coordinates: '-13.7844,-39.8183'
+    geographic_coordinates: ''
   },
   institution: {
     tipo_pessoa: 'PJ',
-    cnpj_cpf: '09566970000123',
-    razao_social: 'VANDERLEI DA SILVA SANTOS DE APUAREMA',
-    nome_fantasia: 'VAL SAT E CASA DOS COLCHÕES',
+    cnpj_cpf: '00000000000000',
+    razao_social: 'EMPRESA EXEMPLO LTDA',
+    nome_fantasia: 'COMÉRCIO EXEMPLO',
     natureza_juridica: 'EPP - Empresa de Pequeno Porte',
     cnae: '4754701',
     atividade_economica: 'Comércio varejista de móveis',
@@ -752,41 +752,41 @@ export const VAL_SAT_SAMPLE: ProjectDraftInput = {
   },
   proprietario: {
     tipo_pessoa_prop: 'PJ',
-    cpf_cnpj_prop: '09566970000123',
-    nome_proprietario: 'VAL SAT E CASA DOS COLCHÕES',
-    email_proprietario: 'engenharia@abaincendio.com.br',
-    tel_proprietario: '(71) 4000-2895'
+    cpf_cnpj_prop: '00000000000000',
+    nome_proprietario: 'EMPRESA EXEMPLO LTDA',
+    email_proprietario: 'exemplo@example.invalid',
+    tel_proprietario: '(71) 00000-0000'
   },
   responsavel: {
     responsavel_uso_igual_prop: true,
     tipo_pessoa_resp: 'PJ',
-    cpf_cnpj_resp: '09566970000123',
-    nome_responsavel: 'VAL SAT E CASA DOS COLCHÕES',
-    email_responsavel_uso: 'engenharia@abaincendio.com.br',
-    tel_responsavel_uso: '(71) 4000-2895'
+    cpf_cnpj_resp: '00000000000000',
+    nome_responsavel: 'EMPRESA EXEMPLO LTDA',
+    email_responsavel_uso: 'exemplo@example.invalid',
+    tel_responsavel_uso: '(71) 00000-0000'
   },
   technical: {
-    cpf: '09566970000123',
-    name: 'ENG. MARCOS VINICIUS ALMEIDA',
-    crea_cau: '05189283-BA',
-    telephone: '(71) 4000-2895',
-    email: 'engenharia@abaincendio.com.br'
+    cpf: '00000000000',
+    name: 'Responsável Técnico Fictício',
+    crea_cau: '00000000-BA',
+    telephone: '(71) 00000-0000',
+    email: 'exemplo@example.invalid'
   },
   responsaveis_tecnicos: [
     {
       tipo_numero: 'CREA',
       conselho: 'CREA',
-      crea_cau: '05189283-BA',
-      n_registro_conselho: '05189283-BA',
-      name: 'ENG. MARCOS VINICIUS ALMEIDA',
-      nome_tecnico: 'ENG. MARCOS VINICIUS ALMEIDA',
-      cpf_cnpj: '09566970000123',
-      cpf_cnpj_tecnico: '09566970000123',
-      phone: '7140002895',
-      telefone_tecnico: '7140002895',
-      email: 'engenharia@abaincendio.com.br',
-      email_tecnico: 'engenharia@abaincendio.com.br',
-      n_art_rrt: 'BA20261628773'
+      crea_cau: '00000000-BA',
+      n_registro_conselho: '00000000-BA',
+      name: 'Responsável Técnico Fictício',
+      nome_tecnico: 'Responsável Técnico Fictício',
+      cpf_cnpj: '00000000000',
+      cpf_cnpj_tecnico: '00000000000',
+      phone: '71000000000',
+      telefone_tecnico: '71000000000',
+      email: 'exemplo@example.invalid',
+      email_tecnico: 'exemplo@example.invalid',
+      n_art_rrt: 'ART-EXEMPLO-NAO-ENVIAR'
     }
   ],
   incluir_rt_opcional: false,
@@ -1346,6 +1346,11 @@ function ProjectDraftModalContent({
     return Math.max(0, +(built + toBuild - discount).toFixed(2));
   }, [formData.edification?.building_area, formData.edification?.area_to_be_built, formData.edification?.discount_area, (formData as any)?.area_construida]);
 
+  const isPtsProject = [4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0);
+  const selectedAdvancedMeasures = OFFICIAL_FENIX_MEASURES.filter((measure) =>
+    !measure.basic && Boolean(formData.securityMeasures?.[measure.key])
+  );
+
   // Enquadramento automático em tempo real
   const enquadramento = useMemo(() => {
     const totalArea = calculatedTotalArea;
@@ -1766,14 +1771,14 @@ function ProjectDraftModalContent({
     setView('editor');
   };
 
-  const handleLoadValSatSample = async () => {
+  const handleLoadSyntheticSample = async () => {
     const sampleId = crypto.randomUUID();
-    const valSatData: ProjectDraftInput = {
-      ...VAL_SAT_SAMPLE,
+    const syntheticData: ProjectDraftInput = {
+      ...SYNTHETIC_PROJECT_SAMPLE,
       id: sampleId
     };
     setCurrentDraft(null);
-    setFormData(valSatData);
+    setFormData(syntheticData);
     setSubmissionResult(null);
     setConfirmKey('');
     setStep(1);
@@ -1784,13 +1789,13 @@ function ProjectDraftModalContent({
       setSaving(true);
       const res = await api<{ draft: DraftRecord }>('/api/drafts', {
         method: 'POST',
-        body: JSON.stringify(valSatData)
+        body: JSON.stringify(syntheticData)
       });
       setCurrentDraft(res.draft);
-      showToast('Gabarito VAL SAT carregado e salvo com sucesso!', 'success');
+      showToast('Exemplo fictício carregado e salvo. Os dados não devem ser enviados ao Fênix.', 'success');
       void fetchDrafts();
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Gabarito carregado localmente.', 'info');
+      showToast(e instanceof Error ? e.message : 'Exemplo carregado localmente.', 'info');
     } finally {
       setSaving(false);
     }
@@ -2308,66 +2313,56 @@ function ProjectDraftModalContent({
     showToast(`Edificação "${selectedBuilding.reference}" vinculada ao rascunho com endereço pré-carregado.`, 'info');
   };
 
-  // Preenchimento atalho dos dados da ABA Incêndio para proprietário / responsável
-  const handleFillAbaContact = () => {
-    const razao = formData.institution.razao_social || formData.institution.nome_fantasia || 'ABA Incêndio';
-    const doc = formData.institution.cnpj_cpf || '09.566.970/0001-23';
-
-    setFormData((prev) => ({
-      ...prev,
-      proprietario: {
-        tipo_pessoa_prop: prev.institution.tipo_pessoa || 'PJ',
-        cpf_cnpj_prop: doc,
-        nome_proprietario: razao,
-        email_proprietario: 'engenharia@abaincendio.com.br',
-        tel_proprietario: '(71) 4000-2895'
-      },
-      responsavel: {
-        responsavel_uso_igual_prop: true,
-        tipo_pessoa_resp: prev.institution.tipo_pessoa || 'PJ',
-        cpf_cnpj_resp: doc,
-        nome_responsavel: razao,
-        email_responsavel_uso: 'engenharia@abaincendio.com.br',
-        tel_responsavel_uso: '(71) 4000-2895'
-      }
-    }));
-    showToast('Contatos preenchidos com os dados da empresa e engenharia ABA.', 'info');
+  // Copia a identificação do estabelecimento para proprietário e responsável, sem assumir contatos.
+  const handleFillInstitutionContact = () => {
+    setFormData((prev) => {
+      const razao = prev.institution.razao_social || prev.institution.nome_fantasia || '';
+      const doc = prev.institution.cnpj_cpf || '';
+      return {
+        ...prev,
+        proprietario: {
+          tipo_pessoa_prop: prev.institution.tipo_pessoa || 'PJ',
+          cpf_cnpj_prop: doc,
+          nome_proprietario: razao,
+          email_proprietario: prev.proprietario?.email_proprietario || '',
+          tel_proprietario: prev.proprietario?.tel_proprietario || ''
+        },
+        responsavel: {
+          responsavel_uso_igual_prop: true,
+          tipo_pessoa_resp: prev.institution.tipo_pessoa || 'PJ',
+          cpf_cnpj_resp: doc,
+          nome_responsavel: razao,
+          email_responsavel_uso: prev.responsavel?.email_responsavel_uso || '',
+          tel_responsavel_uso: prev.responsavel?.tel_responsavel_uso || ''
+        }
+      };
+    });
+    showToast('Dados do estabelecimento copiados. Revise e informe os contatos necessários.', 'info');
   };
 
   // Marcar medidas recomendadas para o porte
   const handleAutoCheckMeasures = () => {
-    const isBig = calculatedTotalArea > 750;
-
-    const baseMeasures: Record<string, number> = {
-      extintores: 1,
-      iluminacao_emerg: 1,
-      sinal_emerg: 1,
-      saidas_emerg: 1,
-      brigada_incendio: calculatedTotalArea > 200 ? 1 : 0,
-      control_mat_acab: 1,
-      hidrante_mangot: isBig ? 1 : 0,
-      alarme_incendio: isBig ? 1 : 0,
-      deteccao_incendio: calculatedTotalArea > 1200 ? 1 : 0,
-      acesso_viatura: 1,
-      seguranca_estrutural: 1,
-      plano_emerg_incendio: isBig ? 1 : 0,
-      sis_prot_cont_desc_elet: calculatedTotalArea > 750 ? 1 : 0,
-      comp_horizontal: 0,
-      comp_vertical: 0,
-      separacao_edific: 0,
-      resfriamento: 0,
-      chuveiros_auto: 0,
-      elevador_emerg: 0,
-      control_fumaca: 0,
-      espuma: 0,
-      sis_fixo_gases: 0
-    };
+    const tipoProjetoId = Number(formData.tipo_projeto_id) || (calculatedTotalArea <= 200 ? 4 : 5);
+    const isPts = [4, 5, 6, 7, 8].includes(tipoProjetoId);
+    const baseMeasures: Record<string, number> = Object.fromEntries(
+      OFFICIAL_FENIX_MEASURES.map((measure) => [measure.key, 0])
+    );
+    const recommended = isPts
+      ? tipoProjetoId === 4
+        ? ['iluminacao_emerg', 'sinal_emerg', 'extintores', 'saidas_emerg']
+        : ['iluminacao_emerg', 'sinal_emerg', 'extintores', 'saidas_emerg', 'brigada_incendio']
+      : [
+          'acesso_viatura', 'seguranca_estrutural', 'comp_horizontal', 'control_mat_acab',
+          'saidas_emerg', 'brigada_incendio', 'iluminacao_emerg', 'deteccao_incendio',
+          'alarme_incendio', 'sinal_emerg', 'extintores', 'hidrante_mangot'
+        ];
+    for (const key of recommended) baseMeasures[key] = 1;
 
     setFormData((prev) => ({
       ...prev,
       securityMeasures: normalizeSecurityMeasures(baseMeasures, false)
     }));
-    showToast('Medidas oficiais CBMBA marcadas para a edificação.', 'success');
+    showToast(`Medidas compatíveis com ${isPts ? 'PTS' : 'PT'} marcadas para a edificação.`, 'success');
   };
 
   // Envio Seguro para o Fênix Real
@@ -3396,7 +3391,7 @@ function ProjectDraftModalContent({
                             }))}
                           />
                         </label>
-                        <small className="field-hint">Opcional. Exemplo: Apuarema é -13.7844,-39.8183.</small>
+                        <small className="field-hint">Opcional. Use latitude e longitude no formato -12.3456,-45.6789.</small>
                       </div>
                     </div>
                   </div>
@@ -3417,7 +3412,7 @@ function ProjectDraftModalContent({
                             type="text"
                             className={`input-text ${isFieldPending('edification.reference_name') ? 'input-pending-error' : ''}`}
                             maxLength={100}
-                            placeholder="Ex: VAL SAT, Condomínio Parque dos Sonhos"
+                            placeholder="Ex: Edifício Central, Loja Exemplo"
                             value={formData.edification.reference_name}
                             onChange={(e) => setFormData((prev) => ({
                               ...prev,
@@ -3771,7 +3766,7 @@ function ProjectDraftModalContent({
                             className={`input-text ${isFieldPending('n_art_rrt') ? 'input-pending-error' : ''}`}
                             maxLength={30}
                             required={!(formData.tipo_projeto_id === 4 && formData.questionario?.edf_saida_direta !== false)}
-                            placeholder="Ex: BA20261628773"
+                            placeholder="Ex: ART-2026-000000"
                             value={formData.n_art_rrt || formData.responsaveis_tecnicos?.[0]?.n_art_rrt || ''}
                             onChange={(e) => {
                               const val = e.target.value.toUpperCase();
@@ -3956,7 +3951,7 @@ function ProjectDraftModalContent({
                             type="text"
                             className={`input-text ${isFieldPending('institution.razao_social') ? 'input-pending-error' : ''}`}
                             maxLength={100}
-                            placeholder="Ex: VANDERLEI DA SILVA SANTOS"
+                            placeholder="Ex: NOME DA EMPRESA OU DO PROPRIETÁRIO"
                             value={formData.institution.razao_social}
                             onChange={(e) => setFormData((prev) => ({
                               ...prev,
@@ -3979,7 +3974,7 @@ function ProjectDraftModalContent({
                             type="text"
                             className="input-text"
                             maxLength={100}
-                            placeholder="Ex: VAL SAT E CASA DOS COLCHÕES"
+                            placeholder="Ex: EMPRESA EXEMPLO LTDA"
                             value={formData.institution.nome_fantasia || ''}
                             onChange={(e) => setFormData((prev) => ({
                               ...prev,
@@ -4418,10 +4413,10 @@ function ProjectDraftModalContent({
                       <button
                         type="button"
                         className="button button-outline button-xs"
-                        onClick={handleFillAbaContact}
-                        title="Preencher com contatos da engenharia ABA Incêndio"
+                        onClick={handleFillInstitutionContact}
+                        title="Copiar os dados do estabelecimento para proprietário e responsável"
                       >
-                        <Zap size={13} className="text-amber" /> Puxar Dados do Estabelecimento + Contato ABA
+                        <Zap size={13} className="text-amber" /> Usar Dados do Estabelecimento
                       </button>
                     </div>
 
@@ -4497,7 +4492,7 @@ function ProjectDraftModalContent({
                           <input
                             type="email"
                             className={`input-text ${isFieldPending('proprietario.email_proprietario') ? 'input-pending-error' : ''}`}
-                            placeholder="engenharia@abaincendio.com.br"
+                            placeholder="contato@example.invalid"
                             value={formData.proprietario.email_proprietario}
                             onChange={(e) => setFormData((prev) => ({
                               ...prev,
@@ -4906,7 +4901,7 @@ function ProjectDraftModalContent({
                                         type="text"
                                         className={`input-text ${isFieldPending('rt_registro_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        placeholder="Ex: 05189283-BA"
+                                        placeholder="Ex: 00000000-BA"
                                         value={rt.n_registro_conselho}
                                         onChange={(e) => {
                                           const val = e.target.value;
@@ -4937,7 +4932,7 @@ function ProjectDraftModalContent({
                                         type="text"
                                         className={`input-text ${isFieldPending('rt_art_' + idx) ? 'input-pending-error' : ''}`}
                                         required={isRtRequired}
-                                        placeholder="Ex: BA20261628773"
+                                        placeholder="Ex: ART-2026-000000"
                                         value={rt.n_art_rrt}
                                         onChange={(e) => {
                                           const val = e.target.value.toUpperCase();
@@ -5063,23 +5058,24 @@ function ProjectDraftModalContent({
                         type="button"
                         className="button button-outline button-xs"
                         onClick={handleAutoCheckMeasures}
-                        title="Marcar automaticamente as medidas exigidas pela legislação da Bahia para este porte"
+                        title="Aplicar as medidas recomendadas pelo Painel para o tipo de projeto selecionado"
                       >
-                        <Sparkles size={13} className="text-teal" /> Marcar Recomendadas para o Porte
+                        <Sparkles size={13} className="text-teal" /> Aplicar Medidas Recomendadas
                       </button>
                     </div>
 
-                    {[4, 5, 6, 7, 8].includes(formData.tipo_projeto_id || 0) && (
+                    {isPtsProject && (
                       <div className="pts-measures-notice animate-fade-in mb-3" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.65rem 0.9rem', borderRadius: '8px', background: 'rgba(20, 184, 166, 0.08)', border: '1px solid rgba(20, 184, 166, 0.25)', fontSize: '0.82rem' }}>
                         <Info size={16} className="text-teal" />
                         <p style={{ margin: 0, lineHeight: 1.45 }}>
-                          No envio de processos na modalidade <b>PTS ({OFFICIAL_PROJECT_TYPES.find(t => t.id === formData.tipo_projeto_id)?.sigla || 'Simplificado'})</b>, o Fênix CBMBA homologa as 6 medidas básicas. As 16 medidas de engenharia avançada podem ser marcadas e ficam registradas no seu rascunho técnico.
+                          No <b>PTS ({OFFICIAL_PROJECT_TYPES.find(t => t.id === formData.tipo_projeto_id)?.sigla || 'Simplificado'})</b>, o Fênix apresenta as 6 medidas básicas. A consulta IT-14 preenche as medidas correspondentes; medidas avançadas incompatíveis com PTS ficam fora do envio.
+                          {selectedAdvancedMeasures.length > 0 && <> Há {selectedAdvancedMeasures.length} medida(s) avançada(s) indicada(s) pela IT-14 ou pelo rascunho. Revise o enquadramento para PT antes de enviar.</>}
                         </p>
                       </div>
                     )}
 
                     <div className="measures-grid">
-                      {OFFICIAL_FENIX_MEASURES.map((measure) => {
+                      {OFFICIAL_FENIX_MEASURES.filter((measure) => !isPtsProject || measure.basic).map((measure) => {
                         const isChecked = Boolean(formData.securityMeasures?.[measure.key]);
                         return (
                           <div key={measure.key} className={`measure-slider-card ${isChecked ? 'selected' : ''}`}>
@@ -5619,8 +5615,8 @@ function ProjectDraftModalContent({
             </button>
             {view === 'list' ? (
               <>
-                <button type="button" className="button button-outline val-sat-button" onClick={() => void handleLoadValSatSample()}>
-                  <Zap size={15} className="text-amber" /> Carregar Exemplo (VAL SAT)
+                <button type="button" className="button button-outline sample-button" onClick={() => void handleLoadSyntheticSample()}>
+                  <Zap size={15} className="text-amber" /> Carregar exemplo fictício
                 </button>
                 <button type="button" className="button button-teal" onClick={handleNewDraft}>
                   <Plus size={15} /> Novo Cadastro
@@ -5631,8 +5627,8 @@ function ProjectDraftModalContent({
                 <button type="button" className="button button-outline" onClick={() => setView('list')}>
                   <ArrowLeft size={15} /> Meus Rascunhos ({drafts.length})
                 </button>
-                <button type="button" className="button button-outline val-sat-button" onClick={() => void handleLoadValSatSample()}>
-                  <Zap size={15} className="text-amber" /> Exemplo (VAL SAT)
+                <button type="button" className="button button-outline sample-button" onClick={() => void handleLoadSyntheticSample()}>
+                  <Zap size={15} className="text-amber" /> Exemplo fictício
                 </button>
                 <button type="button" className="button button-teal" onClick={() => void handleSaveDraft()} disabled={saving}>
                   {saving ? <LoaderCircle size={15} className="spin" /> : <Save size={15} />} {isEditExistingProject ? 'Salvar Rascunho Local' : 'Salvar Rascunho'}
@@ -5664,10 +5660,10 @@ function ProjectDraftModalContent({
               <div className="draft-list-empty">
                 <ClipboardList size={40} className="text-muted" />
                 <h4>Nenhum rascunho salvo ainda</h4>
-                <p>Inicie um novo projeto ou carregue o gabarito oficial do caso real VAL SAT para conhecer o fluxo completo.</p>
+                <p>Inicie um projeto ou carregue dados fictícios para conhecer o formulário. O exemplo não deve ser enviado ao Fênix.</p>
                 <div className="empty-actions">
-                  <button type="button" className="button button-outline" onClick={() => void handleLoadValSatSample()}>
-                    <Zap size={15} /> Carregar Exemplo Gabarito (VAL SAT)
+                  <button type="button" className="button button-outline" onClick={() => void handleLoadSyntheticSample()}>
+                    <Zap size={15} /> Carregar exemplo fictício
                   </button>
                   <button type="button" className="button button-teal" onClick={handleNewDraft}>
                     <Plus size={15} /> Iniciar Novo Rascunho
@@ -5782,10 +5778,10 @@ function ProjectDraftModalContent({
               <div className="toolbar-buttons">
                 <button
                   type="button"
-                  className="button button-outline val-sat-button"
-                  onClick={() => void handleLoadValSatSample()}
+                  className="button button-outline sample-button"
+                  onClick={() => void handleLoadSyntheticSample()}
                 >
-                  <Zap size={16} className="text-amber" /> Carregar Exemplo Gabarito (VAL SAT)
+                  <Zap size={16} className="text-amber" /> Carregar exemplo fictício
                 </button>
                 <button
                   type="button"
@@ -5805,10 +5801,10 @@ function ProjectDraftModalContent({
               <div className="draft-list-empty">
                 <ClipboardList size={40} className="text-muted" />
                 <h4>Nenhum rascunho salvo ainda</h4>
-                <p>Inicie um novo projeto ou carregue o gabarito oficial do caso real VAL SAT para conhecer o fluxo completo.</p>
+                <p>Inicie um projeto ou carregue dados fictícios para conhecer o formulário. O exemplo não deve ser enviado ao Fênix.</p>
                 <div className="empty-actions">
-                  <button type="button" className="button button-outline" onClick={() => void handleLoadValSatSample()}>
-                    <Zap size={15} /> Carregar Exemplo Gabarito (VAL SAT)
+                  <button type="button" className="button button-outline" onClick={() => void handleLoadSyntheticSample()}>
+                    <Zap size={15} /> Carregar exemplo fictício
                   </button>
                   <button type="button" className="button button-teal" onClick={handleNewDraft}>
                     <Plus size={15} /> Iniciar Novo Rascunho

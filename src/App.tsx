@@ -5,12 +5,12 @@ import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Bot, Building2, CalendarClock, Check, CheckCircle2, CheckCheck,
   CircleAlert, ClipboardList, Cloud, FileCheck2, FileSpreadsheet, FileText, Filter, Flame,
   Gauge, HelpCircle, Home, Info, LoaderCircle, LockKeyhole, LogOut, MapPin, Menu, MessageCircle, MoreHorizontal,
-  Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, UserX, PanelLeftClose, PanelLeftOpen,
+  Search, Send, Settings, ShieldCheck, Sparkles, X, RefreshCw, Eye, EyeOff, BadgeCheck, Clock3, ListChecks, CirclePause, RotateCcw, User, UserX, PanelLeftClose, PanelLeftOpen,
   PanelRightClose, PanelRightOpen, Zap,
   Plus, Pause, Play, Trash2, Pencil, KeyRound, CalendarDays, ChevronLeft, ChevronRight, Square, XCircle
 } from 'lucide-react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey, type FenixProcessAction } from './types';
+import { api, formatArea, formatDate, statusTone, type Building, type BuildingDetail, type Dashboard, type DashboardProcess, type DocumentItem, type FenixAccountRequest, type OfficialRequestPaymentsResponse, type OfficialRequestSummaryResponse, type RequesterProjectDetailsResponse, type ProcessDetail, type ProcessMenuFilter, type ProcessMenuFilters, type ProcessMenuKey, type RequesterProfileResponse, type RequesterSurveysResponse, type RequesterSurvey, type FenixProcessAction } from './types';
 import {
   type DraftAiAssistantResponse,
   generateLocalAiAssistantFallback,
@@ -19,6 +19,7 @@ import {
 
 const ProjectDraftModal = lazy(() => import('./ProjectDraftModal').then((m) => ({ default: m.ProjectDraftModal })));
 const OdooIntegration = lazy(() => import('./OdooIntegration').then((m) => ({ default: m.OdooIntegration })));
+const BuildingUploadDocuments = lazy(() => import('./BuildingUploadDocuments').then((m) => ({ default: m.BuildingUploadDocuments })));
 import { downloadExcelReport, type ExcelCell } from './excel';
 import fireStationHero from './assets/fire-station-hero.webp';
 import { WordCarouselLoader, SkeletonBlock, BuildingDrawerSkeleton, TableRowsSkeleton } from './WordCarouselLoader';
@@ -149,6 +150,11 @@ function Login() {
 type NavItem = { label: string; icon: typeof Home; path?: string };
 type UserNotification = { id: number; buildingId: string | null; processId: string | null; title: string; message: string; createdAt: string; readAt: string | null; sourceAccountName?: string | null; sourceAccountPaused?: boolean };
 type RenewalRecord = { id: string; buildingId: string; buildingReference: string; municipality: string; sourceAccountName?: string | null; sourceConnectionId?: string | null; sourceAccountPaused?: boolean; protocol: string; type: string; status: string; stage: string; homologatedAt: string; renewalAt: string; monthsUntilRenewal: number; daysUntilRenewal: number; severity: 'normal' | 'attention' | 'urgent' | 'overdue'; urgency: 'current' | 'next' | 'upcoming' | 'later'; disposition: 'archived' | 'lost' | null };
+type SapMigrationRecord = { id: string; sourceAccountKey: string; projectNumber: string; requestNumber: string; sapProtocol: string; status: string; createdAt?: string; updatedAt?: string; account?: string; sourceAccountName?: string; linkedProcessId?: string | null };
+type RemanejamentoRecord = { id: string; sourceAccountKey: string; requestNumber: string; protocolNumber: string; reference?: string; municipality?: string; totalArea?: number | null; status: string; account?: string; sourceAccountName?: string; linkedProcessId?: string | null };
+type SapMigrationDetail = { id: string; status: string; sapProtocol: string; projectNumber: string; requestNumber: string; protocolNumber: string; createdAt: string | null; updatedAt: string | null; documents: Array<{ id: string; name: string; type: string; createdAt: string | null; updatedAt: string | null }> };
+type RemanejamentoDetail = { id: string; status: string; requestNumber: string; protocolNumber: string; reference: string; municipality: string; totalArea: number | null; documents: Array<{ id: string; name: string; type: string; slug: string }> };
+type ServiceDetailTarget = { kind: 'sap-migrations' | 'remanejamentos'; sourceAccountKey: string; id: string };
 const navItems: NavItem[] = [
   { label: 'Visão geral', icon: Home, path: '/painel' },
   { label: 'Cadastrar no Fênix', icon: Plus, path: '/painel?view=register' },
@@ -159,8 +165,7 @@ const navItems: NavItem[] = [
   { label: 'AVCBs e CLCBs', icon: ShieldCheck, path: '/painel?view=certificates' },
   { label: 'Projetos (ACP)', icon: FileText, path: '/painel?view=projects' },
   { label: 'Renovações', icon: CalendarClock, path: '/painel?view=renewals' },
-  { label: 'Consultas', icon: Search, path: '/painel?view=sync' },
-  { label: 'Log do webhook', icon: ListChecks, path: '/log' }
+  { label: 'Consultas', icon: Search, path: '/painel?view=sync' }
 ];
 
 const DEFAULT_PROCESS_MENU_FILTERS: ProcessMenuFilters = {
@@ -223,10 +228,10 @@ function Shell({ children, user, active = 'Visão geral', breadcrumbs, onNavigat
     <div className="sidebar-section-label">ACOMPANHAMENTO</div><nav className="side-nav">{navItems.map((item) => <button key={item.label} type="button" title={item.label} onClick={() => navigateFromSidebar(item.path!)} className={`side-link ${active === item.label ? 'active' : ''}`}><item.icon size={17} /><span>{item.label}</span></button>)}</nav>
     <div className="sidebar-spacer" /><button className="sidebar-help" type="button" onClick={() => setHelpOpen(true)}><span className="help-icon"><HelpCircle size={17} /></span><span><b>Precisa de ajuda?</b><small>Veja como acompanhar</small></span><ArrowRight size={15} /></button>
     <Link to="/configuracoes" className={`side-link side-bottom ${active === 'Configurações' ? 'active' : ''}`}><Settings size={17} /><span>Configurações</span></Link><button className="side-link side-bottom" onClick={logout}><LogOut size={17} /><span>Sair</span></button>
-    <div className="sidebar-user"><span className="avatar avatar-small">{user.name.slice(0, 1).toUpperCase()}</span><span className="sidebar-user-label"><b>{user.demo ? 'Demonstração' : user.name.split(' ')[0]}</b><small>{user.demo ? 'Dados fictícios' : 'Conta Fênix'}</small></span></div>
+    <Link to="/configuracoes?secao=perfil" className="sidebar-user" aria-label="Abrir perfil e contas vinculadas" onClick={() => { setMenuOpen(false); onNavigate?.(); }}><span className="avatar avatar-small">{user.name.slice(0, 1).toUpperCase()}</span><span className="sidebar-user-label"><b>{user.demo ? 'Demonstração' : user.name.split(' ')[0]}</b><small>{user.demo ? 'Dados fictícios' : 'Perfil e contas Fênix'}</small></span></Link>
   </aside>
   {menuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMenuOpen(false)} />}
-  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions">{!user.demo && fenixSessionStatus === 'expired' ? <Link to="/configuracoes?secao=contas-fenix#settings-fenix-primary" className="connection-chip session-expired-chip" title="A sessão do Fênix expirou. Clique para reconectar sua conta em Configurações."><span className="connection-dot session-expired-dot" /> Sessão do Fênix expirada <ArrowRight size={12} style={{ marginLeft: 3 }} /></Link> : <span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>}{onOpenAi && <button className={`button button-ai-min global-ai-button ${copilotOpen ? 'active' : ''}`} onClick={onOpenAi} aria-label={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'} title={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'}><Sparkles size={15} /><span>Copiloto IA</span>{copilotOpen ? <PanelRightClose size={13} style={{ marginLeft: 3 }} /> : null}</button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
+  <main className="main-area"><header className="topbar"><button className="sidebar-toggle" type="button" onClick={() => setSidebarCollapsed((collapsed) => { const next = !collapsed; localStorage.setItem('fenix-sidebar-collapsed', String(next)); return next; })} aria-label={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'} title={sidebarCollapsed ? 'Expandir menu lateral' : 'Recolher menu lateral'}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Abrir menu"><Menu size={20} /></button><div className="breadcrumb"><span>Fênix Painel</span><span>/</span>{breadcrumbs ?? <b>{active}</b>}</div><div className="top-actions">{!user.demo && fenixSessionStatus === 'expired' ? <Link to="/configuracoes?secao=perfil#settings-fenix-primary" className="connection-chip session-expired-chip" title="A sessão do Fênix expirou. Clique para reconectar sua conta em Configurações."><span className="connection-dot session-expired-dot" /> Sessão do Fênix expirada <ArrowRight size={12} style={{ marginLeft: 3 }} /></Link> : <span className={`connection-chip ${user.demo ? 'demo-chip' : ''} ${fenixSync.status === 'running' ? 'syncing-chip' : ''}`} title={user.demo ? 'Ambiente de demonstração' : lastSyncTitle ? `Última atualização: ${lastSyncTitle}${fenixSync.message ? ` · ${fenixSync.message}` : ''}` : fenixSync.message || 'Ainda não houve atualização'}><span className="connection-dot" /> {connectionLabel}{!user.demo && <small className="connection-last-update">{lastSyncDate ? `Última: ${lastSyncDate}` : 'Sem atualização'}</small>}{fenixSync.status === 'running' && fenixSync.total ? <small>{fenixSync.processed}/{fenixSync.total}{fenixSync.requestQueue?.queued ? ` · fila ${fenixSync.requestQueue.queued}` : ''}</small> : null}</span>}{onOpenAi && <button className={`button button-ai-min global-ai-button ${copilotOpen ? 'active' : ''}`} onClick={onOpenAi} aria-label={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'} title={copilotOpen ? 'Recolher Copiloto IA' : 'Abrir Copiloto IA'}><Sparkles size={15} /><span>Copiloto IA</span>{copilotOpen ? <PanelRightClose size={13} style={{ marginLeft: 3 }} /> : null}</button>}<NotificationCenter onActivate={onNotification} demo={user.demo} /></div></header>
     {user.demo && <div className="demo-banner"><Eye size={14} /><span>Você está vendo dados fictícios de demonstração. Nenhuma informação real do Fênix está sendo exibida.</span><Link to="/entrar">Entrar com Fênix <ArrowRight size={13} /></Link></div>}
     {children}</main>
     {helpOpen && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setHelpOpen(false)}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><header><div><span className="help-icon"><HelpCircle size={20} /></span><div><h2 id="help-title">Como acompanhar processos</h2><p>Um guia rápido para usar o Fênix Painel.</p></div></div><button className="icon-button" onClick={() => setHelpOpen(false)} aria-label="Fechar ajuda"><X size={18} /></button></header><div className="help-content"><section><b>1. Comece pela edificação</b><p>Abra uma edificação para ver seus protocolos, etapa atual, histórico e documentos consultados no Fênix.</p></section><section><b>2. Entenda os indicadores</b><p>Os cartões mostram processos. Clique em um para abrir a lista correspondente; cada linha leva à ficha da edificação.</p></section><section><b>3. Atualize e confira mudanças</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas. Mudanças encontradas aparecem na campainha.</p></section><section><b>4. Use a IA como apoio</b><p>Na ficha, pergunte sobre o status, as movimentações ou os documentos. Confirme decisões e exigências no Fênix.</p></section></div><footer><button className="button button-outline" onClick={() => { setHelpOpen(false); navigateFromSidebar('/painel?view=sync'); }}>Ver consultas e sincronizações <ArrowRight size={15} /></button></footer></section></div>}
@@ -729,6 +734,543 @@ function ProcessWorkspace({ view, processes, buildings, sourceAccounts, historyR
   </section>;
 }
 
+function RequestsWorkspace({ buildings, sourceAccounts, lastSync, onOpen, onManageBuildings }: {
+  buildings: Building[]; sourceAccounts: Array<{ id: string; label: string }>; lastSync: string | null;
+  onOpen: (building: Building, tab?: string, processId?: string) => void; onManageBuildings: () => void;
+}) {
+  const [requests, setRequests] = useState<FenixAccountRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const [query, setQuery] = useState('');
+  const [serviceType, setServiceType] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [renewal, setRenewal] = useState('all');
+  const [event, setEvent] = useState('');
+  const [requestNumber, setRequestNumber] = useState('');
+  const [protocolNumber, setProtocolNumber] = useState('');
+  const [notification, setNotification] = useState('');
+  const [acp, setAcp] = useState('');
+  const [avcb, setAvcb] = useState('');
+  const [dae, setDae] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [page, setPage] = useState(1);
+  const [officialSummaryTarget, setOfficialSummaryTarget] = useState<FenixAccountRequest | null>(null);
+  const [officialSummary, setOfficialSummary] = useState<OfficialRequestSummaryResponse | null>(null);
+  const [officialSummaryLoading, setOfficialSummaryLoading] = useState(false);
+  const [officialSummaryError, setOfficialSummaryError] = useState('');
+  const officialSummaryRequestVersion = useRef(0);
+  const [projectDetails, setProjectDetails] = useState<RequesterProjectDetailsResponse | null>(null);
+  const [projectDetailsLoading, setProjectDetailsLoading] = useState(false);
+  const [projectDetailsError, setProjectDetailsError] = useState('');
+  const projectDetailsRequestVersion = useRef(0);
+  const [requestDetailTab, setRequestDetailTab] = useState<'summary' | 'project' | 'responsibles' | 'history'>('summary');
+  const [paymentsTarget, setPaymentsTarget] = useState<FenixAccountRequest | null>(null);
+  const [officialPayments, setOfficialPayments] = useState<OfficialRequestPaymentsResponse | null>(null);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentsError, setPaymentsError] = useState('');
+  const paymentsRequestVersion = useRef(0);
+  const pageSize = 25;
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    api<{ requests: FenixAccountRequest[] }>('/api/requests')
+      .then((result) => { if (active) { setRequests(result.requests); setError(''); } })
+      .catch((e) => { if (active) setError(e instanceof Error ? e.message : 'Não foi possível carregar as solicitações.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [lastSync, reloadVersion]);
+  useEffect(() => setPage(1), [query, serviceType, status, renewal, event, requestNumber, protocolNumber, notification, acp, avcb, dae, sourceFilter, dateFrom, dateTo]);
+  const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+  const contains = (value: string, needle: string) => !needle.trim() || normalize(value).includes(normalize(needle));
+  const renewalState = (value: string) => /^(s|sim|true|1|yes)$/.test(normalize(value)) ? 'yes' : /^(n|nao|false|0|sem)$/.test(normalize(value)) ? 'no' : 'unknown';
+  const filtered = requests.filter((item) => {
+    const matchesSource = sourceFilter === 'all' || (sourceFilter === 'primary' ? !item.sourceConnectionId : item.sourceConnectionId === sourceFilter);
+    const date = dateKeyInBahia(item.protocolDate);
+    const matchesDate = (!dateFrom || (date && date >= dateFrom)) && (!dateTo || (date && date <= dateTo));
+    const matchesRenewal = renewal === 'all' || renewalState(item.renewal) === renewal;
+    const matchesText = contains(`${item.buildingReference} ${item.municipality} ${item.remoteId} ${item.requestNumber} ${item.protocolNumber} ${item.serviceType} ${item.status} ${item.renewal} ${item.event} ${item.notificationNumber} ${item.acpProtocol} ${item.avcbNumber} ${item.daeNumber} ${item.sourceAccountName || ''}`, query);
+    return matchesSource && matchesDate && matchesRenewal && matchesText
+      && (serviceType === 'all' || normalize(item.serviceType) === normalize(serviceType))
+      && (status === 'all' || normalize(item.status) === normalize(status))
+      && contains(item.event, event) && contains(item.requestNumber, requestNumber) && contains(item.protocolNumber, protocolNumber)
+      && contains(item.notificationNumber, notification) && contains(item.acpProtocol, acp)
+      && contains(item.avcbNumber, avcb) && contains(item.daeNumber, dae);
+  });
+  const serviceOptions = [...new Set([...['Análise', 'Reanálise', 'Vistoria', 'Revistoria', 'Análise Simplificada', 'Reanálise Simplificada'], ...requests.map((item) => item.serviceType)].filter(Boolean))];
+  const statusOptions = [...new Set(requests.map((item) => item.status).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const buildingById = new Map(buildings.map((building) => [building.id, building]));
+  const exportRows: ExcelCell[][] = filtered.map((item) => [item.sourceAccountName || 'Conta principal', item.buildingReference, item.municipality, item.serviceType, item.requestNumber, item.protocolNumber, item.status, item.renewal, item.event, formatDate(item.protocolDate), item.notificationNumber, item.acpProtocol, item.avcbNumber, item.daeNumber]);
+  const clearFilters = () => { setQuery(''); setServiceType('all'); setStatus('all'); setRenewal('all'); setEvent(''); setRequestNumber(''); setProtocolNumber(''); setNotification(''); setAcp(''); setAvcb(''); setDae(''); setSourceFilter('all'); setDateFrom(''); setDateTo(''); };
+  const loadProjectDetails = async (item: FenixAccountRequest) => {
+    const requestVersion = ++projectDetailsRequestVersion.current;
+    setProjectDetails(null);
+    setProjectDetailsError('');
+    setProjectDetailsLoading(true);
+    try {
+      const result = await api<RequesterProjectDetailsResponse>(`/api/requests/${encodeURIComponent(item.id)}/project-details`);
+      if (requestVersion === projectDetailsRequestVersion.current) setProjectDetails(result);
+    } catch (e) {
+      if (requestVersion === projectDetailsRequestVersion.current) setProjectDetailsError(e instanceof Error ? e.message : 'Não foi possível consultar os dados do projeto no Fênix.');
+    } finally {
+      if (requestVersion === projectDetailsRequestVersion.current) setProjectDetailsLoading(false);
+    }
+  };
+  const loadOfficialSummary = async (item: FenixAccountRequest) => {
+    const requestVersion = ++officialSummaryRequestVersion.current;
+    setOfficialSummaryTarget(item);
+    setOfficialSummary(null);
+    setOfficialSummaryError('');
+    setOfficialSummaryLoading(true);
+    setRequestDetailTab('summary');
+    void loadProjectDetails(item);
+    try {
+      const result = await api<OfficialRequestSummaryResponse>(`/api/requests/${encodeURIComponent(item.id)}/official-summary`);
+      if (requestVersion === officialSummaryRequestVersion.current) setOfficialSummary(result);
+    } catch (e) {
+      if (requestVersion === officialSummaryRequestVersion.current) setOfficialSummaryError(e instanceof Error ? e.message : 'Não foi possível consultar a lista oficial do Fênix.');
+    } finally {
+      if (requestVersion === officialSummaryRequestVersion.current) setOfficialSummaryLoading(false);
+    }
+  };
+  const closeOfficialSummary = () => {
+    officialSummaryRequestVersion.current += 1;
+    projectDetailsRequestVersion.current += 1;
+    setOfficialSummaryTarget(null);
+    setOfficialSummary(null);
+    setOfficialSummaryError('');
+    setOfficialSummaryLoading(false);
+    setProjectDetails(null);
+    setProjectDetailsError('');
+    setProjectDetailsLoading(false);
+  };
+  const loadPayments = async (item: FenixAccountRequest) => {
+    const requestVersion = ++paymentsRequestVersion.current;
+    setPaymentsTarget(item);
+    setOfficialPayments(null);
+    setPaymentsError('');
+    setPaymentsLoading(true);
+    try {
+      const result = await api<OfficialRequestPaymentsResponse>(`/api/requests/${encodeURIComponent(item.id)}/payments`);
+      if (requestVersion === paymentsRequestVersion.current) setOfficialPayments(result);
+    } catch (e) {
+      if (requestVersion === paymentsRequestVersion.current) setPaymentsError(e instanceof Error ? e.message : 'Não foi possível consultar os pagamentos desta solicitação.');
+    } finally {
+      if (requestVersion === paymentsRequestVersion.current) setPaymentsLoading(false);
+    }
+  };
+  const closePayments = () => {
+    paymentsRequestVersion.current += 1;
+    setPaymentsTarget(null);
+    setOfficialPayments(null);
+    setPaymentsError('');
+    setPaymentsLoading(false);
+  };
+  useEffect(() => {
+    if (!officialSummaryTarget) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') closeOfficialSummary(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [officialSummaryTarget]);
+  useEffect(() => {
+    if (!paymentsTarget) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') closePayments(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [paymentsTarget]);
+  const hasFilters = Boolean(query || serviceType !== 'all' || status !== 'all' || renewal !== 'all' || event || requestNumber || protocolNumber || notification || acp || avcb || dae || sourceFilter !== 'all' || dateFrom || dateTo);
+  return <section className="building-section request-workspace">
+    <div className="section-title-row"><div><h2>Minhas solicitações <span>{filtered.length}</span></h2><p>Lista da conta sincronizada com o Fênix, incluindo solicitações sem edificação selecionada para acompanhamento.</p></div><ExcelExportButton filename="fenix-solicitacoes" sheetName="Solicitações" columns={['Conta Fênix', 'Edificação', 'Município', 'Serviço', 'Nº da Solicitação', 'Nº do Protocolo', 'Status', 'Renovação', 'Evento', 'Data do protocolo', 'Notificação', 'ACP', 'AVCB', 'DAE']} rows={exportRows} /></div>
+    <div className="request-filter-grid">
+      <label>Tipo de serviço<select value={serviceType} onChange={(e) => setServiceType(e.target.value)}><option value="all">Todos</option>{serviceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label>Status<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">Todos</option>{statusOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label>Renovação<select value={renewal} onChange={(e) => setRenewal(e.target.value)}><option value="all">Todas</option><option value="yes">Sim</option><option value="no">Não</option></select></label>
+      <label>Evento<input value={event} onChange={(e) => setEvent(e.target.value)} placeholder="Filtrar evento" /></label>
+      <label>Nº da Solicitação<input value={requestNumber} onChange={(e) => setRequestNumber(e.target.value)} placeholder="Número da solicitação" /></label>
+      <label>Nº do Protocolo<input value={protocolNumber} onChange={(e) => setProtocolNumber(e.target.value)} placeholder="Número do protocolo" /></label>
+      <label>Número da notificação<input value={notification} onChange={(e) => setNotification(e.target.value)} placeholder="Notificação" /></label>
+      <label>Protocolo ACP<input value={acp} onChange={(e) => setAcp(e.target.value)} placeholder="ACP" /></label>
+      <label>Número do AVCB<input value={avcb} onChange={(e) => setAvcb(e.target.value)} placeholder="AVCB" /></label>
+      <label>Número do DAE<input value={dae} onChange={(e) => setDae(e.target.value)} placeholder="DAE" /></label>
+      {sourceAccounts.length > 0 && <label>Conta Fênix<select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}><option value="all">Todas</option><option value="primary">Conta principal</option>{sourceAccounts.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>}
+      <div className="request-date-filter"><DateRangePicker from={dateFrom} to={dateTo} onApply={(from, to) => { setDateFrom(from); setDateTo(to); }} label="Data do protocolo" /></div>
+      <label className="request-search-field">Buscar<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Edificação, município, solicitação ou protocolo" /></label>
+    </div>
+    {hasFilters && <button className="text-link request-clear-filters" type="button" onClick={clearFilters}>Limpar filtros</button>}
+    {error && <div className="settings-message error" role="alert">{error}<button className="text-link" type="button" onClick={() => setReloadVersion((value) => value + 1)} disabled={loading}>{loading ? 'Consultando…' : 'Tentar novamente'}</button></div>}
+    <div className="table-wrap"><table className="request-table"><thead><tr><th>EDIFICAÇÃO</th><th>TIPO DE SERVIÇO</th><th>SOLICITAÇÃO / PROTOCOLO</th><th>STATUS</th><th>DATA</th><th>NOTIFICAÇÃO</th><th>DAE</th><th></th></tr></thead><tbody>
+      {pageRows.map((item) => {
+        const building = item.buildingId ? buildingById.get(item.buildingId) : undefined;
+        const renewalValue = normalize(item.renewal);
+        return <tr key={item.id} className={building ? 'clickable-row' : ''} onClick={() => building && onOpen(building, 'Projetos', item.processId)}>
+          <td><b>{item.buildingReference || 'Edificação não identificada'}</b><small className="table-subtext">{item.municipality || 'Município não informado'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} />{!building && item.remoteBuildingId ? <small className="table-subtext">Edificação fora da seleção atual</small> : !item.remoteBuildingId ? <small className="table-subtext">Solicitação sem edificação identificada</small> : null}</td>
+          <td>{item.serviceType || 'Solicitação'}{renewalValue && !/^(n|nao|false|0|sem)$/.test(renewalValue) && <small className="table-subtext">Renovação · {item.renewal}</small>}{item.event && <small className="table-subtext">Evento · {item.event}</small>}</td>
+          <td><b className="protocol-text">Solicitação · {item.requestNumber || 'Não informado'}</b><small className="table-subtext">Protocolo · {item.protocolNumber || 'Não informado'}</small>{item.acpProtocol && <small className="table-subtext">ACP · {item.acpProtocol}</small>}{item.avcbNumber && <small className="table-subtext">AVCB · {item.avcbNumber}</small>}</td>
+          <td><StatusPill status={item.status || 'Sem status'}/></td><td>{formatDate(item.protocolDate)}</td><td>{item.notificationNumber || '—'}</td><td>{item.daeNumber || '—'}</td>
+          <td><div className="request-row-actions"><button className="request-payments-button" type="button" onClick={(e) => { e.stopPropagation(); void loadPayments(item); }}>Pagamentos</button><button className="request-official-button" type="button" onClick={(e) => { e.stopPropagation(); void loadOfficialSummary(item); }}>Ver dados no Fênix</button>{building ? <button className="row-open" aria-label={`Abrir solicitação ${item.requestNumber || item.remoteId}`} onClick={(e) => { e.stopPropagation(); onOpen(building, 'Projetos', item.processId); }}><ArrowRight size={15} /></button> : item.remoteBuildingId ? <button className="text-link" type="button" onClick={(e) => { e.stopPropagation(); onManageBuildings(); }}>Selecionar edificação</button> : null}</div></td>
+        </tr>;
+      })}
+      {!loading && !error && !pageRows.length && <tr><td colSpan={8} className="empty-row"><Search size={20} /><b>{requests.length ? 'Nenhuma solicitação encontrada' : 'Nenhuma solicitação sincronizada'}</b><span>{requests.length ? 'Ajuste os filtros e tente novamente.' : 'Atualize os dados do Fênix para carregar a lista da conta.'}</span></td></tr>}
+      {loading && <tr><td colSpan={8} className="empty-row"><LoaderCircle size={18} className="spin" /><b>Carregando solicitações</b><span>Consultando a lista salva pela sincronização do Fênix.</span></td></tr>}
+    </tbody></table></div>
+    <div className="table-foot"><span>{filtered.length} solicitação{filtered.length === 1 ? '' : 'ões'} · origem: lista da conta no Fênix</span><div className="table-pagination"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>Anterior</button><span>{page} / {pageCount}</span><button onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>Próxima</button></div></div>
+    {officialSummaryTarget && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closeOfficialSummary()}><section className="help-dialog request-official-dialog" role="dialog" aria-modal="true" aria-labelledby="official-request-summary-title" aria-busy={officialSummaryLoading || projectDetailsLoading}>
+      <header><div><span className="help-icon"><FileText size={20} /></span><div><h2 id="official-request-summary-title">Solicitação no Fênix</h2><p>{officialSummaryTarget.requestNumber || officialSummaryTarget.remoteId} · {officialSummaryTarget.sourceAccountName || 'Conta principal'}</p></div></div><button className="icon-button" type="button" onClick={closeOfficialSummary} aria-label="Fechar dados da solicitação"><X size={18} /></button></header>
+      <nav className="request-detail-tabs" role="tablist" aria-label="Detalhes da solicitação">
+        <button type="button" role="tab" aria-selected={requestDetailTab === 'summary'} className={requestDetailTab === 'summary' ? 'active' : ''} onClick={() => setRequestDetailTab('summary')}>Solicitação</button>
+        <button type="button" role="tab" aria-selected={requestDetailTab === 'project'} className={requestDetailTab === 'project' ? 'active' : ''} onClick={() => setRequestDetailTab('project')}>Projeto</button>
+        <button type="button" role="tab" aria-selected={requestDetailTab === 'responsibles'} className={requestDetailTab === 'responsibles' ? 'active' : ''} onClick={() => setRequestDetailTab('responsibles')}>Responsáveis técnicos</button>
+        <button type="button" role="tab" aria-selected={requestDetailTab === 'history'} className={requestDetailTab === 'history' ? 'active' : ''} onClick={() => setRequestDetailTab('history')}>Histórico</button>
+      </nav>
+      {requestDetailTab === 'summary' ? officialSummaryLoading ? <div className="help-content"><section><LoaderCircle size={18} className="spin" /> Consultando a lista oficial do Fênix…</section></div> : officialSummaryError ? <div className="help-content"><section><div className="settings-message error" role="alert">{officialSummaryError}</div><button className="button button-outline" type="button" onClick={() => void loadOfficialSummary(officialSummaryTarget)}>Tentar novamente</button></section></div> : officialSummary ? <div className="help-content">
+        <section><b>Resumo da linha oficial</b><p>Leitura atualizada da lista pessoal de solicitações; a ficha de projeto e seu histórico ficam nas outras abas.</p>
+          <div className="request-official-fields">
+            <div><small>Nº da solicitação</small><strong>{officialSummary.request.requestNumber || '—'}</strong></div>
+            <div><small>Nº do protocolo</small><strong>{officialSummary.request.protocolNumber || '—'}</strong></div>
+            <div><small>Identificador na lista</small><strong>{officialSummary.request.remoteId || '—'}</strong></div>
+            <div><small>Edificação</small><strong>{officialSummary.request.buildingReference || '—'}</strong></div>
+            <div><small>Município</small><strong>{officialSummary.request.municipality || '—'}</strong></div>
+            <div><small>Tipo de serviço</small><strong>{officialSummary.request.serviceType || '—'}</strong></div>
+            <div><small>Status</small><strong>{officialSummary.request.status || '—'}</strong></div>
+            <div><small>Renovação</small><strong>{officialSummary.request.renewal || '—'}</strong></div>
+            <div><small>Evento</small><strong>{officialSummary.request.event || '—'}</strong></div>
+            <div><small>Data do protocolo</small><strong>{formatDate(officialSummary.request.protocolDate)}</strong></div>
+            <div><small>Notificação</small><strong>{officialSummary.request.notificationNumber || '—'}</strong></div>
+            <div><small>Protocolo ACP</small><strong>{officialSummary.request.acpProtocol || '—'}</strong></div>
+            <div><small>AVCB</small><strong>{officialSummary.request.avcbNumber || '—'}</strong></div>
+            <div><small>DAE</small><strong>{officialSummary.request.daeNumber || '—'}</strong></div>
+          </div>
+        </section>
+        <section><b>Consulta oficial</b><p><strong>Conta:</strong> {officialSummary.sourceAccountName || 'Conta principal'}</p><p><strong>Consultado em:</strong> {formatDate(officialSummary.readAt)}</p></section>
+      </div> : <div className="help-content"><section>O Fênix não retornou os dados da solicitação.</section></div> : projectDetailsLoading ? <div className="help-content"><section><LoaderCircle size={18} className="spin" /> Consultando o projeto vinculado no Fênix…</section></div> : projectDetailsError ? <div className="help-content"><section><div className="settings-message error" role="alert">{projectDetailsError}</div><button className="button button-outline" type="button" onClick={() => void loadProjectDetails(officialSummaryTarget)}>Tentar novamente</button></section></div> : projectDetails ? <div className="help-content">
+        {requestDetailTab === 'project' && <section><b>Dados do Projeto Técnico</b><div className="request-project-fields">
+          <div><small>Número do projeto</small><strong>{projectDetails.project.projectNumber || '—'}</strong></div><div><small>Tipo de projeto</small><strong>{projectDetails.project.projectType || '—'}</strong></div><div><small>Status oficial</small><strong>{projectDetails.project.status || '—'}</strong></div>
+          <div><small>Edificação</small><strong>{projectDetails.project.building.reference || officialSummaryTarget.buildingReference || '—'}</strong></div><div><small>Endereço</small><strong>{projectDetails.project.building.address || '—'}</strong></div><div><small>Município</small><strong>{projectDetails.project.building.municipality || officialSummaryTarget.municipality || '—'}</strong></div>
+          <div><small>Área total</small><strong>{formatArea(projectDetails.project.building.totalArea)}</strong></div><div><small>Área construída</small><strong>{formatArea(projectDetails.project.building.buildingArea)}</strong></div><div><small>Área a construir</small><strong>{formatArea(projectDetails.project.building.areaToBeBuilt)}</strong></div>
+          <div><small>Pavimentos</small><strong>{projectDetails.project.building.floors ?? '—'}</strong></div><div><small>Altura</small><strong>{projectDetails.project.building.height || '—'}</strong></div><div><small>Atividade</small><strong>{projectDetails.project.activity || '—'}</strong></div>
+          <div><small>Risco</small><strong>{projectDetails.project.risk || '—'}</strong></div><div><small>Proprietário</small><strong>{projectDetails.project.ownerName || '—'}</strong></div><div><small>Responsável</small><strong>{projectDetails.project.responsibleName || '—'}</strong></div>
+        </div>
+        {projectDetails.project.occupations.length > 0 && <div className="request-project-list"><b>Ocupação e divisão</b>{projectDetails.project.occupations.map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}</div>}
+        {projectDetails.project.securityMeasures.length > 0 && <div className="request-project-list"><b>Medidas de segurança</b>{projectDetails.project.securityMeasures.map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}</div>}
+        <p className="request-project-read-note">Dados lidos do detalhe do projeto e da edificação vinculada · {formatDate(projectDetails.readAt)}</p>
+        </section>}
+        {requestDetailTab === 'responsibles' && <section><b>Responsáveis técnicos</b>{projectDetails.project.technicalResponsibles.length ? <div className="request-project-responsibles">{projectDetails.project.technicalResponsibles.map((person, index) => <article key={`${person.name || 'responsavel'}-${person.registration || index}`}><strong>{person.name || 'Nome não informado'}</strong><span>{person.council || 'Conselho não informado'}{person.registration ? ` · ${person.registration}` : ''}</span>{person.role && <small>{person.role}</small>}</article>)}</div> : <p>O detalhe do projeto não retornou responsáveis técnicos identificáveis.</p>}</section>}
+        {requestDetailTab === 'history' && <section><b>Histórico do Projeto Técnico</b>{projectDetails.project.history.length ? <div className="request-project-history">{projectDetails.project.history.map((event, index) => <article key={`${event.startedAt || 'etapa'}-${index}`}><span className={`request-project-history-dot ${event.current ? 'current' : ''}`} /><div><strong>{event.status}{event.current && <small>Atual</small>}</strong><span>{event.startedAt ? formatDate(event.startedAt) : 'Data não informada'}{event.endedAt ? ` · até ${formatDate(event.endedAt)}` : ''}</span></div></article>)}</div> : <p>O Fênix não retornou etapas de histórico para este projeto.</p>}</section>}
+        <section><b>Origem</b><p><strong>Conta:</strong> {projectDetails.sourceAccountName}</p></section>
+      </div> : <div className="help-content"><section>O Fênix não retornou dados para esta aba.</section></div>}
+      <footer><button className="button button-outline" type="button" onClick={closeOfficialSummary}>Fechar</button></footer>
+    </section></div>}
+    {paymentsTarget && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closePayments()}><section className="help-dialog request-payments-dialog" role="dialog" aria-modal="true" aria-labelledby="official-request-payments-title" aria-busy={paymentsLoading}>
+      <header><div><span className="help-icon"><FileText size={20} /></span><div><h2 id="official-request-payments-title">Pagamentos da solicitação</h2><p>DAEs associados · consulta somente leitura</p></div></div><button className="icon-button" type="button" onClick={closePayments} aria-label="Fechar pagamentos"><X size={18} /></button></header>
+      {paymentsLoading ? <div className="help-content"><section><LoaderCircle size={18} className="spin" /> Consultando os DAEs associados no Fênix…</section></div> : paymentsError ? <div className="help-content"><section><div className="settings-message error" role="alert">{paymentsError}</div><button className="button button-outline" type="button" onClick={() => void loadPayments(paymentsTarget)}>Tentar novamente</button></section></div> : officialPayments ? <div className="help-content">
+        <section><b>DAEs vinculados</b><p>Dados retornados pelo Fênix em uma consulta somente leitura. A opção Abrir DAE leva a guia oficial à SEFAZ-BA; o Painel não processa pagamentos nem emite ou recalcula guias.</p>
+          {officialPayments.daes.length ? <div className="request-payments-table-wrap"><table className="request-payments-table"><thead><tr><th>Nº do DAE</th><th>Tipo de taxa</th><th>Status</th><th>Vencimento</th><th>Valor devido</th><th>Valor pago</th><th>Data de pagamento</th><th>Guia</th></tr></thead><tbody>
+            {officialPayments.daes.map((dae) => <tr key={dae.id}><td>{dae.number || '—'}</td><td>{dae.type || '—'}</td><td>{dae.status || '—'}</td><td>{formatDate(dae.dueDate)}</td><td>{dae.amountDue || '—'}</td><td>{dae.amountPaid || '—'}</td><td>{formatDate(dae.paymentDate)}</td><td>{dae.hasDocument && paymentsTarget ? <a className="button button-outline button-sm" href={`/api/requests/${encodeURIComponent(paymentsTarget.id)}/payments/${encodeURIComponent(dae.id)}/open`} target="_blank" rel="noopener noreferrer" aria-label={`Abrir o DAE ${dae.number || dae.id} na SEFAZ-BA`}>Abrir DAE</a> : '—'}</td></tr>)}
+          </tbody></table></div> : <p>Nenhum DAE associado foi retornado para esta solicitação.</p>}
+          <p><strong>Consultado em:</strong> {formatDate(officialPayments.readAt)}</p>
+        </section>
+      </div> : <div className="help-content"><section>O Fênix não retornou os pagamentos desta solicitação.</section></div>}
+      <footer><button className="button button-outline" type="button" onClick={closePayments}>Fechar</button></footer>
+    </section></div>}
+  </section>;
+}
+
+function RequesterProfileWorkspace({ sourceAccounts, primaryProfile }: { sourceAccounts: Array<{ id: string; label: string }>; primaryProfile?: { name: string; email: string } }) {
+  const [sourceAccountKey, setSourceAccountKey] = useState('primary');
+  const [profileResponse, setProfileResponse] = useState<RequesterProfileResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const requestVersion = useRef(0);
+  const loadProfile = useCallback(async (accountKey: string) => {
+    const currentVersion = ++requestVersion.current;
+    setLoading(true);
+    setError('');
+    setProfileResponse(null);
+    try {
+      const result = await api<RequesterProfileResponse>(`/api/fenix/requester-profile/${encodeURIComponent(accountKey)}`);
+      if (currentVersion === requestVersion.current) setProfileResponse(result);
+    } catch (reason) {
+      if (currentVersion === requestVersion.current) setError(reason instanceof Error ? reason.message : 'Não foi possível consultar o perfil desta conta Fênix.');
+    } finally {
+      if (currentVersion === requestVersion.current) setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void loadProfile(sourceAccountKey);
+    return () => { requestVersion.current += 1; };
+  }, [loadProfile, sourceAccountKey]);
+
+  const normalizedError = error.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+  const accountPaused = /pausad|retome|retomar/.test(normalizedError);
+  const accountNeedsReauthentication = /reconect|sessao|autentic/.test(normalizedError);
+  const verification = profileResponse?.profile.verification;
+  const recoveryLink = sourceAccountKey === 'primary'
+    ? '/configuracoes?secao=perfil#settings-fenix-primary'
+    : '/configuracoes?secao=perfil#settings-fenix-accounts';
+  const recoveryLabel = accountPaused && accountNeedsReauthentication
+    ? 'Retomar ou reconectar em Configurações'
+    : accountPaused ? 'Retomar conta em Configurações' : sourceAccountKey === 'primary' ? 'Reconectar conta principal' : 'Reconectar conta em Configurações';
+
+  return <section className="building-section requester-profile-workspace">
+    <div className="requester-profile-toolbar">
+      <div><span className="section-kicker">CONTA DO SOLICITANTE</span><h2>Dados do perfil</h2><p>Consulta somente leitura do perfil e da verificação de autenticidade.</p></div>
+      <label>Conta Fênix<select value={sourceAccountKey} onChange={(event) => { setLoading(true); setError(''); setProfileResponse(null); setSourceAccountKey(event.target.value); }}><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>
+    </div>
+    {loading ? <section className="requester-profile-state" aria-busy="true"><LoaderCircle size={18} className="spin" /><span>Consultando perfil da conta Fênix…</span></section> : error ? <section className="requester-profile-state requester-profile-error"><div className="settings-message error" role="alert">{error}</div><div className="requester-profile-error-actions"><button className="button button-outline" type="button" onClick={() => void loadProfile(sourceAccountKey)}><RefreshCw size={14} /> Tentar novamente</button>{(accountPaused || accountNeedsReauthentication) && <Link className="button button-outline" to={recoveryLink}>{recoveryLabel}</Link>}</div></section> : profileResponse ? <>
+      <div className="requester-profile-card">
+        <div className="requester-profile-card-heading"><span className="requester-profile-icon"><User size={19} /></span><div><span className="section-kicker">IDENTIFICAÇÃO</span><h3>Dados pessoais</h3></div></div>
+        <div className="requester-profile-fields">
+          <div><small>Nome</small><strong>{profileResponse.profile.name || (sourceAccountKey === 'primary' ? primaryProfile?.name : '') || '—'}</strong></div>
+          <div><small>E-mail</small><strong>{profileResponse.profile.email || (sourceAccountKey === 'primary' ? primaryProfile?.email : '') || '—'}</strong></div>
+          <div><small>Telefone</small><strong>{profileResponse.profile.telephone || '—'}</strong></div>
+        </div>
+      </div>
+      <div className="requester-profile-card">
+        <div className="requester-profile-card-heading"><span className="requester-profile-icon"><ShieldCheck size={19} /></span><div><span className="section-kicker">AUTENTICIDADE</span><h3>Verificação de autenticidade</h3></div></div>
+        {verification ? <div className="requester-profile-fields requester-verification-fields">
+          <div><small>Status</small><strong>{verification.status || 'Não informado'}</strong></div>
+          <div><small>Estado</small><strong>{verification.active === null ? 'Não informado' : verification.active ? 'Ativa' : 'Inativa'}</strong></div>
+          <div><small>Documentos registrados</small><strong>{Number.isFinite(verification.documentCount) ? verification.documentCount : '—'}</strong></div>
+          <div><small>Criada em</small><strong>{formatDate(verification.createdAt)}</strong></div>
+          <div><small>Atualizada em</small><strong>{formatDate(verification.updatedAt)}</strong></div>
+          <div><small>Iniciada em</small><strong>{formatDate(verification.startTime)}</strong></div>
+        </div> : <p className="requester-profile-empty">Não há dados de verificação de autenticidade disponíveis para esta conta.</p>}
+      </div>
+    </> : null}
+  </section>;
+}
+
+function RequesterSurveysWorkspace({ sourceAccounts }: { sourceAccounts: Array<{ id: string; label: string }> }) {
+  const [surveys, setSurveys] = useState<RequesterSurvey[]>([]);
+  const [warning, setWarning] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [accountKey, setAccountKey] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 25;
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
+    setWarning('');
+    setSurveys([]);
+    api<RequesterSurveysResponse>('/api/fenix/vistorias')
+      .then((result) => {
+        if (!active) return;
+        const rows = Array.isArray(result.vistorias) ? result.vistorias : [];
+        setSurveys(rows);
+        const warningMessages = [...new Set((result.warnings || []).map((item) => item.message).filter(Boolean))];
+        setWarning(warningMessages.join(' ') || (result.partial ? 'Uma ou mais contas não puderam ser consultadas; a lista pode estar parcial.' : ''));
+      })
+      .catch((reason) => {
+        if (active) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar as vistorias do Fênix.');
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [reloadVersion]);
+
+  const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+  const statusOptions = [...new Set(surveys.map((item) => item.status).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const filtered = surveys.filter((item) => {
+    const text = [item.requestNumber, item.protocolNumber, item.type, item.status, item.buildingReference, item.address, item.municipality, item.sourceAccountName].join(' ');
+    const date = dateKeyInBahia(item.date);
+    const matchesDate = (!dateFrom && !dateTo) || Boolean(date && (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo));
+    return (status === 'all' || normalize(item.status) === normalize(status))
+      && (accountKey === 'all' || item.sourceAccountKey === accountKey)
+      && matchesDate
+      && (!query.trim() || normalize(text).includes(normalize(query)));
+  });
+  useEffect(() => setPage(1), [status, accountKey, dateFrom, dateTo, query]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const clearFilters = () => { setQuery(''); setStatus('all'); setAccountKey('all'); setDateFrom(''); setDateTo(''); };
+
+  return <section className="building-section request-workspace survey-workspace">
+    <div className="section-title-row"><div><h2>Vistorias <span>{filtered.length}</span></h2><p>Consulta somente leitura das vistorias vinculadas às suas solicitações pessoais no Fênix.</p></div><button className="button button-outline button-sm" type="button" onClick={() => setReloadVersion((value) => value + 1)} disabled={loading} aria-busy={loading}>{loading ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} {loading ? 'Consultando…' : 'Atualizar lista'}</button></div>
+    <div className="request-filter-grid survey-filter-grid">
+      <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">Todos</option>{statusOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+      <label>Conta Fênix<select value={accountKey} onChange={(event) => setAccountKey(event.target.value)}><option value="all">Todas as contas</option><option value="primary">Conta principal</option>{sourceAccounts.map((account) => <option value={account.id} key={account.id}>{account.label}</option>)}</select></label>
+      <label>Data a partir de<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+      <label>Data até<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+      <label className="request-search-field">Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Solicitação, protocolo, serviço, edificação ou município" /></label>
+      <button className="button button-outline button-sm survey-clear-filters" type="button" onClick={clearFilters} disabled={!query && status === 'all' && accountKey === 'all' && !dateFrom && !dateTo}>Limpar filtros</button>
+    </div>
+    {warning && <div className="service-list-warning" role="status"><Info size={16} /><span><b>A lista pode estar incompleta.</b> {warning}</span></div>}
+    {error && <div className="settings-message error" role="alert">{error} <button className="text-link" type="button" onClick={() => setReloadVersion((value) => value + 1)} disabled={loading}>{loading ? 'Consultando…' : 'Tentar novamente'}</button></div>}
+    <div className="table-wrap"><table className="request-table survey-table"><thead><tr><th>Nº DA SOLICITAÇÃO</th><th>Nº DO PROTOCOLO</th><th>TIPO DE SERVIÇO</th><th>STATUS</th><th>DATA</th><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>CONTA</th></tr></thead><tbody>
+      {pageRows.map((item) => <tr key={`${item.sourceAccountKey}-${item.id}`}>
+        <td><b>{item.requestNumber || '—'}</b></td><td>{item.protocolNumber || '—'}</td><td>{item.type || '—'}</td><td><StatusPill status={item.status || 'Sem status'} /></td><td>{formatDate(item.date)}</td><td title={item.address || undefined}>{item.buildingReference || item.address || '—'}</td><td>{item.municipality || '—'}</td><td>{item.sourceAccountName || 'Conta não identificada'}</td>
+      </tr>)}
+      {!loading && !error && !pageRows.length && <tr><td colSpan={8} className="empty-row"><Search size={20} /><b>{surveys.length ? 'Nenhuma vistoria encontrada' : 'Nenhuma vistoria retornada'}</b><span>{surveys.length ? 'Ajuste os filtros e tente novamente.' : 'A lista oficial não retornou vistorias vinculadas às solicitações da sua conta.'}</span></td></tr>}
+      {loading && <tr><td colSpan={8} className="empty-row"><LoaderCircle size={18} className="spin" /><b>Carregando vistorias</b><span>Consultando as contas Fênix acompanhadas.</span></td></tr>}
+    </tbody></table></div>
+    <div className="table-foot"><span>{filtered.length} vistoria{filtered.length === 1 ? '' : 's'} · consulta somente leitura</span><div className="table-pagination"><button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>Anterior</button><span>{page} / {pageCount}</span><button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>Próxima</button></div></div>
+  </section>;
+}
+
+function FenixServiceListWorkspace({ kind, processes, buildings, onOpen }: {
+  kind: 'sap-migrations' | 'remanejamentos';
+  processes: DashboardProcess[];
+  buildings: Building[];
+  onOpen: (building: Building, tab?: string, processId?: string) => void;
+}) {
+  const [rows, setRows] = useState<Array<SapMigrationRecord | RemanejamentoRecord>>([]);
+  const [warning, setWarning] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const [status, setStatus] = useState('all');
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [detailTarget, setDetailTarget] = useState<ServiceDetailTarget | null>(null);
+  const [serviceDetail, setServiceDetail] = useState<{ kind: 'sap-migrations'; record: SapMigrationDetail } | { kind: 'remanejamentos'; record: RemanejamentoDetail } | null>(null);
+  const detailRequestVersion = useRef(0);
+  const pageSize = 25;
+  const isSapMigration = kind === 'sap-migrations';
+  const title = isSapMigration ? 'Migrações SAP' : 'Remanejamentos';
+  const endpoint = isSapMigration ? '/api/fenix/migracoes-sap' : '/api/fenix/remanejamentos';
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError('');
+    setWarning('');
+    api<{ migrations?: SapMigrationRecord[]; migracoes?: SapMigrationRecord[]; remanejamentos?: RemanejamentoRecord[]; warning?: string | null; partial?: boolean; warnings?: Array<{ accountName?: string; message?: string }> }>(endpoint)
+      .then((result) => {
+        if (!active) return;
+        if (isSapMigration) {
+          setRows((result.migrations || result.migracoes || []).map((item) => ({ ...item, account: item.account || item.sourceAccountName || '' })));
+        } else {
+          setRows((result.remanejamentos || []).map((item) => ({ ...item, account: item.account || item.sourceAccountName || '' })));
+        }
+        const warningMessages = [result.warning || '', ...(result.warnings || []).map((item) => [item.accountName, item.message].filter(Boolean).join(': '))].filter(Boolean);
+        setWarning([...new Set(warningMessages)].join(' ') || (result.partial ? 'Uma ou mais contas não puderam ser consultadas.' : ''));
+      })
+      .catch((reason) => {
+        if (active) setError(reason instanceof Error ? reason.message : `Não foi possível carregar ${title.toLocaleLowerCase('pt-BR')}.`);
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [endpoint, isSapMigration, reloadVersion, title]);
+
+  const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+  const statusOptions = [...new Set(rows.map((item) => item.status).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const filtered = rows.filter((item) => {
+    const text = 'projectNumber' in item
+      ? [item.projectNumber, item.requestNumber, item.sapProtocol, item.status, item.account].join(' ')
+      : [item.requestNumber, item.protocolNumber, item.reference, item.municipality, item.status, item.account].join(' ');
+    return (status === 'all' || normalize(item.status) === normalize(status)) && (!query.trim() || normalize(text).includes(normalize(query)));
+  });
+  useEffect(() => setPage(1), [status, query, kind]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const colSpan = 8;
+  const findLinkedTarget = (linkedProcessId?: string | null) => {
+    if (!linkedProcessId) return undefined;
+    const process = processes.find((item) => item.id === linkedProcessId);
+    const building = process && buildings.find((item) => item.id === process.buildingId);
+    return process && building ? { process, building } : undefined;
+  };
+  useEffect(() => {
+    detailRequestVersion.current += 1;
+    setDetailOpen(false);
+    setDetailLoading(false);
+    setDetailTarget(null);
+    setServiceDetail(null);
+    setDetailError('');
+  }, [kind]);
+  async function loadServiceDetail(target: ServiceDetailTarget) {
+    const requestVersion = ++detailRequestVersion.current;
+    setDetailLoading(true);
+    setDetailError('');
+    const detailEndpoint = `${endpoint}/${encodeURIComponent(target.sourceAccountKey)}/${encodeURIComponent(target.id)}`;
+    try {
+      if (target.kind === 'sap-migrations') {
+        const result = await api<{ migration?: SapMigrationDetail }>(detailEndpoint);
+        if (!result.migration) throw new Error('O Fênix não retornou o detalhe desta migração SAP.');
+        if (requestVersion !== detailRequestVersion.current) return;
+        setServiceDetail({ kind: 'sap-migrations', record: result.migration });
+      } else {
+        const result = await api<{ remanejamento?: RemanejamentoDetail }>(detailEndpoint);
+        if (!result.remanejamento) throw new Error('O Fênix não retornou o detalhe deste remanejamento.');
+        if (requestVersion !== detailRequestVersion.current) return;
+        setServiceDetail({ kind: 'remanejamentos', record: result.remanejamento });
+      }
+    } catch {
+      if (requestVersion === detailRequestVersion.current) setDetailError('Não foi possível carregar os detalhes deste registro. Tente novamente.');
+    } finally {
+      if (requestVersion === detailRequestVersion.current) setDetailLoading(false);
+    }
+  }
+  function openServiceDetail(item: SapMigrationRecord | RemanejamentoRecord) {
+    if (!item.sourceAccountKey || !item.id) return;
+    const target = { kind, sourceAccountKey: item.sourceAccountKey, id: item.id };
+    setDetailTarget(target);
+    setServiceDetail(null);
+    setDetailError('');
+    setDetailOpen(true);
+    void loadServiceDetail(target);
+  }
+  function closeServiceDetail() {
+    detailRequestVersion.current += 1;
+    setDetailOpen(false);
+    setDetailLoading(false);
+    setDetailTarget(null);
+    setServiceDetail(null);
+    setDetailError('');
+  }
+  const serviceDetailTitle = detailTarget?.kind === 'sap-migrations' ? 'Detalhes da migração SAP' : 'Detalhes do remanejamento';
+
+  return <section className="building-section request-workspace service-list-workspace">
+    <div className="section-title-row"><div><h2>{title} <span>{filtered.length}</span></h2><p>Lista somente leitura retornada pelas contas Fênix acompanhadas.</p></div><button className="button button-outline button-sm" type="button" onClick={() => setReloadVersion((value) => value + 1)} disabled={loading} aria-busy={loading}>{loading ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} {loading ? 'Consultando…' : 'Atualizar lista'}</button></div>
+    <div className="request-filter-grid service-list-filter-grid">
+      <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">Todos</option>{statusOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+      <label>Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={isSapMigration ? 'Projeto, solicitação, protocolo SAP ou conta' : 'Solicitação, protocolo, edificação, município ou conta'} /></label>
+    </div>
+    {warning && <div className="service-list-warning" role="status"><Info size={16} /><span><b>A lista pode estar incompleta.</b> {warning}</span></div>}
+    {error && <div className="settings-message error" role="alert">{error} <button className="text-link" type="button" onClick={() => setReloadVersion((value) => value + 1)} disabled={loading}>{loading ? 'Consultando…' : 'Tentar novamente'}</button></div>}
+    <div className="table-wrap"><table className="request-table service-list-table"><thead><tr>{isSapMigration ? <><th>Nº DO PROJETO</th><th>Nº DA SOLICITAÇÃO</th><th>PROTOCOLO SAP</th><th>STATUS</th><th>CRIADA EM</th><th>ATUALIZADA EM</th><th>CONTA</th></> : <><th>Nº DA SOLICITAÇÃO</th><th>Nº DO PROTOCOLO</th><th>EDIFICAÇÃO</th><th>MUNICÍPIO</th><th>ÁREA TOTAL</th><th>STATUS</th><th>CONTA</th></>}<th></th></tr></thead><tbody>
+      {pageRows.map((item) => {
+        const linkedTarget = findLinkedTarget(item.linkedProcessId);
+        return <tr key={`${item.sourceAccountKey || item.account || 'fenix'}-${item.id}`}>
+          {'projectNumber' in item ? <>
+            <td><b>{item.projectNumber || '—'}</b></td><td>{item.requestNumber || '—'}</td><td>{item.sapProtocol || '—'}</td><td><StatusPill status={item.status || 'Sem status'} /></td><td>{formatDate(item.createdAt)}</td><td>{formatDate(item.updatedAt)}</td><td>{item.account || 'Conta não identificada'}</td>
+          </> : <>
+            <td><b>{item.requestNumber || '—'}</b></td><td>{item.protocolNumber || '—'}</td><td>{item.reference || 'Edificação não identificada'}</td><td>{item.municipality || '—'}</td><td>{formatArea(item.totalArea)}</td><td><StatusPill status={item.status || 'Sem status'} /></td><td>{item.account || 'Conta não identificada'}</td>
+          </>}
+          <td><div className="row-actions"><button className="button button-outline button-sm" type="button" disabled={!item.sourceAccountKey || !item.id} title={!item.sourceAccountKey || !item.id ? 'Detalhe indisponível sem a conta e o identificador do registro.' : `Consultar detalhe de ${title.toLocaleLowerCase('pt-BR')}`} aria-label={`Ver detalhes de ${title.toLocaleLowerCase('pt-BR')}`} onClick={() => openServiceDetail(item)}>Ver detalhes</button>{item.linkedProcessId && linkedTarget ? <button className="row-open" type="button" aria-label="Abrir ficha do processo relacionado" onClick={() => onOpen(linkedTarget.building, 'Projetos', linkedTarget.process.id)}><ArrowRight size={15} /></button> : item.linkedProcessId ? <small className="table-subtext">Ficha não carregada</small> : <span>—</span>}</div></td>
+        </tr>;
+      })}
+      {!loading && !error && !pageRows.length && <tr><td colSpan={colSpan} className="empty-row"><Search size={20} /><b>{rows.length ? `Nenhum item encontrado em ${title.toLocaleLowerCase('pt-BR')}` : `Nenhum item de ${title.toLocaleLowerCase('pt-BR')} sincronizado`}</b><span>{rows.length ? 'Ajuste o status ou a busca e tente novamente.' : 'Atualize os dados das contas Fênix para consultar a lista.'}</span></td></tr>}
+      {loading && <tr><td colSpan={colSpan} className="empty-row"><LoaderCircle size={18} className="spin" /><b>Carregando {title.toLocaleLowerCase('pt-BR')}</b><span>Consultando os registros retornados pelo Fênix.</span></td></tr>}
+    </tbody></table></div>
+    <div className="table-foot"><span>{filtered.length} registro{filtered.length === 1 ? '' : 's'} · consulta somente leitura</span><div className="table-pagination"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>Anterior</button><span>{page} / {pageCount}</span><button onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>Próxima</button></div></div>
+    {detailOpen && <div className="help-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closeServiceDetail()}><section className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="fenix-service-detail-title" aria-busy={detailLoading}>
+      <header><div><span className="help-icon"><FileText size={20} /></span><div><h2 id="fenix-service-detail-title">{serviceDetailTitle}</h2><p>Detalhe consultado na conta Fênix vinculada.</p></div></div><button className="icon-button" type="button" onClick={closeServiceDetail} aria-label="Fechar detalhes"><X size={18} /></button></header>
+      {detailLoading ? <div className="help-content"><section><LoaderCircle size={18} className="spin" /> Consultando detalhes no Fênix…</section></div> : detailError ? <div className="help-content"><section><div className="settings-message error" role="alert">{detailError}</div><button className="button button-outline" type="button" disabled={!detailTarget} onClick={() => detailTarget && void loadServiceDetail(detailTarget)}>Tentar novamente</button></section></div> : serviceDetail?.kind === 'sap-migrations' ? <div className="help-content">
+        <section><b>Dados da migração</b><p><strong>Status:</strong> {serviceDetail.record.status || '—'}</p><p><strong>Protocolo SAP:</strong> {serviceDetail.record.sapProtocol || '—'}</p><p><strong>Nº do projeto:</strong> {serviceDetail.record.projectNumber || '—'}</p><p><strong>Nº da solicitação:</strong> {serviceDetail.record.requestNumber || '—'}</p><p><strong>Nº do protocolo:</strong> {serviceDetail.record.protocolNumber || '—'}</p><p><strong>Criada em:</strong> {formatDate(serviceDetail.record.createdAt)}</p><p><strong>Atualizada em:</strong> {formatDate(serviceDetail.record.updatedAt)}</p></section>
+        <section><b>Documentos</b>{serviceDetail.record.documents?.length ? serviceDetail.record.documents.map((document, index) => <p key={`${document.name}-${document.type}-${index}`}><strong>{document.name || 'Documento'}</strong><br />{document.type || 'Tipo não informado'} · Criado em {formatDate(document.createdAt)} · Atualizado em {formatDate(document.updatedAt)}</p>) : <p>Nenhum documento listado.</p>}</section>
+      </div> : serviceDetail?.kind === 'remanejamentos' ? <div className="help-content">
+        <section><b>Dados do remanejamento</b><p><strong>Status:</strong> {serviceDetail.record.status || '—'}</p><p><strong>Nº da solicitação:</strong> {serviceDetail.record.requestNumber || '—'}</p><p><strong>Nº do protocolo:</strong> {serviceDetail.record.protocolNumber || '—'}</p><p><strong>Edificação:</strong> {serviceDetail.record.reference || '—'}</p><p><strong>Município:</strong> {serviceDetail.record.municipality || '—'}</p><p><strong>Área total:</strong> {formatArea(serviceDetail.record.totalArea)}</p></section>
+        <section><b>Documentos</b>{serviceDetail.record.documents?.length ? serviceDetail.record.documents.map((document, index) => <p key={`${document.name}-${document.type}-${index}`}><strong>{document.name || 'Documento'}</strong><br />{document.type || 'Tipo não informado'}</p>) : <p>Nenhum documento listado.</p>}</section>
+      </div> : <div className="help-content"><section>O Fênix não retornou os dados de detalhe.</section></div>}
+    </section></div>}
+  </section>;
+}
+
 function RenewalsWorkspace({ records, sourceAccounts, list, onListChange, windowMonths, onWindowChange, onSaveWindow, savingWindow, error, updatingId, onDisposition, onOpen, loading }: {
   records: RenewalRecord[]; list: 'active' | 'archived'; onListChange: (list: 'active' | 'archived') => void;
   sourceAccounts: Array<{ id: string; label: string }>;
@@ -807,9 +1349,11 @@ function DashboardPage() {
   const navigate = useNavigate();
   const view = new URLSearchParams(location.search).get('view') || 'overview';
   useEffect(() => {
-    if (view === 'settings') {
+    if (view === 'profile') {
+      navigate('/configuracoes?secao=perfil', { replace: true });
+    } else if (view === 'settings') {
       const hash = location.hash || '#settings-fenix-primary';
-      navigate(`/configuracoes?secao=contas-fenix${hash}`, { replace: true });
+      navigate(`/configuracoes?secao=perfil${hash}`, { replace: true });
     }
   }, [view, location.hash, navigate]);
   const [filter, setFilter] = useState('Todas');
@@ -889,8 +1433,10 @@ function DashboardPage() {
   if (!data) return <main className="auth-error"><div className="auth-error-icon"><LockKeyhole /></div><h1>Acesso necessário</h1><p>{error || 'Entre com sua conta Fênix para ver as edificações.'}</p><Link className="button button-teal" to="/entrar">Entrar com Fênix <ArrowRight size={16} /></Link></main>;
   const refreshAll = refresh;
   const buildings = data.buildings;
-  const activeNav = view === 'buildings' ? 'Edificações' : view === 'register' ? 'Cadastrar no Fênix' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
-  const viewTitle = view === 'buildings' ? 'Edificações' : view === 'register' ? 'Cadastrar no Fênix' : view === 'projects' ? 'Projetos (ACP)' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const activeNav = view === 'buildings' ? 'Edificações' : view === 'requests' ? 'Solicitações' : view === 'surveys' ? 'Vistorias' : view === 'profile' ? 'Perfil' : view === 'register' ? 'Cadastrar no Fênix' : view === 'projects' ? 'Projetos (ACP)' : view === 'sap-migrations' ? 'Migrações SAP' : view === 'remanejamentos' ? 'Remanejamentos' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const viewTitle = view === 'buildings' ? 'Edificações' : view === 'requests' ? 'Solicitações' : view === 'surveys' ? 'Vistorias' : view === 'profile' ? 'Perfil' : view === 'register' ? 'Cadastrar no Fênix' : view === 'projects' ? 'Projetos (ACP)' : view === 'sap-migrations' ? 'Migrações SAP' : view === 'remanejamentos' ? 'Remanejamentos' : view === 'analysis' ? 'Em Análise' : view === 'notified' ? 'Notificados' : view === 'stopped' ? 'Parados' : view === 'certificates' ? 'AVCBs e CLCBs' : view === 'renewals' ? 'Renovações' : view === 'sync' ? 'Consultas' : 'Visão geral';
+  const isReadOnlyServiceListView = view === 'sap-migrations' || view === 'remanejamentos' || view === 'surveys';
+  const isRequesterProfileView = view === 'profile';
   const viewBuildings = data.buildings;
   const visible = viewBuildings.filter((item) => {
     const matchesText = searchFilters.every((searchFilter) => matchesBuildingSearchFilter(item, searchFilter));
@@ -1054,17 +1600,17 @@ function DashboardPage() {
       </div>
     ) : (
       <div className="page-content dashboard-page">
-        <div className="page-heading"><div><span className="section-kicker">PAINEL DE ACOMPANHAMENTO</span><h1>{viewTitle}</h1><p>{view === 'overview' ? 'Acompanhe suas edificações e processos de segurança contra incêndio.' : view === 'sync' ? 'Acompanhe quando os dados do Fênix foram atualizados.' : `Consulte ${viewTitle.toLocaleLowerCase('pt-BR')} vinculados às edificações do seu cadastro.`}</p></div><div className="page-heading-actions"><button className="button button-teal" type="button" onClick={() => navigate('/painel?view=register')}><Plus size={15} /> Cadastrar no Fênix</button><button className="button button-outline sync-button" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar agora'}</button><button className="icon-button heading-more" onClick={() => setSyncMenu(!syncMenu)} aria-label="Mais opções"><MoreHorizontal size={19} /></button>{syncMenu && <div className="popover"><b>Sincronização automática</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas.</p><span><Clock3 size={13} /> Próxima: {data.sync.intervalMinutes === 0 ? 'desativada; apenas manual' : data.sync.nextSync ? formatDate(data.sync.nextSync) : 'após a primeira consulta'}</span></div>}</div></div>
-        <section className="metrics-grid">{contextualMetrics.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} trend={metric.trend} trendPlain={'trendPlain' in metric ? metric.trendPlain : false} icon={metric.icon} tone={metric.tone} onClick={'filter' in metric && metric.filter ? () => navigate(`/painel?view=${view}&filter=${encodeURIComponent(metric.filter!)}`) : undefined} />)}</section>
+        <div className="page-heading"><div><span className="section-kicker">PAINEL DE ACOMPANHAMENTO</span><h1>{viewTitle}</h1><p>{view === 'overview' ? 'Acompanhe suas edificações e processos de segurança contra incêndio.' : view === 'sync' ? 'Acompanhe quando os dados do Fênix foram atualizados.' : view === 'requests' ? 'Consulte a lista de solicitações vinculada à sua conta do Fênix.' : view === 'surveys' ? 'Consulte as vistorias vinculadas às suas solicitações pessoais no Fênix.' : isRequesterProfileView ? 'Consulte os dados de perfil e a verificação de autenticidade da conta selecionada.' : isReadOnlyServiceListView ? 'Consulte os registros sincronizados das contas Fênix acompanhadas.' : `Consulte ${viewTitle.toLocaleLowerCase('pt-BR')} vinculados às edificações do seu cadastro.`}</p></div><div className="page-heading-actions">{!isReadOnlyServiceListView && !isRequesterProfileView && <button className="button button-teal" type="button" onClick={() => navigate('/painel?view=register')}><Plus size={15} /> Cadastrar no Fênix</button>}{!isRequesterProfileView && <button className="button button-outline sync-button" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar agora'}</button>}{!isRequesterProfileView && <button className="icon-button heading-more" onClick={() => setSyncMenu(!syncMenu)} aria-label="Mais opções"><MoreHorizontal size={19} /></button>}{syncMenu && !isRequesterProfileView && <div className="popover"><b>Sincronização automática</b><p>A frequência é definida em Configurações; use 0 para desativar consultas automáticas.</p><span><Clock3 size={13} /> Próxima: {data.sync.intervalMinutes === 0 ? 'desativada; apenas manual' : data.sync.nextSync ? formatDate(data.sync.nextSync) : 'após a primeira consulta'}</span></div>}</div></div>
+        {view !== 'requests' && !isReadOnlyServiceListView && !isRequesterProfileView && <section className="metrics-grid">{contextualMetrics.map((metric) => <MetricCard key={metric.label} label={metric.label} value={metric.value} trend={metric.trend} trendPlain={'trendPlain' in metric ? metric.trendPlain : false} icon={metric.icon} tone={metric.tone} onClick={'filter' in metric && metric.filter ? () => navigate(`/painel?view=${view}&filter=${encodeURIComponent(metric.filter!)}`) : undefined} />)}</section>}
         {view === 'analysis' && <section className="average-breakdown"><h2>Tempo médio em análise por tipo</h2><p>Tempo decorrido desde a movimentação mais recente de entrada em análise, conforme o histórico do Fênix.</p><div className="average-breakdown-grid">{analysisGroups.map((group) => <div key={group.label}><b>{group.label}</b><strong>{group.value}</strong><small>{group.coverage}</small></div>)}</div></section>}
-        <section className="ai-alert-card"><span className="ai-alert-icon"><Sparkles size={19} /></span><div className="ai-alert-copy"><b>Sinalização automática <span className="ai-label">DADOS</span></b><p>{data.metrics.attention ? `Encontramos ${data.metrics.attention} processo${data.metrics.attention > 1 ? 's' : ''} com status que merece${data.metrics.attention > 1 ? 'm' : ''} atenção. Abra uma edificação para entender os dados e próximos passos.` : 'Não há processos com pendências sinalizadas nos dados sincronizados.'}</p><small>Resumo baseado no status recebido do Fênix · {data.sync.lastSync ? `atualizado ${formatDate(data.sync.lastSync)}` : 'aguardando primeira consulta'}</small></div><button className="button button-ghost" onClick={() => launchAi(null, 'Analise a situação geral das edificações e processos acompanhados, destacando as pendências e prioridades de atenção.')}>Perguntar à IA <ArrowRight size={15} /></button></section>
-        {view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} loading={renewalsLoading} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
+        {view !== 'requests' && !isReadOnlyServiceListView && !isRequesterProfileView && <section className="ai-alert-card"><span className="ai-alert-icon"><Sparkles size={19} /></span><div className="ai-alert-copy"><b>Sinalização automática <span className="ai-label">DADOS</span></b><p>{data.metrics.attention ? `Encontramos ${data.metrics.attention} processo${data.metrics.attention > 1 ? 's' : ''} com status que merece${data.metrics.attention > 1 ? 'm' : ''} atenção. Abra uma edificação para entender os dados e próximos passos.` : 'Não há processos com pendências sinalizadas nos dados sincronizados.'}</p><small>Resumo baseado no status recebido do Fênix · {data.sync.lastSync ? `atualizado ${formatDate(data.sync.lastSync)}` : 'aguardando primeira consulta'}</small></div><button className="button button-ghost" onClick={() => launchAi(null, 'Analise a situação geral das edificações e processos acompanhados, destacando as pendências e prioridades de atenção.')}>Perguntar à IA <ArrowRight size={15} /></button></section>}
+        {view === 'surveys' ? <RequesterSurveysWorkspace sourceAccounts={data.sourceAccounts || []} /> : view === 'profile' ? <RequesterProfileWorkspace sourceAccounts={data.sourceAccounts || []} /> : view === 'sap-migrations' ? <FenixServiceListWorkspace kind="sap-migrations" processes={data.processes} buildings={data.buildings} onOpen={openBuilding} /> : view === 'remanejamentos' ? <FenixServiceListWorkspace kind="remanejamentos" processes={data.processes} buildings={data.buildings} onOpen={openBuilding} /> : view === 'requests' ? <RequestsWorkspace buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} lastSync={data.sync.lastSync} onOpen={openBuilding} onManageBuildings={() => navigate('/painel?view=sync')} /> : view === 'renewals' ? <RenewalsWorkspace sourceAccounts={data.sourceAccounts || []} records={renewals} loading={renewalsLoading} list={renewalList} onListChange={(list) => { setRenewalList(list); setRenewals([]); }} windowMonths={renewalWindow} onWindowChange={setRenewalWindow} onSaveWindow={() => void saveRenewalWindow()} savingWindow={savingRenewalWindow} error={renewalError} updatingId={updatingRenewalId} onDisposition={(item, disposition) => void updateRenewalDisposition(item, disposition)} onOpen={(buildingId, processId) => { const building = data.buildings.find((candidate) => candidate.id === buildingId); if (building) openBuilding(building, 'Histórico', processId); }} /> : view === 'sync' ? <><FenixConnectionsPanel user={data.user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { await refresh(); }} /><section className="sync-view-card"><div className="sync-view-icon"><Cloud size={20} /></div><div className="sync-view-copy"><span className="section-kicker">CONEXÃO PRINCIPAL</span><h2>Estado da sincronização</h2><p>{data.sync.message || 'As consultas usam a sessão autenticada do Fênix e somente leitura.'}</p><small>Última sincronização concluída: {data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não realizada'}</small></div><div className={`sync-view-status ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><i />{data.sync.status === 'error' ? 'Última consulta falhou' : 'Conectado'}</div><button className="button button-outline" onClick={() => void syncNow()} disabled={updateInProgress} aria-busy={updateInProgress}><RefreshCw size={15} className={updateInProgress ? 'spin' : ''} /> {updateInProgress ? 'Atualizando' : 'Atualizar tudo'}</button></section><section className="sync-history"><div className="section-title-row"><div><h2>Histórico de consultas</h2><p>Execuções locais da sincronização da conta principal, mais recentes primeiro.</p></div><span className="sync-history-count">{data.sync.runs.length} registros</span></div>{data.sync.runs.length ? data.sync.runs.map((run) => <div className="sync-history-row" key={run.id}><span className={`sync-history-icon ${run.status === 'error' ? 'sync-history-error' : ''}`}><RefreshCw size={16} /></span><span><b>{run.status === 'error' ? 'Consulta com erro' : run.status === 'running' ? 'Consulta em andamento' : 'Consulta concluída'}</b><small>{run.message || 'Sem resumo retornado'}</small></span><time>{formatDate(run.completedAt || run.startedAt)}</time></div>) : <div className="sync-history-empty">Ainda não há execuções registradas.</div>}</section></> : ['projects', 'analysis', 'notified', 'stopped', 'certificates'].includes(view) ? <ProcessWorkspace view={view} processes={data.processes} buildings={data.buildings} sourceAccounts={data.sourceAccounts || []} historyRefreshStatus={data.historyRefresh.status} processMenuFilters={processMenuFilters} searchInputRef={searchInputRef} onOpen={openBuilding} onAsk={(building, prompt) => launchAi(building, prompt)} /> : <section className="building-section">
           <div className="section-title-row"><div><h2>Minhas edificações <span>{viewBuildings.length}</span></h2><p>Processos e situações vinculados às edificações acompanhadas.</p></div><div className="section-actions"><ExcelExportButton filename="fenix-edificacoes" sheetName="Edificações" columns={['Conta Fênix', 'Edificação', 'Município', 'Área total', 'Pavimentos', 'Protocolo', 'Tipo de processo', 'Servidor Responsável', 'Status', 'Etapa atual', 'Última atualização', 'Quantidade de processos']} rows={buildingExportRows} /><button className="text-link" onClick={() => { setSearchFilters([]); setBuildingSearchQuery(''); setFilter('Todas'); }}>Ver todas <ArrowRight size={15} /></button></div></div>
           <div className="table-toolbar building-table-toolbar"><div className="filter-tabs">{['Todas', 'Em análise', 'Aguardando ação', 'Aprovadas'].map((tab) => <button key={tab} className={filter === tab ? 'selected' : ''} onClick={() => setFilter(tab)}>{tab}<span>{tab === 'Todas' ? viewBuildings.length : tab === 'Em análise' ? viewBuildings.filter((x) => /an[aá]lise/i.test(x.status)).length : tab === 'Aguardando ação' ? viewBuildings.filter((x) => /pend|exig|document|retific/i.test(x.status)).length : viewBuildings.filter((x) => /aprov|homolog|conclu/i.test(x.status)).length}</span></button>)}</div><div className="building-filter-row"><BuildingFilterSearch filters={searchFilters} sourceAccounts={data.sourceAccounts || []} inputRef={searchInputRef} query={buildingSearchQuery} onQueryChange={setBuildingSearchQuery} onAdd={(nextFilter) => setSearchFilters((current) => [...current, nextFilter])} onRemove={(id) => setSearchFilters((current) => current.filter((item) => item.id !== id))} /><DateRangePicker from={appliedBuildingDateFrom} to={appliedBuildingDateTo} onApply={(from, to) => { setAppliedBuildingDateFrom(from); setAppliedBuildingDateTo(to); }} label="Última atualização" /></div></div>
           <div className="table-wrap"><table className="building-list-table"><thead><tr><th>EDIFICAÇÃO / REFERÊNCIA</th><th>MUNICÍPIO</th><th>ÁREA (M²)</th><th>PROCESSO / PROTOCOLO</th><th>ETAPA ATUAL</th><th>ÚLTIMA ATUALIZAÇÃO</th><th></th></tr></thead><tbody>{pageRows.map((item) => <tr key={item.id} onClick={() => openBuilding(item)} className="clickable-row"><td><span className="building-cell"><span className="building-thumb"><Building2 size={17} /></span><span className="building-cell-copy"><b>{item.reference}</b><span className="building-details-line"><small className="building-floor-count">{item.floors ? `${item.floors} ${item.floors === 1 ? 'pavimento' : 'pavimentos'}` : 'Edificação cadastrada'}</small><AccountSourceBadge name={item.sourceAccountName} paused={item.sourceAccountPaused} /></span></span></span></td><td><span className="city-cell"><MapPin size={13} />{item.municipality || '—'}</span></td><td>{formatArea(item.area)}</td><td><b className="protocol-text">{item.protocol}</b><small className="table-subtext">{item.processType}</small>{item.notifiedBy && <small className="table-subtext table-notified-by" title={`Servidor Responsável: ${item.notifiedBy}`}>Servidor Responsável: {item.notifiedBy}</small>}</td><td><StatusPill status={item.status} /></td><td><span className="sync-time">{formatDate(item.lastUpdated || (data.historyRefresh.status === "running" ? "Atualizando histórico…" : null))}</span></td><td><div className="row-actions"><button className="ai-row-button" onClick={(event) => { event.stopPropagation(); launchAi(item, 'Explique a situação atual desta edificação com base nos processos sincronizados e indique pendências e próximos passos.'); }} title="Entender situação com IA"><Sparkles size={15} /></button><button className="row-open" onClick={(event) => { event.stopPropagation(); openBuilding(item); }} aria-label="Abrir detalhes"><ArrowRight size={15} /></button></div></td></tr>)}{visible.length === 0 && <tr><td colSpan={7} className="empty-row"><Search size={20} /><b>{view === 'documents' ? 'Nenhum documento listado' : view === 'requests' ? 'Nenhuma solicitação ou vistoria encontrada' : view === 'projects' ? 'Nenhum projeto técnico encontrado' : 'Nenhuma edificação encontrada'}</b><span>{view === 'documents' ? 'O Fênix não retornou metadados de anexos na consulta atual.' : 'Ajuste a busca ou os filtros e tente novamente.'}</span></td></tr>}</tbody></table></div>
           <div className="table-foot"><span>Exibindo <b>{visible.length ? (page - 1) * pageSize + 1 : 0}–{Math.min(page * pageSize, visible.length)}</b> de <b>{visible.length}</b> edificações · {visibleProcessCount} processos nas edificações exibidas</span><div className="table-foot-right"><label className="page-size-select">Por página<select value={buildingPageSize} onChange={(event) => { setBuildingPageSize(event.target.value === 'all' ? 'all' : Number(event.target.value)); setPage(1); }} aria-label="Quantidade de edificações por página"><option value={50}>50</option><option value={75}>75</option><option value={100}>100</option><option value={150}>150</option><option value="all">Todos</option></select></label><span className={`sync-state ${data.sync.status === 'error' ? 'sync-failed' : ''}`}><span className="connection-dot" /> {data.sync.status === 'error' ? 'Falha na consulta' : `Última atualização: ${data.sync.lastSync ? formatDate(data.sync.lastSync) : 'ainda não sincronizado'}`}</span>{pageCount > 1 && <nav className="table-pagination" aria-label="Paginação da lista"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>Anterior</button><span>{page} / {pageCount}</span><button onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount}>Próxima</button></nav>}</div></div>
         </section>}
-        <section className="bottom-insight"><span className="insight-icon"><Sparkles size={19} /></span><div className="insight-copy"><div className="insight-title"><b>Leitura contextual com IA</b><span className="ai-label">SOB DEMANDA</span></div><p>Selecione uma edificação para entender o status, as etapas e as informações disponíveis no Fênix.</p></div><button className="button button-ai-outline" onClick={() => visible[0] && launchAi(visible[0], `Explique a situação atual da edificação ${visible[0].reference}, considerando seus processos, etapas, documentos e próximos passos.`)} disabled={!visible.length}><Sparkles size={14} /> Explicar processo <ArrowRight size={14} /></button></section>
+        {view !== 'requests' && !isReadOnlyServiceListView && !isRequesterProfileView && <section className="bottom-insight"><span className="insight-icon"><Sparkles size={19} /></span><div className="insight-copy"><div className="insight-title"><b>Leitura contextual com IA</b><span className="ai-label">SOB DEMANDA</span></div><p>Selecione uma edificação para entender o status, as etapas e as informações disponíveis no Fênix.</p></div><button className="button button-ai-outline" onClick={() => visible[0] && launchAi(visible[0], `Explique a situação atual da edificação ${visible[0].reference}, considerando seus processos, etapas, documentos e próximos passos.`)} disabled={!visible.length}><Sparkles size={14} /> Explicar processo <ArrowRight size={14} /></button></section>}
       </div>
     )}
     {selected && (
@@ -1160,8 +1706,10 @@ function deriveFallbackFenixActions(buildingId: string, process?: ProcessDetail)
 
   const actions: FenixProcessAction[] = [];
 
-  // 1. Vistoria / Revistoria
-  if (/vistoria/i.test(combined) && /notific|pend|indefer|exig|reprov/i.test(combined)) {
+  // 1. Vistoria / Revistoria (espelho grosseiro do servidor; ao vivo,
+  // homologado-sap nunca gera POST — abre a solicitação existente)
+  const isHomologadoSap = /homologado[\s_-]*sap/i.test(combined);
+  if (!isHomologadoSap && /vistoria/i.test(combined) && /notific|pend|indefer|exig|reprov/i.test(combined)) {
     actions.push({
       key: 'solicitar_revistoria',
       label: 'Solicitar Revistoria',
@@ -1172,7 +1720,7 @@ function deriveFallbackFenixActions(buildingId: string, process?: ProcessDetail)
       confirmTitle: 'Solicitar Revistoria no Fênix',
       confirmMessage: `Deseja solicitar revistoria para o processo ${process.protocol || ''}? O CBMBA agendará uma nova vistoria da edificação.`
     });
-  } else if (/vistoria/i.test(combined) || /pronto para vistoria|aguardando vistoria/i.test(combined)) {
+  } else if (!isHomologadoSap && (/vistoria/i.test(combined) || /pronto para vistoria|aguardando vistoria/i.test(combined))) {
     actions.push({
       key: 'solicitar_vistoria',
       label: 'Solicitar Vistoria',
@@ -1230,8 +1778,8 @@ function deriveFallbackFenixActions(buildingId: string, process?: ProcessDetail)
   if (/projeto t[eé]cnico|\bpts?\b/i.test(type) && !/homolog|aprov|cancel|conclu/i.test(combined)) {
     actions.push({
       key: 'editar_projeto',
-      label: 'Editar Projeto / Rascunho',
-      shortLabel: 'Editar',
+      label: 'Preparar rascunho local do projeto',
+      shortLabel: 'Rascunho local',
       icon: 'edit',
       tone: 'wine',
       kind: 'edit_draft'
@@ -1277,8 +1825,9 @@ function deriveFallbackFenixActions(buildingId: string, process?: ProcessDetail)
     });
   }
 
-  // 8. Cancelar solicitação
-  if (/solicita[cç]/i.test(type) && !/homolog|aprov|cancel|conclu/i.test(combined)) {
+  // 8. Cancelar solicitação (espelho grosseiro; ao vivo só em
+  // pendente-de-documentacao/pagamento, com gate de slug/tipo no servidor)
+  if (/solicita[cç]/i.test(type) && /pendente/i.test(combined) && !/homolog|aprov|cancel|conclu/i.test(combined)) {
     actions.push({
       key: 'cancelar_solicitacao',
       label: 'Cancelar Solicitação',
@@ -1312,13 +1861,16 @@ function FenixProcessActionsBar({
   const [loadingActionKey, setLoadingActionKey] = useState<string | null>(null);
   const [confirmingAction, setConfirmingAction] = useState<FenixProcessAction | null>(null);
   const [submittingMutation, setSubmittingMutation] = useState(false);
-  const [actionError, setActionError] = useState<{ message: string; is401?: boolean } | null>(null);
+  const [actionError, setActionError] = useState<{ message: string; is401?: boolean; pending?: boolean } | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ tone: 'success' | 'error'; message: string; is401?: boolean } | null>(null);
 
   if (!process) return null;
 
-  const actions = deriveFallbackFenixActions(buildingId, process);
-  if (!actions.length) return null;
+  const discoveredActions = deriveFallbackFenixActions(buildingId, process);
+  const unavailableActionKeys = new Set(['reavaliacao_renovacao', 'solicitar_renovacao', 'cancelar_solicitacao', 'cancelar_processo']);
+  const unavailableActions = discoveredActions.filter((action) => unavailableActionKeys.has(action.key));
+  const actions = discoveredActions.filter((action) => !unavailableActionKeys.has(action.key));
+  if (!actions.length && !unavailableActions.length) return null;
 
   const handleDownload = async (action: FenixProcessAction) => {
     const url = action.downloadUrl || `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/${action.key === 'baixar_notificacao' ? 'notification' : action.key === 'baixar_certificado' ? 'certificate' : 'protocol'}`;
@@ -1393,13 +1945,23 @@ function FenixProcessActionsBar({
     setSubmittingMutation(true);
     setActionError(null);
     try {
-      const result = await api<{ ok?: boolean; message?: string }>(
+      const result = await api<{ ok?: boolean; verification?: 'confirmed' | 'pending'; message?: string }>(
         `/api/buildings/${encodeURIComponent(buildingId)}/processes/${encodeURIComponent(process.id)}/fenix-action`,
         {
           method: 'POST',
           body: JSON.stringify({ action: confirmingAction.key, confirmed: true })
         }
       );
+      if (result.verification === 'pending') {
+        setActionError({
+          message: result.message || 'Aguarde a confirmação por leitura no Fênix. Esta tentativa não será reenviada.',
+          pending: true
+        });
+        return;
+      }
+      if (result.ok !== true || result.verification !== 'confirmed') {
+        throw new Error(result.message || 'O Fênix ainda não confirmou o resultado da ação.');
+      }
       const successMessage = result.message || `${confirmingAction.label} executado com sucesso no Fênix.`;
       setConfirmingAction(null);
       onActionSuccess(successMessage);
@@ -1449,6 +2011,8 @@ function FenixProcessActionsBar({
         })}
       </div>
 
+      {unavailableActions.length > 0 && <div className="fenix-actions-unavailable-note" role="status"><b>Aguardando validação no Fênix:</b> {unavailableActions.map((action) => action.label).join(' · ')}. O Painel habilitará essas ações após confirmar rota, permissão do perfil e leitura posterior do resultado.</div>}
+
       {actionFeedback && (
         <div className={`fenix-action-feedback-inline ${actionFeedback.tone}`} role="status">
           <div className="fenix-action-feedback-content">
@@ -1497,7 +2061,7 @@ function FenixProcessActionsBar({
                 <span>Esta solicitação altera diretamente o processo no Fênix CBMBA e pode gerar novas exigências ou taxas.</span>
               </div>
               {actionError && (
-                <div className="fenix-action-error-box">
+                  <div className={`fenix-action-error-box ${actionError.pending ? 'pending' : ''}`}>
                   <CircleAlert size={15} />
                   <div>
                     <span>{actionError.message}</span>
@@ -1538,12 +2102,12 @@ function FenixProcessActionsBar({
                 {submittingMutation ? (
                   <>
                     <LoaderCircle size={15} className="spin" />
-                    <span>Enviando ao Fênix...</span>
+                    <span>{actionError?.pending ? 'Consultando o Fênix...' : 'Enviando ao Fênix...'}</span>
                   </>
                 ) : (
                   <>
                     <Check size={15} />
-                    <span>Confirmar no Fênix</span>
+                    <span>{actionError?.pending ? 'Consultar resultado no Fênix' : 'Confirmar no Fênix'}</span>
                   </>
                 )}
               </button>
@@ -1826,7 +2390,7 @@ function BuildingDrawer({ building, initialTab = 'Edificação', initialProcessI
                </Suspense>
              </div>
            )}
-           {!isOdooTab && (tab === 'Documentos' ? documentsPanel : tab === 'Histórico' ? historyPanel : <>
+           {!isOdooTab && (tab === 'Documentos' ? <>{documentsPanel}<Suspense fallback={<div className="detail-loading"><LoaderCircle size={16} className="spin" /> Carregando documentos do Painel…</div>}><BuildingUploadDocuments buildingId={building.id} processes={allProcesses} demo={demo} /></Suspense></> : tab === 'Histórico' ? historyPanel : <>
              <div className="detail-section-heading"><div><span className="section-kicker">SITUAÇÃO DO PROCESSO</span><h3>{tab === 'Edificação' ? 'Andamento atual' : tab}</h3></div>{process && <StatusPill status={process.status} />}</div>
              {process ? <>
                <div className="current-status-card fenix-status-card">
@@ -3045,30 +3609,23 @@ function formatWebhookDate(value: string | null) {
   if (!value || !Number.isFinite(Date.parse(value))) return '—';
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Bahia' }).format(new Date(value));
 }
-function WebhookLogPage() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [user, setUser] = useState<{ name: string; demo: boolean } | null>(null);
+function WebhookLogContent({ demo }: { demo: boolean }) {
   const [deliveries, setDeliveries] = useState<WebhookDeliveryLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [resendingId, setResendingId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [log, me] = await Promise.all([
-        api<{ deliveries: WebhookDeliveryLog[] }>('/api/webhook/log?limit=200'),
-        api<{ user: { name: string; demo: boolean } }>('/api/auth/me')
-      ]);
-      setDeliveries(log.deliveries); setUser(me.user); setError('');
+      const log = await api<{ deliveries: WebhookDeliveryLog[] }>('/api/webhook/log?limit=200');
+      setDeliveries(log.deliveries); setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Não foi possível carregar o log.');
-      if (!user) navigate('/entrar');
     } finally { setLoading(false); }
-  }
-  useEffect(() => { void load(); }, [location.key]);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
   async function resend(delivery: WebhookDeliveryLog) {
     setResendingId(delivery.id); setMessage(''); setError('');
     try {
@@ -3081,22 +3638,21 @@ function WebhookLogPage() {
   }
   const normalizedQuery = query.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
   const visible = deliveries.filter((item) => !normalizedQuery || [item.title, item.message, item.buildingName, item.protocol, ...item.documents.map((doc) => doc.name)].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').includes(normalizedQuery));
-  if (!user) return <div className="loading-screen"><LoaderCircle className="spin" size={24} /></div>;
-  return <Shell user={user} active="Log do webhook"><div className="page-content webhook-log-page">
-    <div className="page-heading"><div><span className="section-kicker">INTEGRAÇÕES</span><h1>Log do webhook</h1><p>Consulte as entregas, arquivos associados e reenvie um payload quando necessário.</p></div><div className="page-heading-actions"><button className="button button-outline" onClick={() => void load()} disabled={loading}>{loading ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} Atualizar</button><Link to="/configuracoes?secao=integracoes" className="button button-outline"><Settings size={15} /> Configurar webhook</Link></div></div>
-    <div className="webhook-log-note"><ShieldCheck size={16} /><span>Os payloads ficam criptografados no banco para permitir reenvio. O Base64 dos documentos não é exibido nesta tela. O log mantém os 500 envios mais recentes.</span></div>
+  return <div className="webhook-log-content">
+    <div className="settings-card webhook-log-card"><div className="settings-card-heading"><span className="settings-card-icon"><ListChecks size={19} /></span><div><h2>Log de entregas</h2><p>Consulte os envios do webhook, arquivos associados e histórico de tentativas.</p></div><button className="button button-outline" onClick={() => void load()} disabled={loading}>{loading ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} Atualizar</button></div>
+    <div className="webhook-log-note"><ShieldCheck size={16} /><span>Os payloads ficam criptografados no banco para permitir reenvio. O Base64 dos documentos não é exibido aqui. O log mantém os 500 envios mais recentes.</span></div>
     {message && <div className="settings-message webhook-log-message">{message}</div>}{error && <div className="settings-message error webhook-log-message">{error}</div>}
-    <section className="settings-card webhook-log-card"><div className="webhook-log-toolbar"><div><b>{visible.length} {visible.length === 1 ? 'envio' : 'envios'}</b><small> · {deliveries.filter((item) => item.status === 'failed').length} com falha</small></div><label className="webhook-log-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar processo, edificação ou documento" /></label></div>
+    <div className="webhook-log-toolbar"><div><b>{visible.length} {visible.length === 1 ? 'envio' : 'envios'}</b><small> · {deliveries.filter((item) => item.status === 'failed').length} com falha</small></div><label className="webhook-log-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar processo, edificação ou documento" /></label></div>
       {loading && !deliveries.length ? <div className="webhook-log-empty"><LoaderCircle className="spin" size={18} /> Carregando envios...</div> : !visible.length ? <div className="webhook-log-empty"><ListChecks size={20} /><b>Nenhum envio encontrado</b><span>Os próximos testes e notificações aparecerão aqui.</span></div> : <div className="webhook-log-list">{visible.map((item) => <article className="webhook-log-row" key={item.id}>
         <div className="webhook-log-row-main"><div className="webhook-log-title"><div><b>{item.title || item.event}</b><small>{formatWebhookDate(item.createdAt)} · {item.event}</small></div><span className={`webhook-delivery-status ${item.status}`}><i />{item.status === 'delivered' ? 'Entregue' : item.status === 'sending' ? 'Enviando' : 'Falhou'}{item.lastHttpStatus ? ` · HTTP ${item.lastHttpStatus}` : ''}</span></div>
           <div className="webhook-log-process"><b>{item.buildingName || 'Edificação não identificada'}</b><span>{item.protocol || item.processId || 'Sem protocolo'}</span><p>{item.message}</p></div>
           <div className="webhook-log-documents"><b>Documentos ({item.documents.length})</b>{item.documents.length ? <div>{item.documents.map((doc, index) => <span className={`webhook-document-chip ${doc.availability === 'included' ? 'included' : ''}`} key={`${doc.name}-${index}`} title={`${doc.type} · ${doc.source}`}><FileText size={13} />{doc.name}{doc.availability === 'included' ? ' · Base64' : ' · metadados'}</span>)}</div> : <small>Nenhum documento associado</small>}</div>
           {item.lastError && <p className="webhook-log-error"><CircleAlert size={14} />{item.lastError}</p>}
           <details className="webhook-attempt-details"><summary>{item.attempts} {item.attempts === 1 ? 'tentativa' : 'tentativas'} · ver histórico</summary>{item.attemptHistory.map((attempt, index) => <div key={`${attempt.attemptedAt}-${index}`}><span>{formatWebhookDate(attempt.attemptedAt)} · {attempt.source === 'manual' ? 'reenvio manual' : attempt.source === 'test' ? 'teste' : 'automático'}</span><b>{attempt.status === 'delivered' ? 'Entregue' : 'Falhou'}{attempt.httpStatus ? ` · HTTP ${attempt.httpStatus}` : ''}</b>{attempt.error && <small>{attempt.error}</small>}</div>)}</details>
-        </div><div className="webhook-log-row-action"><button className="button button-outline" onClick={() => void resend(item)} disabled={resendingId !== null || user.demo}>{resendingId === item.id ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />} Reenviar</button></div>
+        </div><div className="webhook-log-row-action"><button className="button button-outline" onClick={() => void resend(item)} disabled={resendingId !== null || demo}>{resendingId === item.id ? <LoaderCircle size={15} className="spin" /> : <RotateCcw size={15} />} Reenviar</button></div>
       </article>)}</div>}
-    </section>
-  </div></Shell>;
+    </div>
+  </div>;
 }
 
 type FenixConnectionSummary = {
@@ -3146,8 +3702,8 @@ function FenixConnectionsPanel({ user, revision, onAdd, onManage, onReauthentica
   async function sync(connection: FenixConnectionSummary) {
     setBusyId(connection.id); setSyncingId(connection.id); setMessage(''); setError('');
     try {
-      const result = await api<{ syncWarning?: boolean; error?: string }>('/api/fenix-connections/' + encodeURIComponent(connection.id) + '/sync', { method: 'POST' });
-      setMessage(result.syncWarning ? 'A conexão foi consultada, mas a atualização teve falhas.' : `Dados de ${connection.label} atualizados.`);
+      const result = await api<{ syncWarning?: boolean; error?: string; requestsOnly?: boolean; message?: string }>('/api/fenix-connections/' + encodeURIComponent(connection.id) + '/sync', { method: 'POST' });
+      setMessage(result.syncWarning ? 'A conexão foi consultada, mas a atualização teve falhas.' : result.message || `Dados de ${connection.label} atualizados.`);
       await load({ silent: true }); await onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível atualizar essa conta.'); await load({ silent: true }); }
     finally { setBusyId(''); setSyncingId(''); }
@@ -3201,13 +3757,13 @@ function FenixConnectionsPanel({ user, revision, onAdd, onManage, onReauthentica
           <WordCarouselLoader
             size="sm"
             prefix="Sincronizando"
-            words={["edificações da conta", "processos no Fênix", "vistorias e notificações"]}
+          words={["solicitações da conta", "edificações selecionadas", "processos e vistorias"]}
           />
         </div>
       )}
-      <div className="fenix-connection-top"><span className="connection-company-icon"><Cloud size={18} /></span><div className="fenix-connection-title"><div><b>{connection.label}</b><span className={`settings-status ${connection.status === 'active' ? 'active' : ''}`}><i />{connectionStatusLabel(connection.status)}</span></div><small>{connection.selectedCount} {connection.selectedCount === 1 ? 'edificação acompanhada' : 'edificações acompanhadas'} · última consulta {connection.lastSync ? formatDate(connection.lastSync) : 'ainda não realizada'}</small>{connection.syncMessage && connection.status !== 'active' && <small className="connection-last-error">{connection.syncMessage}</small>}</div></div>
+      <div className="fenix-connection-top"><span className="connection-company-icon"><Cloud size={18} /></span><div className="fenix-connection-title"><div><b>{connection.label}</b><span className={`settings-status ${connection.status === 'active' ? 'active' : ''}`}><i />{connectionStatusLabel(connection.status)}</span></div><small>{connection.selectedCount} {connection.selectedCount === 1 ? 'edificação acompanhada' : 'edificações acompanhadas'}{connection.selectedCount ? '' : ' · solicitações da conta continuam sincronizadas'} · última consulta {connection.lastSync ? formatDate(connection.lastSync) : 'ainda não realizada'}</small>{connection.syncMessage && connection.status !== 'active' && <small className="connection-last-error">{connection.syncMessage}</small>}</div></div>
       {editingId === connection.id && <form className="connection-rename-form" onSubmit={(event) => { event.preventDefault(); void saveLabel(connection); }}><label>Nome desta conexão<input value={editingLabel} maxLength={60} onChange={(event) => setEditingLabel(event.target.value)} autoFocus /></label><button className="button button-teal button-sm" disabled={busyId === connection.id}><Check size={14} /> Salvar</button><button className="button button-outline button-sm" type="button" onClick={() => setEditingId('')}>Cancelar</button></form>}
-      <div className="fenix-connection-actions"><button className="button button-outline button-sm" onClick={() => onManage(connection)}><Building2 size={14} /> Gerenciar edificações</button>{connection.status === 'reauth_required' && <button className="button button-outline button-sm" onClick={() => onReauthenticate(connection)}><KeyRound size={14} /> Reconectar</button>}<button className="button button-outline button-sm" onClick={() => void sync(connection)} disabled={busyId === connection.id || connection.paused || !connection.selectedCount} title={!connection.selectedCount ? 'Selecione edificações para consultar esta conta.' : undefined}>{busyId === connection.id ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} Atualizar</button><button className="button button-outline button-sm" onClick={() => void update(connection, { paused: !connection.paused }, connection.paused ? 'Sincronização retomada.' : 'Sincronização pausada.') } disabled={busyId === connection.id}>{connection.paused ? <Play size={14} /> : <Pause size={14} />}{connection.paused ? 'Retomar' : 'Pausar'}</button><button className="button button-outline button-sm" onClick={() => { setEditingId(connection.id); setEditingLabel(connection.label); setError(''); }}><Pencil size={14} /> Renomear</button><button className="button button-danger button-sm" onClick={() => setConfirmRemoveId(confirmRemoveId === connection.id ? '' : connection.id)} disabled={busyId === connection.id}><Trash2 size={14} /> Remover</button></div>
+      <div className="fenix-connection-actions"><button className="button button-outline button-sm" onClick={() => onManage(connection)}><Building2 size={14} /> Gerenciar edificações</button>{connection.status === 'reauth_required' && <button className="button button-outline button-sm" onClick={() => onReauthenticate(connection)}><KeyRound size={14} /> Reconectar</button>}<button className="button button-outline button-sm" onClick={() => void sync(connection)} disabled={busyId === connection.id || connection.paused} title={!connection.selectedCount ? 'Atualiza as solicitações da conta; nenhuma edificação está selecionada.' : undefined}>{busyId === connection.id ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />} Atualizar</button><button className="button button-outline button-sm" onClick={() => void update(connection, { paused: !connection.paused }, connection.paused ? 'Sincronização retomada.' : 'Sincronização pausada.') } disabled={busyId === connection.id}>{connection.paused ? <Play size={14} /> : <Pause size={14} />}{connection.paused ? 'Retomar' : 'Pausar'}</button><button className="button button-outline button-sm" onClick={() => { setEditingId(connection.id); setEditingLabel(connection.label); setError(''); }}><Pencil size={14} /> Renomear</button><button className="button button-danger button-sm" onClick={() => setConfirmRemoveId(confirmRemoveId === connection.id ? '' : connection.id)} disabled={busyId === connection.id}><Trash2 size={14} /> Remover</button></div>
       <label className="connection-webhook-toggle"><input type="checkbox" checked={connection.webhookEnabled} onChange={(event) => void update(connection, { webhookEnabled: event.target.checked }, event.target.checked ? 'Mudanças dessa conta serão enviadas ao webhook.' : 'O webhook foi desativado para essa conta.')} /><span><b>Enviar mudanças ao webhook</b><small>Desativado por padrão para novas contas.</small></span></label>
       {confirmRemoveId === connection.id && <div className="connection-delete-confirm" role="alert"><b>Excluir conexão e dados locais?</b><p>A sessão, as edificações, processos, históricos, notificações e conversas dessa conta serão apagados do painel. Isso não altera o Fênix.</p><button className="button button-danger button-sm" onClick={() => void remove(connection)} disabled={busyId === connection.id}>{busyId === connection.id ? 'Excluindo…' : 'Excluir conexão e dados'}</button><button className="button button-outline button-sm" onClick={() => setConfirmRemoveId('')}>Cancelar</button></div>}
     </article>)}</div> : <div className="connection-empty"><Cloud size={20} /><b>Nenhuma conta de cliente conectada</b><span>Adicione uma conta Fênix para selecionar edificações de clientes.</span>{user.demo && <small>Entre com uma conta real da empresa para conectar contas adicionais.</small>}</div>}
@@ -3393,13 +3949,18 @@ function FenixConnectionModal({ mode, connection, onClose, onSaved }: {
 }
 
 const SETTINGS_SECTIONS = [
+  { id: 'perfil', title: 'Perfil', summary: 'Dados e contas Fênix', description: 'Consulte o perfil do solicitante e gerencie as contas Fênix vinculadas ao painel.', icon: User },
   { id: 'preferencias', title: 'Preferências', summary: 'Painel, filtros e prazos', description: 'Ajuste a atualização dos dados, o contexto de consulta e as listas do painel.', icon: Settings },
   { id: 'assistente', title: 'Assistente de IA', summary: 'Chave e privacidade', description: 'Configure o acesso à IA e revise como os dados são usados nas respostas.', icon: Sparkles },
-  { id: 'integracoes', title: 'Integrações', summary: 'Odoo e webhook', description: 'Gerencie as conexões com o Odoo e os serviços da empresa.', icon: Cloud },
-  { id: 'contas-fenix', title: 'Contas Fênix', summary: 'Contas e acesso', description: 'Gerencie contas acompanhadas e o acesso principal ao Fênix.', icon: Building2 }
+  { id: 'integracoes', title: 'Integrações', summary: 'Odoo e webhook', description: 'Gerencie as conexões com o Odoo, o webhook e consulte os registros de entrega.', icon: Cloud }
 ] as const;
 
 const SETTINGS_ANCHORS = {
+  perfil: [
+    { id: 'settings-profile-data', label: 'Perfil do solicitante' },
+    { id: 'settings-fenix-accounts', label: 'Contas Fênix vinculadas' },
+    { id: 'settings-fenix-primary', label: 'Acesso principal ao Fênix' }
+  ],
   preferencias: [
     { id: 'settings-preferences-ai-sync', label: 'IA e atualização automática' },
     { id: 'settings-preferences-filters', label: 'Filtros dos menus' },
@@ -3412,11 +3973,8 @@ const SETTINGS_ANCHORS = {
   ],
   integracoes: [
     { id: 'settings-integration-odoo', label: 'Integração Odoo' },
-    { id: 'settings-integration-webhook', label: 'Webhook' }
-  ],
-  'contas-fenix': [
-    { id: 'settings-fenix-accounts', label: 'Contas Fênix acompanhadas' },
-    { id: 'settings-fenix-primary', label: 'Acesso principal ao Fênix' }
+    { id: 'settings-integration-webhook', label: 'Webhook' },
+    { id: 'settings-integration-webhook-log', label: 'Log de entregas' }
   ]
 } as const;
 
@@ -3472,8 +4030,9 @@ function SettingsAnchorRail({ anchors }: { anchors: readonly { id: string; label
 }
 
 const ANCHOR_SECTIONS: Record<string, typeof SETTINGS_SECTIONS[number]['id']> = {
-  'settings-fenix-primary': 'contas-fenix',
-  'settings-fenix-accounts': 'contas-fenix',
+  'settings-profile-data': 'perfil',
+  'settings-fenix-primary': 'perfil',
+  'settings-fenix-accounts': 'perfil',
   'settings-preferences-ai-sync': 'preferencias',
   'settings-preferences-filters': 'preferencias',
   'settings-preferences-renewals': 'preferencias',
@@ -3481,7 +4040,8 @@ const ANCHOR_SECTIONS: Record<string, typeof SETTINGS_SECTIONS[number]['id']> = 
   'settings-ai-model': 'assistente',
   'settings-ai-privacy': 'assistente',
   'settings-integration-odoo': 'integracoes',
-  'settings-integration-webhook': 'integracoes'
+  'settings-integration-webhook': 'integracoes',
+  'settings-integration-webhook-log': 'integracoes'
 };
 
 function SettingsPage() {
@@ -3492,14 +4052,16 @@ function SettingsPage() {
   const [model, setModel] = useState('gpt-6-astra');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
-  const [user, setUser] = useState<{ name: string; demo: boolean } | null>(null);
+  const [user, setUser] = useState<{ name: string; email: string; demo: boolean } | null>(null);
   const [primaryStatus, setPrimaryStatus] = useState<{ status: 'ok' | 'expired' | 'unknown'; lastError?: string | null } | null>(null);
   const [connectionModal, setConnectionModal] = useState<{ mode: 'new' | 'manage' | 'reauth' | 'reauth-primary'; connection?: FenixConnectionSummary } | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [connectionMessage, setConnectionMessage] = useState('');
+  const [profileAccounts, setProfileAccounts] = useState<Array<{ id: string; label: string }>>([]);
   const hashTarget = location.hash ? location.hash.replace('#', '') : '';
   const sectionFromHash = hashTarget ? ANCHOR_SECTIONS[hashTarget] : undefined;
-  const requestedSection = new URLSearchParams(location.search).get('secao') || sectionFromHash;
+  const requestedSectionValue = new URLSearchParams(location.search).get('secao') || sectionFromHash;
+  const requestedSection = requestedSectionValue === 'contas-fenix' ? 'perfil' : requestedSectionValue;
   const activeSection = SETTINGS_SECTIONS.find((section) => section.id === requestedSection)?.id || 'preferencias';
   const selectedSection = SETTINGS_SECTIONS.find((section) => section.id === activeSection)!;
 
@@ -3514,6 +4076,12 @@ function SettingsPage() {
   }, [loadPrimaryStatus, connectionRevision]);
 
   useEffect(() => {
+    void api<{ connections: FenixConnectionSummary[] }>('/api/fenix-connections')
+      .then(({ connections }) => setProfileAccounts(connections.map(({ id, label }) => ({ id, label }))))
+      .catch(() => setProfileAccounts([]));
+  }, [connectionRevision]);
+
+  useEffect(() => {
     if (location.hash) {
       const id = location.hash.replace('#', '');
       window.setTimeout(() => {
@@ -3524,7 +4092,7 @@ function SettingsPage() {
   }, [location.hash, activeSection]);
 
   useEffect(() => {
-    Promise.all([api<{ configured: boolean; model: string }>('/api/settings/ai'), api<{ user: { name: string; demo: boolean } }>('/api/auth/me')])
+    Promise.all([api<{ configured: boolean; model: string }>('/api/settings/ai'), api<{ user: { name: string; email: string; demo: boolean } }>('/api/auth/me')])
       .then(([ai, me]) => { setConfigured(ai.configured); setModel(ai.model); setUser(me.user); })
       .catch(() => navigate('/entrar'));
   }, [navigate]);
@@ -3551,20 +4119,9 @@ function SettingsPage() {
         })}
       </nav>
       <div className="settings-section-intro"><h2 id="settings-section-title">{selectedSection.title}</h2><p>{selectedSection.description}</p></div>
-      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'preferencias'}>
-        <div className="settings-anchor-target" id="settings-preferences-ai-sync" data-settings-anchor="IA e atualização automática"><UserPreferences /></div>
-        <div className="settings-anchor-target" id="settings-preferences-filters" data-settings-anchor="Filtros dos menus"><ProcessMenuSettings /></div>
-        <div className="settings-anchor-target" id="settings-preferences-renewals" data-settings-anchor="Renovações"><RenewalSettings /></div>
-      </section>
-      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'assistente'}>
-        <section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label id="settings-ai-api-key" data-settings-anchor="Chave da API">Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label id="settings-ai-model" data-settings-anchor="Modelo">Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note" id="settings-ai-privacy" data-settings-anchor="Privacidade"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section>
-      </section>
-      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'integracoes'}>
-        <div className="settings-anchor-target" id="settings-integration-odoo" data-settings-anchor="Integração Odoo"><OdooIntegrationSettings /></div>
-        <div className="settings-anchor-target" id="settings-integration-webhook" data-settings-anchor="Webhook"><WebhookIntegration /></div>
-      </section>
-      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'contas-fenix'}>
-        <div className="settings-anchor-target" id="settings-fenix-accounts" data-settings-anchor="Contas Fênix acompanhadas"><FenixConnectionsPanel user={user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => undefined} /></div>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'perfil'}>
+        <div className="settings-anchor-target" id="settings-profile-data" data-settings-anchor="Perfil do solicitante"><RequesterProfileWorkspace sourceAccounts={profileAccounts} primaryProfile={{ name: user.name, email: user.email }} /></div>
+        <div className="settings-anchor-target" id="settings-fenix-accounts" data-settings-anchor="Contas Fênix vinculadas"><FenixConnectionsPanel user={user} revision={connectionRevision} onAdd={() => setConnectionModal({ mode: 'new' })} onManage={(connection) => setConnectionModal({ mode: 'manage', connection })} onReauthenticate={(connection) => setConnectionModal({ mode: 'reauth', connection })} onChanged={async () => { setConnectionRevision((revision) => revision + 1); }} /></div>
         {connectionMessage && <div className="settings-message">{connectionMessage}</div>}
         <div className="settings-anchor-target" id="settings-fenix-primary" data-settings-anchor="Acesso principal ao Fênix">
           <section className={`settings-card settings-connection ${isPrimaryExpired ? 'settings-connection-expired' : ''}`}>
@@ -3579,16 +4136,72 @@ function SettingsPage() {
           </section>
         </div>
       </section>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'preferencias'}>
+        <div className="settings-anchor-target" id="settings-preferences-ai-sync" data-settings-anchor="IA e atualização automática"><UserPreferences /></div>
+        <div className="settings-anchor-target" id="settings-preferences-filters" data-settings-anchor="Filtros dos menus"><ProcessMenuSettings /></div>
+        <div className="settings-anchor-target" id="settings-preferences-renewals" data-settings-anchor="Renovações"><RenewalSettings /></div>
+      </section>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'assistente'}>
+        <section className="settings-card"><div className="settings-card-heading"><span className="settings-card-icon"><Sparkles size={19} /></span><div><h2>Assistente de IA</h2><p>Respostas sobre as situações das edificações, com base nos dados consultados.</p></div><span className={`settings-status ${configured ? 'active' : ''}`}><i /> {configured ? 'Configurado' : 'Precisa configurar'}</span></div><form className="settings-form" onSubmit={save}><label id="settings-ai-api-key" data-settings-anchor="Chave da API">Chave da API OpenAI<div className="settings-secret-field"><input type="password" autoComplete="new-password" placeholder={configured ? 'Chave salva · preencha para substituir' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} /><LockKeyhole size={16} /></div></label><small className="field-hint">A chave é criptografada com AES-256-GCM e armazenada apenas no banco local deste computador. Ela não é exibida novamente.</small><label id="settings-ai-model" data-settings-anchor="Modelo">Modelo<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-6-astra" /></label><div className="settings-data-note" id="settings-ai-privacy" data-settings-anchor="Privacidade"><ShieldCheck size={16} /><span><b>Privacidade antes de cada consulta</b><small>Cada pergunta envia o contexto configurado e as últimas mensagens da sessão. CPF, CNPJ, endereço completo e contatos são removidos do contexto dos processos; o texto digitado por você é enviado para responder à pergunta. A IA não roda em segundo plano.</small></span></div>{message && <div className={`settings-message ${message.startsWith('Não') ? 'error' : ''}`}>{message}</div>}<div className="settings-actions"><button type="submit" className="button button-teal" disabled={saving}>{saving ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Salvar configuração</button>{configured && <button type="button" className="button button-danger" onClick={async () => { await api('/api/settings/ai', { method: 'DELETE' }); setConfigured(false); setMessage('Chave removida do banco local.'); }}>Remover chave</button>}</div></form></section>
+      </section>
+      <section className="settings-tab-panel" aria-labelledby="settings-section-title" hidden={activeSection !== 'integracoes'}>
+        <div className="settings-anchor-target" id="settings-integration-odoo" data-settings-anchor="Integração Odoo"><OdooIntegrationSettings /></div>
+        <div className="settings-anchor-target" id="settings-integration-webhook" data-settings-anchor="Webhook"><WebhookIntegration /></div>
+        <div className="settings-anchor-target" id="settings-integration-webhook-log" data-settings-anchor="Log de entregas"><WebhookLogContent demo={user.demo} /></div>
+      </section>
     </div>
     <SettingsAnchorRail anchors={SETTINGS_ANCHORS[activeSection]} />
     {connectionModal && <FenixConnectionModal mode={connectionModal.mode} connection={connectionModal.connection} onClose={() => setConnectionModal(null)} onSaved={(savedMessage) => { setConnectionMessage(savedMessage); setConnectionRevision((revision) => revision + 1); loadPrimaryStatus(); setConnectionModal(null); }} />}
   </div></Shell>;
 }
 
+function ProtectedScreen({ children }: { children: ReactNode }) {
+  const [sessionState, setSessionState] = useState<'checking' | 'valid' | 'expired' | 'unavailable'>('checking');
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/auth/me', { credentials: 'same-origin' })
+      .then((response) => {
+        if (!active) return;
+        setSessionState(response.status === 401 ? 'expired' : response.ok ? 'valid' : 'unavailable');
+      })
+      .catch(() => { if (active) setSessionState('unavailable'); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (sessionState !== 'valid') return;
+    let lastRefreshAt = 0;
+    let requestInFlight = false;
+    const renewOnActivity = () => {
+      const now = Date.now();
+      if (requestInFlight || now - lastRefreshAt < 5 * 60_000) return;
+      lastRefreshAt = now;
+      requestInFlight = true;
+      void fetch('/api/auth/session/refresh', { method: 'POST', credentials: 'same-origin' })
+        .then((response) => { if (response.status === 401) setSessionState('expired'); })
+        .catch(() => undefined)
+        .finally(() => { requestInFlight = false; });
+    };
+    window.addEventListener('pointerdown', renewOnActivity);
+    window.addEventListener('keydown', renewOnActivity);
+    window.addEventListener('scroll', renewOnActivity, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', renewOnActivity);
+      window.removeEventListener('keydown', renewOnActivity);
+      window.removeEventListener('scroll', renewOnActivity);
+    };
+  }, [sessionState]);
+
+  if (sessionState === 'checking') return <div className="loading-screen"><LoaderCircle size={20} className="spin" /> Validando sessão...</div>;
+  if (sessionState === 'expired') return <Navigate to="/entrar" replace />;
+  return <>{children}</>;
+}
+
 function ProtectedDashboard() {
-  return <DashboardPage />;
+  return <ProtectedScreen><DashboardPage /></ProtectedScreen>;
 }
 
 export default function App() {
-  return <Routes><Route path="/" element={<Landing />} /><Route path="/entrar" element={<Login />} /><Route path="/painel" element={<ProtectedDashboard />} /><Route path="/configuracoes" element={<SettingsPage />} /><Route path="/log" element={<WebhookLogPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes>;
+  return <Routes><Route path="/" element={<Landing />} /><Route path="/entrar" element={<Login />} /><Route path="/painel" element={<ProtectedDashboard />} /><Route path="/configuracoes" element={<ProtectedScreen><SettingsPage /></ProtectedScreen>} /><Route path="/log" element={<Navigate to="/configuracoes?secao=integracoes#settings-integration-webhook-log" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes>;
 }
