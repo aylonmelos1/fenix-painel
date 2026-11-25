@@ -1,4 +1,4 @@
-import { getSetting, setSetting } from './store.js';
+import { db, getSetting, setSetting } from './store.js';
 
 export const FENIX_FALLBACK_FRONTEND_VERSION = '2.19.2';
 export const FENIX_DETECTED_VERSION_SETTING = 'fenix_detected_frontend_version';
@@ -117,6 +117,7 @@ export function getFenixFrontendVersion(): string {
   const configured = configuredFrontendVersion();
   const persisted = persistedDetectedVersion();
   const superseded = supersededEnvVersion();
+  if (configured && !superseded) return configured;
   if (configured && configured !== superseded &&
       (!persisted || compareSemver(configured, persisted) >= 0)) return configured;
   if (frontendDetectionCache && isValidSemver(frontendDetectionCache.version) &&
@@ -214,9 +215,9 @@ export async function detectFenixFrontendVersion(
         frontendDetectionCache = { version: persisted, bundleHash: frontendDetectionCache?.bundleHash ?? null, expiresAt: Date.now() + BUNDLE_CACHE_TTL_MS };
         return { version: persisted, bundleHash: frontendDetectionCache.bundleHash, source: 'persisted' };
       }
+      setSetting(FENIX_DETECTED_VERSION_SETTING, version);
       frontendDetectionCache = { version, bundleHash, expiresAt: Date.now() + BUNDLE_CACHE_TTL_MS };
       frontendFailureCooldownUntil = 0;
-      try { setSetting(FENIX_DETECTED_VERSION_SETTING, version); } catch {}
       return { version, bundleHash, source: 'bundle' };
     } catch {
       frontendFailureCooldownUntil = Date.now() + BUNDLE_FAILURE_COOLDOWN_MS;
@@ -250,12 +251,18 @@ export function promoteFenixFrontendVersion(usedVersion: string, detectedVersion
   const latest = persistedDetectedVersion();
   if (latest && compareSemver(detectedVersion, latest) < 0) return false;
   const configured = configuredFrontendVersion();
-  if (configured && configured === usedVersion) {
-    supersededEnvFrontendVersion = configured;
-    try { setSetting(FENIX_SUPERSEDED_ENV_VERSION_SETTING, configured); } catch {}
+  try {
+    db.transaction(() => {
+      if (configured && configured === usedVersion) {
+        setSetting(FENIX_SUPERSEDED_ENV_VERSION_SETTING, configured);
+      }
+      setSetting(FENIX_DETECTED_VERSION_SETTING, detectedVersion);
+    })();
+  } catch {
+    return false;
   }
+  if (configured && configured === usedVersion) supersededEnvFrontendVersion = configured;
   frontendDetectionCache = { version: detectedVersion, bundleHash, expiresAt: Date.now() + BUNDLE_CACHE_TTL_MS };
   frontendFailureCooldownUntil = 0;
-  try { setSetting(FENIX_DETECTED_VERSION_SETTING, detectedVersion); } catch {}
   return true;
 }

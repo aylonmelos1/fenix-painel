@@ -58,6 +58,9 @@ async function withFetch(fakeFetch: typeof fetch, run: () => Promise<void>) {
 test('FENIX_FRONTEND_VERSION do ambiente é a versão inicial enviada no login', async () => {
   await withVersionState('2.19.3', async () => {
     assert.equal(getFenixFrontendVersion(), '2.19.3');
+    setSetting(FENIX_DETECTED_VERSION_SETTING, '2.20.0');
+    assert.equal(getFenixFrontendVersion(), '2.19.3', 'sem marca de superação, o ambiente permanece primário');
+    deleteSetting(FENIX_DETECTED_VERSION_SETTING);
     const sentVersions: string[] = [];
     const fakeFetch: typeof fetch = async (input, init) => {
       const path = requestUrl(input).pathname;
