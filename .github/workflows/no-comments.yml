@@ -3,6 +3,8 @@ name: No comments
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [feat/no-comments-gate]
 
 permissions:
   contents: read
