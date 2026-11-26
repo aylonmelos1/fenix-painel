@@ -67,7 +67,218 @@ function findSequence(text, sequence, start) {
   return text.indexOf(sequence, start);
 }
 
-function extractComments(file) {
+
+const javascriptExtensions = new Set(['.js', '.jsx', '.ts', '.tsx', '.mts', '.cts', '.mjs', '.cjs']);
+
+function extractJavaScriptComments(file) {
+  const entries = file.sourceLines;
+  const starts = [];
+  let source = '';
+  for (let index = 0; index < entries.length; index += 1) {
+    if (index) source += '\n';
+    starts.push(source.length);
+    source += entries[index].text;
+  }
+  const lineAt = (offset) => {
+    let low = 0;
+    let high = starts.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (starts[middle] <= offset) low = middle + 1;
+      else high = middle;
+    }
+    return Math.max(0, low - 1);
+  };
+  const comments = [];
+  const templates = [];
+  const parenControls = [];
+  const controlKeywords = new Set(['catch', 'for', 'if', 'switch', 'while', 'with']);
+  const expressionKeywords = new Set(['await', 'case', 'const', 'delete', 'do', 'else', 'finally', 'function', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'throw', 'typeof', 'var', 'void', 'yield']);
+  let index = 0;
+  let regexAllowed = true;
+  let pendingControlParen = false;
+  const addComment = (start, end, opener, closeToken, kind) => {
+    const firstLine = lineAt(start);
+    const lastLine = lineAt(Math.max(start, end - 1));
+    const addedLineNumbers = entries.slice(firstLine, lastLine + 1).filter((entry) => entry.added).map((entry) => entry.lineNumber);
+    if (!addedLineNumbers.length) return;
+    comments.push({
+      path: file.path,
+      lineNumber: entries[firstLine]?.lineNumber ?? 0,
+      endLine: entries[lastLine]?.lineNumber ?? entries[firstLine]?.lineNumber ?? 0,
+      kind,
+      opener,
+      closeToken,
+      text: source.slice(start + 2, closeToken ? end - closeToken.length : end),
+      addedLineNumbers
+    });
+  };
+  const skipString = (quote, start) => {
+    let cursor = start + 1;
+    while (cursor < source.length) {
+      const current = source[cursor];
+      if (current === '\\') {
+        cursor += 2;
+        continue;
+      }
+      if (current === quote) return cursor + 1;
+      if (current === '\n') return cursor;
+      cursor += 1;
+    }
+    return cursor;
+  };
+  const skipRegularExpression = (start) => {
+    let cursor = start + 1;
+    let inCharacterClass = false;
+    while (cursor < source.length) {
+      const current = source[cursor];
+      if (current === '\\') {
+        cursor += 2;
+        continue;
+      }
+      if (current === '\n') return start + 1;
+      if (current === '[') inCharacterClass = true;
+      else if (current === ']') inCharacterClass = false;
+      else if (current === '/' && !inCharacterClass) {
+        cursor += 1;
+        while (/[A-Za-z]/.test(source[cursor] ?? '')) cursor += 1;
+        return cursor;
+      }
+      cursor += 1;
+    }
+    return start + 1;
+  };
+  while (index < source.length) {
+    const template = templates.at(-1);
+    const char = source[index];
+    if (template && !template.inExpression) {
+      if (char === '\\') index += 2;
+      else if (char.charCodeAt(0) === 96) {
+        templates.pop();
+        index += 1;
+        regexAllowed = false;
+      } else if (char.charCodeAt(0) === 36 && source[index + 1] === '{') {
+        template.inExpression = true;
+        template.braceDepth = 1;
+        index += 2;
+        regexAllowed = true;
+      } else index += 1;
+      continue;
+    }
+    if (template?.inExpression && char === '{') {
+      template.braceDepth += 1;
+      index += 1;
+      regexAllowed = true;
+      continue;
+    }
+    if (template?.inExpression && char === '}') {
+      template.braceDepth -= 1;
+      index += 1;
+      if (template.braceDepth === 0) template.inExpression = false;
+      regexAllowed = false;
+      continue;
+    }
+    if (char.charCodeAt(0) === 96) {
+      templates.push({ inExpression: false, braceDepth: 0 });
+      index += 1;
+      pendingControlParen = false;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index = skipString(char, index);
+      regexAllowed = false;
+      pendingControlParen = false;
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '/') {
+      let end = index + 2;
+      while (end < source.length && source[end] !== '\n') end += 1;
+      addComment(index, end, '//', '', 'line');
+      index = end;
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '*') {
+      const close = source.indexOf('*/', index + 2);
+      const end = close < 0 ? source.length : close + 2;
+      const opener = source[index + 2] === '*' ? '/**' : '/*';
+      addComment(index, end, opener, close < 0 ? '' : '*/', 'block');
+      index = end;
+      continue;
+    }
+    if (char === '/' && regexAllowed) {
+      const end = skipRegularExpression(index);
+      if (end > index + 1) {
+        index = end;
+        regexAllowed = false;
+        pendingControlParen = false;
+        continue;
+      }
+      index += 1;
+      regexAllowed = true;
+      pendingControlParen = false;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      let end = index + 1;
+      while (/[A-Za-z0-9_]/.test(source[end] ?? '')) end += 1;
+      const word = source.slice(index, end);
+      regexAllowed = expressionKeywords.has(word);
+      pendingControlParen = controlKeywords.has(word);
+      index = end;
+      continue;
+    }
+    if (/[0-9]/.test(char)) {
+      index += 1;
+      while (/[A-Za-z0-9_.]/.test(source[index] ?? '')) index += 1;
+      regexAllowed = false;
+      pendingControlParen = false;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+    if (char === '(') {
+      parenControls.push(pendingControlParen);
+      pendingControlParen = false;
+      regexAllowed = true;
+      index += 1;
+      continue;
+    }
+    if (char === ')') {
+      regexAllowed = parenControls.pop() ?? false;
+      pendingControlParen = false;
+      index += 1;
+      continue;
+    }
+    if (char === '[' || char === ',' || char === ';' || char === ':' || char === '?' || char === '{') {
+      regexAllowed = true;
+      pendingControlParen = false;
+      index += 1;
+      continue;
+    }
+    if (char === ']' || char === '.' || char === '}') {
+      regexAllowed = false;
+      pendingControlParen = false;
+      index += 1;
+      continue;
+    }
+    if ((char === '+' && source[index + 1] === '+') || (char === '-' && source[index + 1] === '-')) {
+      index += 2;
+      regexAllowed = false;
+      pendingControlParen = false;
+      continue;
+    }
+    if (char === '/' && source[index + 1] === '=') index += 2;
+    else if (source.startsWith('=>', index)) index += 2;
+    else index += 1;
+    regexAllowed = true;
+    pendingControlParen = false;
+  }
+  return comments;
+}
+
+function extractGenericComments(file) {
   const syntax = commentSyntax(file.path);
   const comments = [];
   let block = null;
@@ -180,6 +391,11 @@ function extractComments(file) {
   }
   return comments;
 }
+function extractComments(file) {
+  if (javascriptExtensions.has(extensionFor(file.path))) return extractJavaScriptComments(file);
+  return extractGenericComments(file);
+}
+
 function ruleProblem(text) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (/^(?:[=*_#~\-]){3,}(?:\s+[\w .:/-]+)?$/.test(normalized)) {
@@ -218,7 +434,19 @@ function isExternalConstraintReference(text) {
 
 function isPublicApiDoc(comment, files) {
   if (comment.opener !== '/**') return false;
-  if (!/@(?:param|returns?|throws?|deprecated|example|property|typedef|type)\b/i.test(comment.text)) return false;
+  const contractTags = comment.text.split('\n')
+    .map((line) => line.replace(/^\s*\*?\s?/, '').trim())
+    .filter(Boolean);
+  const tagPatterns = [
+    /^@param\s+(?:\{[^{}]+\}\s*)?(?:\[[\w.-]+\]|(?:\.\.\.)?[\w.-]+)$/,
+    /^@returns?\s+\{[^{}]+\}$/,
+    /^@throws\s+\{[^{}]+\}$/,
+    /^@property\s+\{[^{}]+\}\s+[\w.-]+$/,
+    /^@typedef\s+\{[^{}]+\}\s+[\w.-]+$/,
+    /^@type\s+\{[^{}]+\}$/,
+    /^@deprecated$/
+  ];
+  if (!contractTags.length || !contractTags.every((line) => tagPatterns.some((pattern) => pattern.test(line)))) return false;
   const file = files.find((candidate) => candidate.path === comment.path);
   if (!file) return false;
   const declaration = file.sourceLines.find((entry) => entry.lineNumber > comment.endLine && entry.lineNumber <= comment.endLine + 4 && entry.text.trim());

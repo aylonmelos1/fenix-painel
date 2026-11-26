@@ -104,8 +104,8 @@ test('accepts license, formatting and explicitly recognizable pstack exceptions'
     ' */',
     '// prettier-ignore',
     '/**',
-    ' * @param value input value',
-    ' * @returns parsed value',
+    ' * @param {string} value',
+    ' * @returns {string}',
     ' */',
     'export function parse(value: string) { return value; }',
     '// Odoo upstream imposes an external restriction; see https://example.invalid/odoo/issue/12'
@@ -187,8 +187,8 @@ test('accepts new JSDoc attached to an unchanged exported declaration', () => {
     '+++ b/src/api.ts',
     '@@ -1,1 +1,5 @@',
     '+/**',
-    '+ * @param value input value',
-    '+ * @returns parsed value',
+    '+ * @param {string} value',
+    '+ * @returns {string}',
     '+ */',
     ' export function parse(value: string) { return value; }'
   ].join('\n');
@@ -210,4 +210,49 @@ test('detects block comments after template and regular expression literals', ()
 });
 test('reports the pinned policy version', () => {
   assert.match(POLICY_VERSION, /^\d+\.\d+\.\d+$/);
+});
+
+test('detects comments inside template literal interpolations', () => {
+  const diff = addedDiff('src/example.ts', [
+    'const template = `before ${',
+    '  /* narrative in interpolation */',
+    '  value // narrative in interpolation',
+    '} after`;'
+  ]);
+  const findings = inspectDiff(diff).findings;
+  assert.equal(findings.length, 2);
+  assert.deepEqual(findings.map((finding) => finding.lineNumber), [2, 3]);
+});
+
+test('does not mistake a valid regular expression for a block comment', () => {
+  const diff = addedDiff('src/example.ts', ['const pattern = /\\/*/;']);
+  assert.equal(inspectDiff(diff).findings.length, 0);
+});
+
+test('rejects narrative suffixes after public API JSDoc tags and declarations', () => {
+  const jsDocSuffix = addedDiff('src/api.ts', [
+    '/** @param {string} value @returns {string} this implementation is difficult to follow */',
+    'export function parse(value: string) { return value; }'
+  ]);
+  const declarationSuffix = addedDiff('src/api.ts', [
+    '/** @param {string} value */',
+    'export function parse(value: string) { return value; } // implementation details'
+  ]);
+  const jsDocFindings = inspectDiff(jsDocSuffix).findings;
+  const declarationFindings = inspectDiff(declarationSuffix).findings;
+  assert.equal(jsDocFindings.length, 1);
+  assert.equal(declarationFindings.length, 1);
+  assert.equal(jsDocFindings[0].rule, 'unapproved-comment');
+  assert.equal(declarationFindings[0].lineNumber, 2);
+});
+
+test('accepts contract-only tags for a public API declaration', () => {
+  const diff = addedDiff('src/api.ts', [
+    '/**',
+    ' * @param {string} value',
+    ' * @returns {string}',
+    ' */',
+    'export function parse(value: string) { return value; }'
+  ]);
+  assert.equal(inspectDiff(diff).findings.length, 0);
 });
