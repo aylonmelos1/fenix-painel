@@ -1,6 +1,8 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { CookieJar } from 'tough-cookie';
 import { db, getSetting, seal, unseal } from './store.js';
+import { FENIX_FALLBACK_FRONTEND_VERSION, compareSemver, detectFenixFrontendVersion, getFenixFrontendVersion, isExplicitFenixVersionRejection, isValidSemver, promoteFenixFrontendVersion } from './fenix-version.js';
+export { FENIX_FALLBACK_FRONTEND_VERSION, FENIX_DETECTED_VERSION_SETTING, FENIX_SUPERSEDED_ENV_VERSION_SETTING, clearFenixFrontendDetectionCache, compareSemver, detectFenixFrontendVersion, getFenixFrontendVersion, isExplicitFenixVersionRejection, isValidSemver, parseFenixBundleHash, parseFenixFrontendVersion, promoteFenixFrontendVersion, readBoundedResponseText, resetFenixFrontendVersionCache } from './fenix-version.js';
 import { enqueuePushDelivery } from './push.js';
 import { detectProcessChanges, type ProcessSyncState } from './sync-changes.js';
 import { deliverWebhookLogged, WEBHOOK_SETTING, type ProcessWebhookDocument, type ProcessWebhookPayload } from './webhook.js';
@@ -23,7 +25,7 @@ export const HCAPTCHA_SITE_KEY = 'e94868de-18ba-4314-b0ce-c7c84a1440b6';
 // Versão do frontend Vue do Fênix. O bundle vivo em 10/11/2026 (`js/app.05d2a1c1.js`,
 // `info:{version:"2.19.2"}`) é a fonte primária via detecção anônima do índice público;
 // este valor só é usado quando a detecção falha (fallback).
-export const FENIX_FALLBACK_FRONTEND_VERSION = '2.19.2';
+// Versão de fallback e políticas de seleção ficam em server/fenix-version.ts.
 // Caminho-base canônico da API. O bundle oficial usa baseURL relativa "api/v1"
 // (sem barra inicial); todo relativo resolve sob `api/v1`.
 export const FENIX_API_BASE_PATH = '/api/v1';
@@ -93,63 +95,6 @@ function xsrf(jar: CookieJar, url: string) {
   try { return decodeURIComponent(cookie.value); } catch { return cookie.value; }
 }
 
-export function parseFenixBundleHash(indexHtml: string): string | null {
-  const match = /\/js\/app\.([0-9a-f]{8,40})\.js/i.exec(String(indexHtml ?? ''));
-  return match?.[1] ?? null;
-}
-
-export function parseFenixFrontendVersion(bundleJs: string): string | null {
-  const src = String(bundleJs ?? '');
-  const info = /info:\s*\{\s*version:\s*"(\d+\.\d+\.\d+)"/.exec(src);
-  if (info?.[1]) return info[1];
-  const generic = /version:\s*"(\d+\.\d+\.\d+)"/.exec(src);
-  return generic?.[1] ?? null;
-}
-
-const FRONTEND_DETECTION_TTL_MS = 6 * 60 * 60_000;
-let frontendDetectionCache: { version: string; bundleHash: string | null; expiresAt: number } | null = null;
-
-export function clearFenixFrontendDetectionCache() {
-  frontendDetectionCache = null;
-}
-
-// Detecta a versão do frontend a partir do índice público do Fênix (GET anônimo,
-// sem sessão nem credenciais): lê o hash de `/js/app.<hash>.js` e extrai
-// `info.version` do bundle. Qualquer falha retorna o fallback, nunca lança.
-export async function detectFenixFrontendVersion(
-  fetchImpl: typeof fetch = fetch
-): Promise<{ version: string; bundleHash: string | null }> {
-  const cached = frontendDetectionCache;
-  if (cached && cached.expiresAt > Date.now()) return { version: cached.version, bundleHash: cached.bundleHash };
-  try {
-    const indexResponse = await fetchImpl(new URL('/', FENIX_ORIGIN), {
-      headers: { Accept: 'text/html' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      redirect: 'manual'
-    } as RequestInit);
-    if (!indexResponse.ok) throw new Error(`índice público retornou HTTP ${indexResponse.status}`);
-    const bundleHash = parseFenixBundleHash(await indexResponse.text());
-    if (!bundleHash) throw new Error('hash do bundle ausente no índice público');
-    const bundleResponse = await fetchImpl(new URL(`/js/app.${bundleHash}.js`, FENIX_ORIGIN), {
-      headers: { Accept: 'application/javascript, */*' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      redirect: 'manual'
-    } as RequestInit);
-    if (!bundleResponse.ok) throw new Error(`bundle público retornou HTTP ${bundleResponse.status}`);
-    const bundleJs = await bundleResponse.text();
-    if (Buffer.byteLength(bundleJs) > 5_000_000) throw new Error('bundle público excedeu o limite aceito');
-    const version = parseFenixFrontendVersion(bundleJs);
-    if (!version) throw new Error('marcador de versão ausente no bundle público');
-    frontendDetectionCache = { version, bundleHash, expiresAt: Date.now() + FRONTEND_DETECTION_TTL_MS };
-    return { version, bundleHash };
-  } catch {
-    return {
-      version: frontendDetectionCache?.version ?? FENIX_FALLBACK_FRONTEND_VERSION,
-      bundleHash: frontendDetectionCache?.bundleHash ?? null
-    };
-  }
-}
-
 // Normaliza um caminho de API para a forma canônica `/api/v1/...`.
 // Aceita a forma relativa do bundle ("api/v1/..."), a forma absoluta com barra,
 // relativos nus ("solicitacoes/...", resolvidos sob `api/v1` como o bundle faz)
@@ -197,7 +142,7 @@ export async function loginFenix(
   const jar = new CookieJar();
   const csrfUrl = new URL('/api/v1/csrf-cookie', FENIX_ORIGIN);
   const csrf = await fetchBounded(csrfUrl, {
-    method: 'GET', headers: { Accept: 'application/json', Origin: FENIX_ORIGIN, Referer: `${FENIX_ORIGIN}/` }
+    method: 'GET', headers: { Accept: 'application/json', Origin: FENIX_ORIGIN, Referer: FENIX_ORIGIN + '/' }
   });
   await storeCookies(csrf.response, csrfUrl.toString(), jar);
   if (!csrf.response.ok && csrf.response.status !== 204) throw new FenixError('Não foi possível iniciar uma sessão no Fênix.', csrf.response.status);
@@ -206,20 +151,43 @@ export async function loginFenix(
   const loginUrl = new URL('/api/v1/authenticate', FENIX_ORIGIN);
   const headers: Record<string, string> = {
     Accept: 'application/json', 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
-    Origin: FENIX_ORIGIN, Referer: `${FENIX_ORIGIN}/`, Cookie: jar.getCookieStringSync(loginUrl.toString())
+    Origin: FENIX_ORIGIN, Referer: FENIX_ORIGIN + '/', Cookie: jar.getCookieStringSync(loginUrl.toString())
   };
   const csrfToken = xsrf(jar, loginUrl.toString());
   if (csrfToken) headers['X-XSRF-TOKEN'] = csrfToken;
   onProgress?.(2);
   onProgress?.(3);
-  const frontendVersion = versionOverride ?? (await detectFenixFrontendVersion()).version;
-  const result = await fetchBounded(loginUrl, {
-    method: 'POST', headers,
-    body: JSON.stringify({ email, password, version: frontendVersion, hcaptcha_token: hcaptchaToken })
-  });
-  await storeCookies(result.response, loginUrl.toString(), jar);
-  const payload = result.body as any;
-  const user = payload?.user ?? payload?.data?.user;
+
+  const frontendVersion = isValidSemver(versionOverride) ? versionOverride.trim() : getFenixFrontendVersion();
+  const postLogin = async (version: string) => {
+    const result = await fetchBounded(loginUrl, {
+      method: 'POST', headers,
+      body: JSON.stringify({ email, password, version, hcaptcha_token: hcaptchaToken })
+    });
+    await storeCookies(result.response, loginUrl.toString(), jar);
+    return result;
+  };
+
+  let result = await postLogin(frontendVersion);
+  let payload = result.body as any;
+  let user = payload?.user ?? payload?.data?.user;
+  const status = result.response.status;
+  if ((!result.response.ok || !user?.id) && [400, 401, 403, 409, 412, 422, 426].includes(status)) {
+    const explicitRejection = isExplicitFenixVersionRejection(status, payload);
+    const detected = await detectFenixFrontendVersion({ forceRefresh: true });
+    const differentOrNewer = explicitRejection
+      ? detected.version !== frontendVersion
+      : compareSemver(detected.version, frontendVersion) > 0;
+    if (detected.source === 'bundle' && isValidSemver(detected.version) &&
+        compareSemver(detected.version, FENIX_FALLBACK_FRONTEND_VERSION) >= 0 &&
+        compareSemver(detected.version, frontendVersion) >= 0 && differentOrNewer &&
+        promoteFenixFrontendVersion(frontendVersion, detected.version, detected.bundleHash)) {
+      result = await postLogin(detected.version);
+      payload = result.body as any;
+      user = payload?.user ?? payload?.data?.user;
+    }
+  }
+
   if (!result.response.ok || !user?.id) {
     onRejected?.(result.response.status, result.response.ok);
     return undefined;
@@ -227,7 +195,6 @@ export async function loginFenix(
   onProgress?.(4);
   return { jar, user };
 }
-
 export class FenixClient {
   constructor(private jar: CookieJar) {}
 
