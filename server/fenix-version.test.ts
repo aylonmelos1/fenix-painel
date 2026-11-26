@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   FENIX_DETECTED_VERSION_SETTING,
   FENIX_SUPERSEDED_ENV_VERSION_SETTING,
   clearFenixFrontendDetectionCache,
   detectFenixFrontendVersion,
   getFenixFrontendVersion,
-  loginFenix
+  loginFenix,
+  promoteFenixFrontendVersion
 } from './fenix.js';
 import { deleteSetting, getSetting, setSetting } from './store.js';
 
@@ -221,5 +223,80 @@ test('falha ou downgrade do bundle preserva a última versão válida e respeita
     assert.equal(downgrade.version, '2.20.0');
     assert.equal(downgrade.source, 'persisted');
     assert.equal(getSetting(FENIX_DETECTED_VERSION_SETTING), '2.20.0');
+  });
+});
+
+
+test('promoção SQLite é lida por um processo novo usando o mesmo banco', async () => {
+  await withVersionState('2.19.3', async () => {
+    setSetting(FENIX_DETECTED_VERSION_SETTING, '2.19.3');
+    assert.equal(promoteFenixFrontendVersion('2.19.3', '2.20.0', 'a1b2c3d4'), true);
+    assert.equal(getSetting(FENIX_DETECTED_VERSION_SETTING), '2.20.0');
+
+    const childVersion = execFileSync(process.execPath, [
+      '--import', 'tsx',
+      '--input-type=module',
+      '-e',
+      "import { getFenixFrontendVersion } from './server/fenix-version.ts'; process.stdout.write(getFenixFrontendVersion());"
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, FENIX_FRONTEND_VERSION: '2.19.3' },
+      encoding: 'utf8'
+    });
+    assert.equal(childVersion, '2.20.0');
+  });
+});
+
+test('login recusa bundle HTTP 200 sem versão, preserva a versão válida e aplica cooldown', async () => {
+  await withVersionState('2.19.3', async () => {
+    setSetting(FENIX_DETECTED_VERSION_SETTING, '2.20.0');
+    setSetting(FENIX_SUPERSEDED_ENV_VERSION_SETTING, '2.19.3');
+    clearFenixFrontendDetectionCache();
+    assert.equal(getFenixFrontendVersion(), '2.20.0');
+
+    let indexRequests = 0;
+    let bundleRequests = 0;
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = requestUrl(input);
+      if (url.pathname === '/api/v1/csrf-cookie') return new Response(null, { status: 204 });
+      if (url.pathname === '/api/v1/authenticate') {
+        return jsonResponse({ errors: { version: ['Versão desatualizada'] } }, 426);
+      }
+      if (url.pathname === '/') {
+        indexRequests += 1;
+        return new Response('<html><script src="/js/app.badc0ffee.js"></script></html>', {
+          status: 200, headers: { 'content-type': 'text/html' }
+        });
+      }
+      if (url.pathname === '/js/app.badc0ffee.js') {
+        bundleRequests += 1;
+        return new Response('window.app = {};', {
+          status: 200, headers: { 'content-type': 'application/javascript' }
+        });
+      }
+      return new Response('not found', { status: 404 });
+    };
+
+    await withFetch(fakeFetch, async () => {
+      assert.equal(await loginFenix('fixture@example.invalid', 'fixture-password', 'fixture-captcha'), undefined);
+    });
+
+    assert.equal(indexRequests, 1, 'a rejeição elegível consulta o índice HTTP 200');
+    assert.equal(bundleRequests, 1, 'o índice aponta para o bundle HTTP 200 sem versão');
+    assert.equal(getSetting(FENIX_DETECTED_VERSION_SETTING), '2.20.0');
+    assert.equal(getSetting(FENIX_SUPERSEDED_ENV_VERSION_SETTING), '2.19.3');
+    assert.equal(getFenixFrontendVersion(), '2.20.0');
+
+    let cooldownFetchCalls = 0;
+    const duringCooldown = await detectFenixFrontendVersion({
+      forceRefresh: true,
+      fetchImpl: (async () => {
+        cooldownFetchCalls += 1;
+        return bundleResponse('2.21.0');
+      }) as typeof fetch
+    });
+    assert.equal(duringCooldown.version, '2.20.0');
+    assert.equal(duringCooldown.source, 'persisted');
+    assert.equal(cooldownFetchCalls, 0, 'a falha do bundle ativa o cooldown inclusive em forceRefresh');
   });
 });
