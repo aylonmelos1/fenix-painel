@@ -24,7 +24,7 @@ export function parseAddedLines(diff) {
   for (const line of diff.split('\n')) {
     if (line.startsWith('+++ b/')) {
       const path = line.slice(6);
-      file = { path, lines: [] };
+      file = { path, lines: [], sourceLines: [] };
       files.push(file);
       continue;
     }
@@ -39,9 +39,12 @@ export function parseAddedLines(diff) {
     }
     if (!file || newLine < 1) continue;
     if (line.startsWith('+') && !line.startsWith('+++')) {
-      file.lines.push({ lineNumber: newLine, text: line.slice(1) });
+      const entry = { lineNumber: newLine, text: line.slice(1), added: true };
+      file.lines.push(entry);
+      file.sourceLines.push(entry);
       newLine += 1;
     } else if (line.startsWith(' ')) {
+      file.sourceLines.push({ lineNumber: newLine, text: line.slice(1), added: false });
       newLine += 1;
     }
   }
@@ -69,13 +72,10 @@ function extractComments(file) {
   const comments = [];
   let block = null;
   let multilineQuote = null;
-  let previousLine = 0;
-  for (const entry of file.lines) {
-    if (previousLine && entry.lineNumber !== previousLine + 1) {
-      block = null;
-      multilineQuote = null;
-    }
-    previousLine = entry.lineNumber;
+  const includeComment = (comment) => {
+    if (comment.addedLineNumbers.length) comments.push(comment);
+  };
+  for (const entry of file.sourceLines) {
     const text = entry.text;
     let index = 0;
     if (block) {
@@ -83,8 +83,10 @@ function extractComments(file) {
       const close = findSequence(text, closeToken, index);
       const fragment = close < 0 ? text.slice(index) : text.slice(index, close);
       block.text += '\n' + fragment;
+      if (entry.added) block.addedLineNumbers.push(entry.lineNumber);
       if (close < 0) continue;
-      comments.push(block);
+      block.endLine = entry.lineNumber;
+      includeComment(block);
       block = null;
       index = close + closeToken.length;
     }
@@ -98,12 +100,12 @@ function extractComments(file) {
       if (syntax.html && text.startsWith('<!--', index)) {
         const close = findSequence(text, '-->', index + 4);
         const body = close < 0 ? text.slice(index + 4) : text.slice(index + 4, close);
-        const comment = { path: file.path, lineNumber: entry.lineNumber, kind: 'block', opener: '<!--', closeToken: '-->', text: body };
+        const comment = { path: file.path, lineNumber: entry.lineNumber, endLine: entry.lineNumber, kind: 'block', opener: '<!--', closeToken: '-->', text: body, addedLineNumbers: entry.added ? [entry.lineNumber] : [] };
         if (close < 0) {
           block = comment;
           break;
         }
-        comments.push(comment);
+        includeComment(comment);
         index = close + 3;
         continue;
       }
@@ -112,12 +114,12 @@ function extractComments(file) {
         const bodyStart = index + 2;
         const close = findSequence(text, '*/', bodyStart);
         const body = close < 0 ? text.slice(bodyStart) : text.slice(bodyStart, close);
-        const comment = { path: file.path, lineNumber: entry.lineNumber, kind: 'block', opener, closeToken: '*/', text: body };
+        const comment = { path: file.path, lineNumber: entry.lineNumber, endLine: entry.lineNumber, kind: 'block', opener, closeToken: '*/', text: body, addedLineNumbers: entry.added ? [entry.lineNumber] : [] };
         if (close < 0) {
           block = comment;
           break;
         }
-        comments.push(comment);
+        includeComment(comment);
         index = close + 2;
         continue;
       }
@@ -130,7 +132,7 @@ function extractComments(file) {
         index = close < 0 ? text.length : close + 3;
         continue;
       }
-      if (char === '"' || char === "'" || char === '`') {
+      if (char === '"' || char === "'" || text.charCodeAt(index) === 96) {
         const quote = char;
         let close = index + 1;
         let escaped = false;
@@ -144,16 +146,16 @@ function extractComments(file) {
             break;
           }
         }
-        if (close >= text.length && quote === '`') multilineQuote = quote;
+        if (close >= text.length && quote.charCodeAt(0) === 96) multilineQuote = quote;
         index = close < text.length ? close + 1 : text.length;
         continue;
       }
       if (syntax.slashLine && text.startsWith('//', index)) {
-        comments.push({ path: file.path, lineNumber: entry.lineNumber, kind: 'line', opener: '//', text: text.slice(index + 2) });
+        includeComment({ path: file.path, lineNumber: entry.lineNumber, endLine: entry.lineNumber, kind: 'line', opener: '//', text: text.slice(index + 2), addedLineNumbers: entry.added ? [entry.lineNumber] : [] });
         break;
       }
       if (syntax.sqlLine && text.startsWith('--', index)) {
-        comments.push({ path: file.path, lineNumber: entry.lineNumber, kind: 'line', opener: '--', text: text.slice(index + 2) });
+        includeComment({ path: file.path, lineNumber: entry.lineNumber, endLine: entry.lineNumber, kind: 'line', opener: '--', text: text.slice(index + 2), addedLineNumbers: entry.added ? [entry.lineNumber] : [] });
         break;
       }
       if (syntax.hash && char === '#') {
@@ -162,20 +164,22 @@ function extractComments(file) {
           index += 1;
           continue;
         }
-        comments.push({ path: file.path, lineNumber: entry.lineNumber, kind: 'line', opener: '#', text: text.slice(index + 1) });
+        includeComment({ path: file.path, lineNumber: entry.lineNumber, endLine: entry.lineNumber, kind: 'line', opener: '#', text: text.slice(index + 1), addedLineNumbers: entry.added ? [entry.lineNumber] : [] });
         break;
       }
       if (syntax.slashBlock && syntax.slashLine && index === 0 && /^\s*\*(?:\s|$)/.test(text)) {
-        comments.push({ path: file.path, lineNumber: entry.lineNumber, kind: 'continuation', opener: '*', text: text.replace(/^\s*\*\s?/, '') });
+        includeComment({ path: file.path, lineNumber: entry.lineNumber, endLine: entry.lineNumber, kind: 'continuation', opener: '*', text: text.replace(/^\s*\*\s?/, ''), addedLineNumbers: entry.added ? [entry.lineNumber] : [] });
         break;
       }
       index += 1;
     }
   }
-  if (block) comments.push(block);
+  if (block) {
+    block.endLine = file.sourceLines.at(-1)?.lineNumber ?? block.lineNumber;
+    includeComment(block);
+  }
   return comments;
 }
-
 function ruleProblem(text) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (/^(?:[=*_#~\-]){3,}(?:\s+[\w .:/-]+)?$/.test(normalized)) {
@@ -217,8 +221,8 @@ function isPublicApiDoc(comment, files) {
   if (!/@(?:param|returns?|throws?|deprecated|example|property|typedef|type)\b/i.test(comment.text)) return false;
   const file = files.find((candidate) => candidate.path === comment.path);
   if (!file) return false;
-  const declaration = file.lines.find((entry) => entry.lineNumber > comment.lineNumber && entry.lineNumber <= comment.lineNumber + 4 && /^\s*export\s+(?:(?:declare|async)\s+)*(?:function|const|let|var|class|interface|type|enum|default)\b/.test(entry.text));
-  return Boolean(declaration);
+  const declaration = file.sourceLines.find((entry) => entry.lineNumber > comment.endLine && entry.lineNumber <= comment.endLine + 4 && entry.text.trim());
+  return Boolean(declaration && /^\s*export\s+(?:(?:declare|async)\s+)*(?:function|const|let|var|class|interface|type|enum|default)\b/.test(declaration.text));
 }
 
 export function inspectDiff(diff) {
@@ -228,6 +232,7 @@ export function inspectDiff(diff) {
   const exceptions = [];
   for (const file of files) {
     for (const comment of extractComments(file)) {
+      const lineNumber = comment.addedLineNumbers[0];
       const problem = ruleProblem(comment.text);
       let exception = null;
       if (!problem && isLicenseHeader(comment)) exception = 'license';
@@ -236,14 +241,14 @@ export function inspectDiff(diff) {
       if (!problem && !exception && isExternalConstraintReference(comment.text)) exception = 'external-constraint-reference';
       if (problem?.rule === 'suppression' && isExternalConstraintReference(comment.text)) exception = 'external-constraint-reference';
       if (exception) {
-        exceptions.push({ path: comment.path, lineNumber: comment.lineNumber, exception });
+        exceptions.push({ path: comment.path, lineNumber, exception });
         if (exception === 'public-api-jsdoc' || exception === 'external-constraint-reference') {
-          reviewNotices.push({ path: comment.path, lineNumber: comment.lineNumber, exception });
+          reviewNotices.push({ path: comment.path, lineNumber, exception });
         }
       } else {
         findings.push({
           path: comment.path,
-          lineNumber: comment.lineNumber,
+          lineNumber,
           rule: problem?.rule ?? 'unapproved-comment',
           message: problem?.message ?? 'comentário fora das exceções aprovadas'
         });
@@ -268,17 +273,17 @@ function availableRef(ref) {
 }
 
 function defaultBaseRef() {
-  return ['origin/main', 'HEAD^1'].find(availableRef) ?? null;
+  return ['origin/main', 'main', 'HEAD^1'].find(availableRef) ?? null;
 }
 
 export function buildWorkingTreeDiff(baseRef) {
   const selectedBase = baseRef || defaultBaseRef();
   if (!selectedBase) throw new Error('nenhuma referência base disponível; informe origin/main ou HEAD^1');
   runGit(['rev-parse', '--verify', selectedBase + '^{commit}']);
-  let diff = runGit(['diff', '--no-ext-diff', '--no-color', '--unified=0', selectedBase, '--']);
+  let diff = runGit(['diff', '--no-ext-diff', '--no-color', '--unified=2147483647', selectedBase, '--']);
   const untracked = runGit(['ls-files', '--others', '--exclude-standard', '-z']);
   for (const path of untracked.split('\0').filter(Boolean)) {
-    diff += runGit(['diff', '--no-index', '--no-ext-diff', '--no-color', '--unified=0', '--', '/dev/null', path], [0, 1]);
+    diff += runGit(['diff', '--no-index', '--no-ext-diff', '--no-color', '--unified=2147483647', '--', '/dev/null', path], [0, 1]);
   }
   return diff;
 }

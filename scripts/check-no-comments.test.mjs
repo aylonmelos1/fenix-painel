@@ -145,6 +145,69 @@ test('parses multiline HTML comments', () => {
   assert.equal(inspectDiff(diff).findings.length, 1);
 });
 
+test('detects added text inside a block comment opened in unchanged context', () => {
+  const diff = [
+    'diff --git a/src/example.ts b/src/example.ts',
+    '--- a/src/example.ts',
+    '+++ b/src/example.ts',
+    '@@ -1,5 +1,5 @@',
+    ' const value = 1;',
+    ' /*',
+    ' existing context text',
+    '+added narrative text',
+    ' */',
+    ' const after = 2;'
+  ].join('\n');
+  const findings = inspectDiff(diff).findings;
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].lineNumber, 4);
+});
+
+test('reports only added comments, excluding unchanged and removed comments', () => {
+  const diff = [
+    'diff --git a/src/example.ts b/src/example.ts',
+    '--- a/src/example.ts',
+    '+++ b/src/example.ts',
+    '@@ -1,3 +1,3 @@',
+    ' // unchanged note',
+    '-// removed note',
+    ' const kept = 1;',
+    '+// added note',
+    '+const added = 2;'
+  ].join('\n');
+  const findings = inspectDiff(diff).findings;
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].lineNumber, 3);
+});
+
+test('accepts new JSDoc attached to an unchanged exported declaration', () => {
+  const diff = [
+    'diff --git a/src/api.ts b/src/api.ts',
+    '--- a/src/api.ts',
+    '+++ b/src/api.ts',
+    '@@ -1,1 +1,5 @@',
+    '+/**',
+    '+ * @param value input value',
+    '+ * @returns parsed value',
+    '+ */',
+    ' export function parse(value: string) { return value; }'
+  ].join('\n');
+  const result = inspectDiff(diff);
+  assert.equal(result.findings.length, 0);
+  assert.deepEqual(result.exceptions.map((exception) => exception.exception), ['public-api-jsdoc']);
+});
+
+test('detects block comments after template and regular expression literals', () => {
+  const diff = addedDiff('src/example.ts', [
+    'const template = `value`; // after template',
+    'const pattern = /[a-z]+/; /*',
+    'after regular expression',
+    '*/'
+  ]);
+  const findings = inspectDiff(diff).findings;
+  assert.equal(findings.length, 2);
+  assert.deepEqual(findings.map((finding) => finding.rule), ['unapproved-comment', 'unapproved-comment']);
+});
 test('reports the pinned policy version', () => {
   assert.match(POLICY_VERSION, /^\d+\.\d+\.\d+$/);
 });
